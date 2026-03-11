@@ -31,9 +31,41 @@ class ConversationListScreen(Screen):
     """
 
     CSS = """
-    ConversationListScreen { layout: vertical; }
-    #conv_list { height: 1fr; border: solid $primary; }
-    #toolbar   { height: 3; }
+    ConversationListScreen {
+        layout: vertical;
+        background: #0a0a0f;
+    }
+    #header {
+        height: 3;
+        background: #0d0d1a;
+        border-bottom: solid #00ff9f;
+        color: #00ff9f;
+        text-style: bold;
+        content-align: center middle;
+        padding: 0 2;
+    }
+    #conv_list {
+        height: 1fr;
+        border: solid #1a1a3e;
+        background: #0a0a0f;
+    }
+    #conv_list > ListItem {
+        color: #c0c0e0;
+        padding: 0 1;
+    }
+    #conv_list > ListItem:hover { background: #0d0d2a; color: #00ff9f; }
+    #conv_list > ListItem.--highlight { background: #0d1a2a; color: #00ff9f; }
+    #toolbar {
+        height: 3;
+        background: #0d0d1a;
+        border-top: solid #1a1a3e;
+    }
+    #toolbar Button {
+        background: #0d0d1a;
+        color: #00ccff;
+        border: tall #1a1a3e;
+    }
+    #toolbar Button:hover { background: #0d0d2a; color: #00ff9f; }
     """
 
     class ConversationSelected(Message):

@@ -88,7 +88,10 @@ class IMApp(App):
         self._peer_usernames: dict[str, str] = {}
 
     def compose(self) -> ComposeResult:
-        yield LoginScreen()
+        yield from []  # app has no persistent widgets; screens handle layout
+
+    def on_mount(self) -> None:
+        self.push_screen(LoginScreen())
 
     # ------------------------------------------------------------------
     # Login flow

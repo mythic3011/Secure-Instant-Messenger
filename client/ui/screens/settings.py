@@ -20,25 +20,60 @@ class SettingsScreen(Screen):
     """
 
     CSS = """
-    SettingsScreen { align: center middle; }
+    SettingsScreen {
+        align: center middle;
+        background: #0a0a0f;
+    }
     #panel {
-        width: 60;
+        width: 64;
         height: auto;
-        border: solid $primary;
-        padding: 1 2;
+        border: double #00ccff;
+        padding: 1 3;
+        background: #0d0d1a;
+    }
+    #title {
+        color: #00ccff;
+        text-style: bold;
+        content-align: center middle;
+        padding: 0 0 1 0;
     }
     #fingerprint {
-        color: $success;
+        color: #00ff9f;
         text-style: bold;
         margin: 1 0;
+        background: #001a0d;
+        padding: 0 1;
+        border: solid #00ff9f;
     }
-    #ttl_input { margin-bottom: 1; }
-    #status { color: $success; }
+    #ttl_input {
+        margin-bottom: 1;
+        border: tall #1a1a3e;
+        background: #0a0a1a;
+        color: #e0e0ff;
+    }
+    #ttl_input:focus { border: tall #00ccff; }
+    Button { margin-top: 1; width: 100%; }
+    #btn_save_ttl {
+        background: #00ccff;
+        color: #000000;
+        text-style: bold;
+    }
+    #btn_verify {
+        background: #00ff9f;
+        color: #000000;
+        text-style: bold;
+    }
+    #btn_close {
+        background: #0d0d1a;
+        color: #888888;
+        border: tall #1a1a3e;
+    }
+    #status { color: #00ff9f; text-style: bold; }
     """
 
     class SetTTL(Message):
         def __init__(self, ttl_seconds: int | None) -> None:
-        super().__init__()
+            super().__init__()
             self.ttl_seconds = ttl_seconds
 
     class MarkVerified(Message):
@@ -72,9 +107,9 @@ class SettingsScreen(Screen):
         # App layer will call set_fingerprint() after computing it
         self.post_message(self._RequestFingerprint(self.conversation_id))
 
-    class _RequestFingerprint:
+    class _RequestFingerprint(Message):
         def __init__(self, conversation_id: str) -> None:
-        super().__init__()
+            super().__init__()
             self.conversation_id = conversation_id
 
     def set_fingerprint(self, fp: str) -> None:

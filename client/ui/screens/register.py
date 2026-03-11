@@ -28,16 +28,41 @@ class RegisterScreen(Screen):
     CSS = """
     RegisterScreen {
         align: center middle;
+        background: #0a0a0f;
     }
     #panel {
-        width: 54;
+        width: 60;
         height: auto;
-        border: solid $primary;
-        padding: 1 2;
+        border: double #00ccff;
+        padding: 1 3;
+        background: #0d0d1a;
     }
-    Input { margin-bottom: 1; }
-    #error { color: $error; margin-bottom: 1; }
-    #info  { color: $success; margin-bottom: 1; }
+    #title {
+        color: #00ccff;
+        text-style: bold;
+        content-align: center middle;
+        padding: 0 0 1 0;
+    }
+    Input {
+        margin-bottom: 1;
+        border: tall #1a1a3e;
+        background: #0a0a1a;
+        color: #e0e0ff;
+    }
+    Input:focus { border: tall #00ccff; }
+    Button { margin-top: 1; width: 100%; }
+    #btn_register {
+        background: #00ccff;
+        color: #000000;
+        text-style: bold;
+    }
+    #btn_back {
+        background: #0d0d1a;
+        color: #00ccff;
+        border: tall #00ccff;
+    }
+    #error { color: #ff4444; margin-bottom: 1; text-style: bold; }
+    #info  { color: #00ff9f; margin-bottom: 1; }
     """
 
     class RegisterRequest(Message):

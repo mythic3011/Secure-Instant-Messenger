@@ -20,15 +20,48 @@ class LoginScreen(Screen):
     CSS = """
     LoginScreen {
         align: center middle;
+        background: #0a0a0f;
     }
     #panel {
-        width: 50;
+        width: 56;
         height: auto;
-        border: solid $primary;
-        padding: 1 2;
+        border: double #00ff9f;
+        padding: 1 3;
+        background: #0d0d1a;
     }
-    Input { margin-bottom: 1; }
-    #error { color: $error; margin-bottom: 1; }
+    #title {
+        color: #00ff9f;
+        text-style: bold;
+        content-align: center middle;
+        padding: 0 0 1 0;
+    }
+    Input {
+        margin-bottom: 1;
+        border: tall #1a1a3e;
+        background: #0a0a1a;
+        color: #e0e0ff;
+    }
+    Input:focus {
+        border: tall #00ff9f;
+    }
+    Button {
+        margin-top: 1;
+        width: 100%;
+    }
+    #btn_login {
+        background: #00ff9f;
+        color: #000000;
+        text-style: bold;
+    }
+    #btn_login:hover {
+        background: #00cc7f;
+    }
+    #btn_register {
+        background: #0d0d1a;
+        color: #00ff9f;
+        border: tall #00ff9f;
+    }
+    #error { color: #ff4444; margin-bottom: 1; text-style: bold; }
     """
 
     class LoginSuccess(Message):
@@ -41,7 +74,7 @@ class LoginScreen(Screen):
     def compose(self) -> ComposeResult:
         with Center():
             with Vertical(id="panel"):
-                yield Static("COMP3334 Secure IM", id="title")
+                yield Static("◈ COMP3334 SECURE IM ◈", id="title")
                 yield Label("")
                 yield Input(placeholder="Username", id="username")
                 yield Input(placeholder="Password", password=True, id="password")

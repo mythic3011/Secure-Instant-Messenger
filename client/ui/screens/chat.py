@@ -67,11 +67,56 @@ class ChatScreen(Screen):
     """
 
     CSS = """
-    ChatScreen { layout: vertical; }
-    #messages  { height: 1fr; border: solid $primary; }
-    #warning   { color: $warning; height: auto; }
-    #input_row { height: 3; }
-    #msg_input { width: 1fr; }
+    ChatScreen {
+        layout: vertical;
+        background: #0a0a0f;
+    }
+    #header {
+        height: 3;
+        background: #0d0d1a;
+        border-bottom: solid #00ff9f;
+        color: #00ff9f;
+        text-style: bold;
+        content-align: left middle;
+        padding: 0 2;
+    }
+    #messages {
+        height: 1fr;
+        border: solid #1a1a3e;
+        background: #0a0a0f;
+    }
+    #messages > ListItem {
+        color: #c0c0e0;
+        padding: 0 1;
+    }
+    #warning {
+        color: #ffaa00;
+        height: auto;
+        background: #1a0d00;
+        padding: 0 1;
+    }
+    #input_row {
+        height: 3;
+        background: #0d0d1a;
+        border-top: solid #1a1a3e;
+    }
+    #msg_input {
+        width: 1fr;
+        border: tall #1a1a3e;
+        background: #0a0a1a;
+        color: #e0e0ff;
+    }
+    #msg_input:focus { border: tall #00ff9f; }
+    #btn_send {
+        background: #00ff9f;
+        color: #000000;
+        text-style: bold;
+    }
+    #btn_settings {
+        background: #0d0d1a;
+        color: #00ccff;
+        border: tall #1a1a3e;
+    }
     """
 
     class SendMessage(Message):

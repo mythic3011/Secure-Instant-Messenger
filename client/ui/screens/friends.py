@@ -31,12 +31,49 @@ class FriendsScreen(Screen):
     """
 
     CSS = """
-    FriendsScreen { layout: vertical; }
-    #pending_list { height: 1fr; border: solid $primary; }
-    #add_row { height: 3; }
-    #add_input { width: 1fr; }
-    #status { color: $success; height: auto; }
-    #error  { color: $error;   height: auto; }
+    FriendsScreen {
+        layout: vertical;
+        background: #0a0a0f;
+    }
+    #header {
+        height: 3;
+        background: #0d0d1a;
+        border-bottom: solid #00ff9f;
+        color: #00ff9f;
+        text-style: bold;
+        content-align: center middle;
+    }
+    #pending_list {
+        height: 1fr;
+        border: solid #1a1a3e;
+        background: #0a0a0f;
+    }
+    #pending_list > ListItem { color: #c0c0e0; padding: 0 1; }
+    #pending_list > ListItem:hover { background: #0d0d2a; color: #00ff9f; }
+    #add_row {
+        height: 3;
+        background: #0d0d1a;
+        border-top: solid #1a1a3e;
+    }
+    #add_input {
+        width: 1fr;
+        border: tall #1a1a3e;
+        background: #0a0a1a;
+        color: #e0e0ff;
+    }
+    #add_input:focus { border: tall #00ccff; }
+    #btn_add {
+        background: #00ccff;
+        color: #000000;
+        text-style: bold;
+    }
+    #btn_back {
+        background: #0d0d1a;
+        color: #00ccff;
+        border: tall #1a1a3e;
+    }
+    #status { color: #00ff9f; height: auto; padding: 0 1; }
+    #error  { color: #ff4444; height: auto; padding: 0 1; text-style: bold; }
     """
 
     class SendRequest(Message):

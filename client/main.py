@@ -18,7 +18,7 @@ def main() -> None:
 
     # allow environment overrides
     server = args.server or os.environ.get("SERVER_URL") or "https://localhost:8443"
-    username = args.username or os.environ.get("USERNAME")
+    username = args.username or os.environ.get("USERNAME") or "mythic3011"
     if not username:
         username = input("Username: ").strip()
         if not username:
