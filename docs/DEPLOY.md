@@ -35,12 +35,14 @@ Install the following in order:
 ### Install `uv` (Python package manager)
 
 **Ubuntu / macOS:**
+
 ```bash
 curl -LsSf https://astral.sh/uv/install.sh | sh
 source $HOME/.local/bin/env   # or restart terminal
 ```
 
 **Windows (PowerShell):**
+
 ```powershell
 powershell -c "irm https://astral.sh/uv/install.ps1 | iex"
 ```
@@ -55,6 +57,7 @@ cd COMP3334_Project
 ```
 
 Or extract the submitted zip:
+
 ```bash
 unzip TeamID.zip
 cd TeamID/code
@@ -68,7 +71,14 @@ cd TeamID/code
 uv sync
 ```
 
+> **For running tests**, install dev dependencies too:
+>
+> ```bash
+> uv sync --extra dev
+> ```
+
 Fallback (if `uv` is unavailable):
+
 ```bash
 pip install -e .
 ```
@@ -77,23 +87,32 @@ pip install -e .
 
 ## 4. Configure Environment
 
-```bash
-cp .env.example .env.local
-```
+Run the bootstrap script — it copies `.env.example` to `.env.local` and **automatically generates cryptographically random secrets** for `TOKEN_SECRET_KEY` and `TOTP_ENCRYPTION_KEY`:
 
-Generate two random secret keys and paste them into `.env.local`:
+**Ubuntu / macOS / Git Bash (Windows):**
 
 ```bash
-python -c "import secrets; print(secrets.token_hex(32))"
-# Run twice — one value for TOKEN_SECRET_KEY, one for TOTP_ENCRYPTION_KEY
+chmod +x scripts/bootstrap-env.sh
+./scripts/bootstrap-env.sh
 ```
 
-Edit `.env.local` and replace the placeholder values:
+**Windows (PowerShell, if Git Bash is unavailable):**
 
+```powershell
+python -c "
+import shutil, secrets, re, pathlib
+src = pathlib.Path('.env.example').read_text()
+src = src.replace('REPLACE_WITH_RANDOM_64_HEX_CHARS', '__REPLACE__', 1)
+src = src.replace('REPLACE_WITH_RANDOM_64_HEX_CHARS', '__REPLACE__', 1)
+src = src.replace('__REPLACE__', secrets.token_hex(32), 1)
+src = src.replace('__REPLACE__', secrets.token_hex(32), 1)
+pathlib.Path('.env.local').write_text(src)
+print('Wrote .env.local')
+"
 ```
-TOKEN_SECRET_KEY=<paste first value here>
-TOTP_ENCRYPTION_KEY=<paste second value here>
-```
+
+> If `.env.local` already exists, the script will exit without overwriting it.
+> To regenerate secrets: `rm .env.local && ./scripts/bootstrap-env.sh`
 
 ---
 
@@ -128,6 +147,10 @@ To stop: `docker compose down`
 uv run uvicorn server.main:app --host 0.0.0.0 --port 8443
 ```
 
+> **Note:** In development mode (`app_env=development`), if `TOKEN_SECRET_KEY` or
+> `TOTP_ENCRYPTION_KEY` are missing from `.env.local`, the server auto-generates
+> temporary values and logs a warning. **Never rely on this in production.**
+
 ---
 
 ## 7. Run the Client
@@ -150,7 +173,7 @@ You will be prompted for your username if not provided via `--username`.
 2. Enter a username (3–32 chars, letters/digits/`_`/`-`)
 3. Enter a password (minimum 12 characters) and confirm it
 4. Click **Register**
-5. A TOTP provisioning URI will appear — scan it with an authenticator app:
+5. A TOTP provisioning URI (and ASCII QR code, if `qrcode` is installed) will appear — scan it with an authenticator app:
    - **Google Authenticator** (Android/iOS)
    - **Authy** (Android/iOS/Desktop)
    - **Microsoft Authenticator**
@@ -191,44 +214,52 @@ You will be prompted for your username if not provided via `--username`.
 ## 9. Running Tests
 
 ```bash
-# Unit tests (no server needed)
+# Install dev dependencies first (required for pytest)
+uv sync --extra dev
+
+# Unit tests only (no server needed, fast)
 uv run pytest tests/unit/ -v
 
-# Integration tests (uses in-memory test server)
+# Integration tests (uses in-memory test server, no real DB)
 uv run pytest tests/integration/ -v
 
-# Security tests (replay attack, tampering)
-uv run pytest test_replay_attack.py -v
+# Security tests (replay attack, ciphertext tampering)
+uv run pytest tests/security/ -v
 
 # All tests
 uv run pytest -v
 ```
 
+Expected output: **45 tests passed**.
+
 ---
 
 ## 10. Troubleshooting
 
-| Problem | Solution |
-|---------|----------|
-| Port 8443 already in use | Change `PORT=8443` in `.env.local` to another port, e.g. `8444` |
-| TLS certificate errors in client | Expected for self-signed certs — client uses `verify=False` in dev mode |
-| TOTP code rejected | Ensure your system clock is accurate. Ubuntu: `timedatectl set-ntp true`. Windows: Settings → Time & Language → Sync now |
-| Docker permission denied (Linux) | Run `sudo usermod -aG docker $USER` then log out and back in |
-| `uv: command not found` | Restart terminal after installing `uv`, or use `pip install -e .` instead |
-| `ModuleNotFoundError` | Run `uv sync` from the project root to install all dependencies |
-| Database locked error | Stop any other running server instance before starting a new one |
-| Keystore not found on login | You must register on this device first — keys are stored locally in `~/.comp3334im/<username>/` |
+| Problem                               | Solution                                                                                                                 |
+| ------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| Port 8443 already in use              | Change `PORT=8443` in `.env.local` to another port, e.g. `8444`                                                          |
+| TLS certificate errors in client      | Expected for self-signed certs — client uses `verify=False` in dev mode                                                  |
+| TOTP code rejected                    | Ensure your system clock is accurate. Ubuntu: `timedatectl set-ntp true`. Windows: Settings → Time & Language → Sync now |
+| Docker permission denied (Linux)      | Run `sudo usermod -aG docker $USER` then log out and back in                                                             |
+| `uv: command not found`               | Restart terminal after installing `uv`, or use `pip install -e .` instead                                                |
+| `ModuleNotFoundError`                 | Run `uv sync` (add `--extra dev` for tests) from the project root                                                        |
+| Database locked error                 | Stop any other running server instance before starting a new one                                                         |
+| Keystore not found on login           | You must register on this device first — keys are stored locally in `~/.comp3334im/<username>/`                          |
+| `.env.local` already exists           | Delete it first: `rm .env.local`, then re-run `./scripts/bootstrap-env.sh`                                               |
+| `bootstrap-env.sh: Permission denied` | Run `chmod +x scripts/bootstrap-env.sh` first                                                                            |
 
 ---
 
 ## 11. File Locations
 
-| File | Purpose |
-|------|---------|
-| `.env.local` | Server configuration (secrets, ports) — never commit |
-| `certs/server.crt` | TLS certificate |
-| `certs/server.key` | TLS private key |
-| `~/.comp3334im/<username>/keystore.json` | Encrypted local key storage (client) |
-| `~/.comp3334im/<username>/sessions.json` | Encrypted session state (client) |
-| `~/.comp3334im/<username>/messages.db` | Local message history (client) |
-| `/app/data/im.db` (Docker) | Server SQLite database |
+| File                                     | Purpose                                                  |
+| ---------------------------------------- | -------------------------------------------------------- |
+| `scripts/bootstrap-env.sh`               | Auto-generates `.env.local` with random secrets          |
+| `.env.local`                             | Server configuration (secrets, ports) — **never commit** |
+| `certs/server.crt`                       | TLS certificate                                          |
+| `certs/server.key`                       | TLS private key                                          |
+| `~/.comp3334im/<username>/keystore.json` | Encrypted local key storage (client)                     |
+| `~/.comp3334im/<username>/sessions.json` | Encrypted session state (client)                         |
+| `~/.comp3334im/<username>/messages.db`   | Local message history (client)                           |
+| `/app/data/im.db` (Docker)               | Server SQLite database                                   |

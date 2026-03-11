@@ -21,4 +21,5 @@ coverage/
 .pytest_cache/
 *.egg
 *.whl
-
+certs/
+data/

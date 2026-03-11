@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from textual.app import ComposeResult
 from textual.containers import Horizontal, Vertical
+from textual.message import Message
 from textual.screen import Screen
 from textual.widgets import Button, Footer, Header, Input, Label, ListItem, ListView, Static
 
@@ -38,16 +39,19 @@ class FriendsScreen(Screen):
     #error  { color: $error;   height: auto; }
     """
 
-    class SendRequest:
+    class SendRequest(Message):
         def __init__(self, username: str) -> None:
+            super().__init__()
             self.username = username
 
-    class AcceptRequest:
+    class AcceptRequest(Message):
         def __init__(self, request_id: str) -> None:
+            super().__init__()
             self.request_id = request_id
 
-    class DeclineRequest:
+    class DeclineRequest(Message):
         def __init__(self, request_id: str) -> None:
+            super().__init__()
             self.request_id = request_id
 
     def compose(self) -> ComposeResult:
@@ -69,7 +73,7 @@ class FriendsScreen(Screen):
     async def _load_pending(self) -> None:
         self.post_message(self._LoadPending())
 
-    class _LoadPending:
+    class _LoadPending(Message):
         pass
 
     def populate_pending(self, requests: list[dict]) -> None:

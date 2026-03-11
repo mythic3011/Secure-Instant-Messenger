@@ -52,7 +52,6 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="COMP3334 Secure IM",
     version="1.0.0",
-    # Disable automatic docs in production to reduce attack surface
     docs_url="/v1/docs" if get_settings().app_env == "development" else None,
     redoc_url=None,
     lifespan=lifespan,
