@@ -23,3 +23,4 @@ coverage/
 *.whl
 certs/
 data/
+CLAUDE.md

@@ -38,7 +38,7 @@ class ConversationListScreen(Screen):
 
     class ConversationSelected(Message):
         def __init__(self, conv_id: str, peer_id: str, peer_username: str) -> None:
-        super().__init__()
+            super().__init__()
             self.conv_id       = conv_id
             self.peer_id       = peer_id
             self.peer_username = peer_username

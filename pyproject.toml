@@ -25,6 +25,7 @@ dependencies = [
     # Logging
     "structlog>=24.4.0",
     "qrcode>=8.2",
+    "rich>=14.3.3",
 ]
 
 [project.optional-dependencies]

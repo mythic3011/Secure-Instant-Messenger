@@ -98,13 +98,13 @@ class RegisterScreen(Screen):
             qr.print_ascii(out=buf, invert=True)
             qr_str = buf.getvalue()
             info.update(
-                f"✅ Registered! Scan this QR code in your authenticator:\n\n"
+                f"Registered! Scan this QR code in your authenticator:\n\n"
                 f"{qr_str}\n"
                 f"Or enter manually:\n{totp_uri}"
             )
         else:
             info.update(
-                f"✅ Registered!\nAdd this to your authenticator app:\n{totp_uri}\n\n"
+                f"Registered!\nAdd this to your authenticator app:\n{totp_uri}\n\n"
                 f"(Install 'qrcode' for QR display: uv add qrcode)"
             )
         self.query_one("#error", Static).update("")

@@ -33,7 +33,7 @@ class LoginScreen(Screen):
 
     class LoginSuccess(Message):
         def __init__(self, username: str, password: str, totp_code: str) -> None:
-        super().__init__()
+            super().__init__()
             self.username  = username
             self.password  = password
             self.totp_code = totp_code
