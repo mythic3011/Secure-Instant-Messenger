@@ -16,9 +16,8 @@ def main() -> None:
     parser.add_argument("--username", default=None, help="Username (prompted if omitted or from USERNAME env)")
     args = parser.parse_args()
 
-    # allow environment overrides
-    server = args.server or os.environ.get("SERVER_URL") or "https://localhost:8443"
-    username = args.username or os.environ.get("USERNAME") or "mythic3011"
+    server = args.server or os.environ.get("SERVER_URL") or "http://localhost:8443"
+    username = args.username or os.environ.get("IM_USERNAME")
     if not username:
         username = input("Username: ").strip()
         if not username:

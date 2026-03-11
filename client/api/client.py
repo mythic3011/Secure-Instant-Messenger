@@ -59,12 +59,11 @@ class IMClient:
     # ------------------------------------------------------------------
 
     async def __aenter__(self) -> "IMClient":
+        use_tls = self._base_url.startswith("https://")
         self._http = httpx.AsyncClient(
             base_url=self._base_url,
             timeout=10.0,
-            # In production, verify=True with real certs.
-            # For dev with self-signed certs, set verify=False.
-            verify=False,
+            verify=use_tls,
         )
         return self
 
@@ -197,10 +196,11 @@ class IMClient:
         """WebSocket listener with automatic reconnect."""
         ws_url = self._base_url.replace("https://", "wss://").replace("http://", "ws://")
         ws_url = f"{ws_url}/v1/ws?token={self._token}"
+        use_tls = ws_url.startswith("wss://")
 
         while True:
             try:
-                async with websockets.connect(ws_url, ssl=False) as ws:
+                async with websockets.connect(ws_url, ssl=use_tls) as ws:
                     log.info("WebSocket connected")
                     async for raw in ws:
                         try:
