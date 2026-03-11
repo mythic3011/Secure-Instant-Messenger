@@ -5,6 +5,7 @@ Shows conversation list ordered by last activity (R23) with unread counters (R24
 
 from __future__ import annotations
 
+from textual.message import Message
 from textual.app import ComposeResult
 from textual.containers import Horizontal
 from textual.screen import Screen
@@ -35,16 +36,17 @@ class ConversationListScreen(Screen):
     #toolbar   { height: 3; }
     """
 
-    class ConversationSelected:
+    class ConversationSelected(Message):
         def __init__(self, conv_id: str, peer_id: str, peer_username: str) -> None:
+        super().__init__()
             self.conv_id       = conv_id
             self.peer_id       = peer_id
             self.peer_username = peer_username
 
-    class OpenFriends:
+    class OpenFriends(Message):
         pass
 
-    class Logout:
+    class Logout(Message):
         pass
 
     def __init__(self, my_username: str) -> None:

@@ -5,6 +5,7 @@ Covers: R5 (fingerprint / safety number), R10 (TTL setting)
 
 from __future__ import annotations
 
+from textual.message import Message
 from textual.app import ComposeResult
 from textual.containers import Vertical
 from textual.screen import Screen
@@ -35,11 +36,12 @@ class SettingsScreen(Screen):
     #status { color: $success; }
     """
 
-    class SetTTL:
+    class SetTTL(Message):
         def __init__(self, ttl_seconds: int | None) -> None:
+        super().__init__()
             self.ttl_seconds = ttl_seconds
 
-    class MarkVerified:
+    class MarkVerified(Message):
         pass
 
     def __init__(self, conversation_id: str, peer_username: str) -> None:
@@ -72,6 +74,7 @@ class SettingsScreen(Screen):
 
     class _RequestFingerprint:
         def __init__(self, conversation_id: str) -> None:
+        super().__init__()
             self.conversation_id = conversation_id
 
     def set_fingerprint(self, fp: str) -> None:

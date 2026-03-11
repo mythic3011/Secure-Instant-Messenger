@@ -4,6 +4,7 @@ client/ui/screens/login.py — Login and registration screens.
 
 from __future__ import annotations
 
+from textual.message import Message
 from textual.app import ComposeResult
 from textual.containers import Center, Vertical
 from textual.screen import Screen
@@ -30,10 +31,12 @@ class LoginScreen(Screen):
     #error { color: $error; margin-bottom: 1; }
     """
 
-    class LoginSuccess:
-        def __init__(self, username: str, password: str) -> None:
-            self.username = username
-            self.password = password
+    class LoginSuccess(Message):
+        def __init__(self, username: str, password: str, totp_code: str) -> None:
+        super().__init__()
+            self.username  = username
+            self.password  = password
+            self.totp_code = totp_code
 
     def compose(self) -> ComposeResult:
         with Center():
@@ -68,4 +71,4 @@ class LoginScreen(Screen):
             return
 
         error.update("")
-        self.post_message(self.LoginSuccess(username, password))
+        self.post_message(self.LoginSuccess(username, password, totp))

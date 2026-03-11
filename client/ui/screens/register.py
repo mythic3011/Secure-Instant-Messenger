@@ -4,6 +4,7 @@ client/ui/screens/register.py — Registration screen.
 
 from __future__ import annotations
 
+from textual.message import Message
 from textual.app import ComposeResult
 from textual.containers import Center, Vertical
 from textual.screen import Screen
@@ -31,8 +32,9 @@ class RegisterScreen(Screen):
     #info  { color: $success; margin-bottom: 1; }
     """
 
-    class RegisterRequest:
+    class RegisterRequest(Message):
         def __init__(self, username: str, password: str) -> None:
+        super().__init__()
             self.username = username
             self.password = password
 
