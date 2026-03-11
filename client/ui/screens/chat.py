@@ -169,7 +169,7 @@ class ChatScreen(Screen):
         self._key_warning    = False
 
     def compose(self) -> ComposeResult:
-        yield Static(f"◈ {self._peer_username}  ·  🔒 E2EE", id="header")
+        yield Static(f"◈ {self.peer_username}  ·  🔒 E2EE", id="header")
         yield Static("", id="warning")
         yield ListView(id="messages")
         with Horizontal(id="input_row"):

@@ -168,8 +168,8 @@ class RegisterScreen(Screen):
         Hides the registration form and shows the QR code + OTP verify input.
         Called by app.py after the server confirms registration.
         """
-        # Hide registration form widgets
-        for widget_id in ("#username", "#password", "#confirm", "#btn_register", "#btn_back"):
+        # Hide registration form widgets (and exit — account already created, must finish TOTP)
+        for widget_id in ("#username", "#password", "#confirm", "#btn_register", "#btn_back", "#btn_exit"):
             self.query_one(widget_id).add_class("hidden")
 
         # Build and display QR / URI in the info label

@@ -6,10 +6,10 @@ Covers: R13, R14, R15
 from __future__ import annotations
 
 from textual.app import ComposeResult
-from textual.containers import Horizontal, Vertical
+from textual.containers import Horizontal
 from textual.message import Message
 from textual.screen import Screen
-from textual.widgets import Button, Footer, Header, Input, Label, ListItem, ListView, Static
+from textual.widgets import Button, Input, ListItem, ListView, Static
 
 
 class FriendRequestItem(ListItem):
@@ -19,10 +19,10 @@ class FriendRequestItem(ListItem):
         self.sender_name = sender_name
 
     def compose(self) -> ComposeResult:
-        with Horizontal():
-            yield Static(f"  {self.sender_name}", classes="name")
-            yield Button("Accept", variant="success", id=f"accept_{self.request_id}")
-            yield Button("Decline", variant="error",  id=f"decline_{self.request_id}")
+        with Horizontal(classes="req_row"):
+            yield Static(f"  ⊛ {self.sender_name}", classes="req_name")
+            yield Button("✓ Accept",  variant="success", id=f"accept_{self.request_id}",  classes="req_btn")
+            yield Button("✕ Decline", variant="error",   id=f"decline_{self.request_id}", classes="req_btn")
 
 
 class FriendsScreen(Screen):
@@ -35,11 +35,8 @@ class FriendsScreen(Screen):
         layout: vertical;
         background: #0a0a0f;
     }
-    #btn_exit {
-        color: #ff4444;
-        border: tall #ff4444;
-    }
-    #btn_exit:hover { background: #1a0000; color: #ff6666; }
+
+    /* ── Title bar ── */
     #header {
         height: 3;
         background: #0d0d1a;
@@ -47,14 +44,41 @@ class FriendsScreen(Screen):
         color: #00ff9f;
         text-style: bold;
         content-align: center middle;
+        padding: 0 2;
     }
+
+    /* ── Section labels ── */
+    .section_label {
+        height: 2;
+        background: #0d0d1a;
+        border-bottom: solid #1a1a3e;
+        color: #8888cc;
+        text-style: italic;
+        padding: 0 2;
+        content-align: left middle;
+    }
+
+    /* ── Pending list ── */
     #pending_list {
         height: 1fr;
         border: solid #1a1a3e;
         background: #0a0a0f;
     }
-    #pending_list > ListItem { color: #c0c0e0; padding: 0 1; }
-    #pending_list > ListItem:hover { background: #0d0d2a; color: #00ff9f; }
+    #pending_list > ListItem {
+        color: #c0c0e0;
+        padding: 0 0;
+        height: 3;
+    }
+    #pending_list > ListItem:hover { background: #0d0d2a; }
+    .req_row  { height: 3; align: left middle; }
+    .req_name { width: 1fr; color: #e0e0ff; content-align: left middle; padding: 0 1; }
+    .req_btn  { width: 12; height: 3; }
+
+    /* ── Status / error bar ── */
+    #status { color: #00ff9f; height: 1; padding: 0 2; content-align: left middle; }
+    #error  { color: #ff4444; height: 1; padding: 0 2; content-align: left middle; text-style: bold; }
+
+    /* ── Add-friend row ── */
     #add_row {
         height: 3;
         background: #0d0d1a;
@@ -68,17 +92,30 @@ class FriendsScreen(Screen):
     }
     #add_input:focus { border: tall #00ccff; }
     #btn_add {
+        width: 16;
         background: #00ccff;
         color: #000000;
         text-style: bold;
     }
-    #btn_back {
+    #btn_add:hover { background: #00aadd; }
+
+    /* ── Bottom toolbar ── */
+    #toolbar {
+        height: 3;
+        background: #0d0d1a;
+        border-top: solid #1a1a3e;
+    }
+    #toolbar Button {
         background: #0d0d1a;
         color: #00ccff;
         border: tall #1a1a3e;
     }
-    #status { color: #00ff9f; height: auto; padding: 0 1; }
-    #error  { color: #ff4444; height: auto; padding: 0 1; text-style: bold; }
+    #toolbar Button:hover { background: #0d0d2a; color: #00ff9f; }
+    #btn_exit {
+        color: #ff4444;
+        border: tall #ff4444;
+    }
+    #btn_exit:hover { background: #1a0000; color: #ff6666; }
     """
 
     class SendRequest(Message):
@@ -97,21 +134,20 @@ class FriendsScreen(Screen):
             self.request_id = request_id
 
     def compose(self) -> ComposeResult:
-        yield Header()
-        yield Static("Pending friend requests:", id="pending_label")
+        yield Static("◈ SECURE IM  ·  Friends", id="header")
+        yield Static("Pending friend requests", classes="section_label")
         yield ListView(id="pending_list")
         yield Static("", id="status")
         yield Static("", id="error")
         with Horizontal(id="add_row"):
             yield Input(placeholder="Username to add…", id="add_input")
-            yield Button("Send Request", variant="primary", id="btn_add")
-        with Horizontal():
+            yield Button("⊕ Send Request", id="btn_add")
+        with Horizontal(id="toolbar"):
             yield Button("← Back", id="btn_back")
             yield Button("✕ Exit", id="btn_exit")
-        yield Footer()
 
     def on_mount(self) -> None:
-        self.title = "Friends"
+        self.query_one("#add_input", Input).focus()
         self.app.call_later(self._load_pending)
 
     async def _load_pending(self) -> None:

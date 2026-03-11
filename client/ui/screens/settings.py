@@ -9,7 +9,7 @@ from textual.message import Message
 from textual.app import ComposeResult
 from textual.containers import Vertical
 from textual.screen import Screen
-from textual.widgets import Button, Input, Label, Static
+from textual.widgets import Button, Input, Static
 
 
 class SettingsScreen(Screen):
@@ -65,7 +65,7 @@ class SettingsScreen(Screen):
     }
     #btn_close {
         background: #0d0d1a;
-        color: #888888;
+        color: #00ccff;
         border: tall #1a1a3e;
     }
     #status { color: #00ff9f; text-style: bold; }
@@ -87,20 +87,19 @@ class SettingsScreen(Screen):
 
     def compose(self) -> ComposeResult:
         with Vertical(id="panel"):
-            yield Static(f"Settings — {self.peer_username}", id="title")
-            yield Label("")
+            yield Static(f"⚙ Settings — {self.peer_username}", id="title")
+            yield Static("")
             yield Static("Safety Number (verify out-of-band with your contact):", id="fp_label")
             yield Static(self._fingerprint, id="fingerprint")
-            yield Button("Mark as Verified ✓", variant="success", id="btn_verify")
-            yield Label("")
+            yield Button("✓ Mark as Verified", variant="success", id="btn_verify")
+            yield Static("")
             yield Static("Self-destruct TTL (seconds, blank = no expiry):", id="ttl_label")
-            yield Input(placeholder="e.g. 300 for 5 minutes", id="ttl_input")
+            yield Input(placeholder="e.g. 300 for 5 minutes", id="ttl_input", restrict=r"\d*")
             yield Static("", id="status")
-            yield Button("Save TTL", variant="primary", id="btn_ttl")
-            yield Button("← Back", id="btn_back")
+            yield Button("💾 Save TTL", variant="primary", id="btn_ttl")
+            yield Button("← Close", id="btn_close")
 
     def on_mount(self) -> None:
-        self.title = "Settings"
         self.app.call_later(self._load_fingerprint)
 
     async def _load_fingerprint(self) -> None:
@@ -116,7 +115,7 @@ class SettingsScreen(Screen):
         self.query_one("#fingerprint", Static).update(fp)
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
-        if event.button.id == "btn_back":
+        if event.button.id in ("btn_back", "btn_close"):
             self.app.pop_screen()
         elif event.button.id == "btn_verify":
             self.post_message(self.MarkVerified())

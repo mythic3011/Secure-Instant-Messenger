@@ -246,7 +246,12 @@ class IMClient:
         while True:
             try:
                 log.debug("WS connecting to %s (attempt #%d)", ws_url.split('?')[0], retry_count + 1)
-                async with websockets.connect(ws_url, ssl=use_tls) as ws:
+                _connect = (
+                    websockets.connect(ws_url, ssl=True)
+                    if use_tls
+                    else websockets.connect(ws_url)
+                )
+                async with _connect as ws:
                     retry_count = 0
                     log.info("WebSocket connected")
                     async for raw in ws:
