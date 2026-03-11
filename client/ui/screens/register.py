@@ -4,11 +4,19 @@ client/ui/screens/register.py — Registration screen.
 
 from __future__ import annotations
 
+import io
+
 from textual.message import Message
 from textual.app import ComposeResult
 from textual.containers import Center, Vertical
 from textual.screen import Screen
 from textual.widgets import Button, Input, Label, Static
+
+try:
+    import qrcode as _qrcode
+    _HAS_QRCODE = True
+except ImportError:
+    _HAS_QRCODE = False
 
 
 class RegisterScreen(Screen):
@@ -34,7 +42,7 @@ class RegisterScreen(Screen):
 
     class RegisterRequest(Message):
         def __init__(self, username: str, password: str) -> None:
-        super().__init__()
+            super().__init__()
             self.username = username
             self.password = password
 
@@ -63,7 +71,6 @@ class RegisterScreen(Screen):
         password = self.query_one("#password", Input).value
         confirm  = self.query_one("#confirm", Input).value
         error    = self.query_one("#error", Static)
-
         if not re.match(r"^[a-zA-Z0-9_\-]{3,32}$", username):
             error.update("Username: 3–32 chars, letters/digits/_/- only.")
             return
@@ -73,6 +80,31 @@ class RegisterScreen(Screen):
         if password != confirm:
             error.update("Passwords do not match.")
             return
-
         error.update("")
         self.post_message(self.RegisterRequest(username, password))
+
+    def show_totp_setup(self, totp_uri: str) -> None:
+        """
+        Display TOTP setup info after successful registration (Task 4 / R2).
+        Shows ASCII QR code if qrcode library is available, else shows URI.
+        Called by app.py after server confirms registration.
+        """
+        info = self.query_one("#info", Static)
+        if _HAS_QRCODE:
+            qr = _qrcode.QRCode(border=1)
+            qr.add_data(totp_uri)
+            qr.make(fit=True)
+            buf = io.StringIO()
+            qr.print_ascii(out=buf, invert=True)
+            qr_str = buf.getvalue()
+            info.update(
+                f"✅ Registered! Scan this QR code in your authenticator:\n\n"
+                f"{qr_str}\n"
+                f"Or enter manually:\n{totp_uri}"
+            )
+        else:
+            info.update(
+                f"✅ Registered!\nAdd this to your authenticator app:\n{totp_uri}\n\n"
+                f"(Install 'qrcode' for QR display: uv add qrcode)"
+            )
+        self.query_one("#error", Static).update("")
