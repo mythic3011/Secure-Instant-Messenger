@@ -28,6 +28,8 @@ from client.crypto.session import (
 )
 from shared.protocol import make_conversation_id
 
+pytestmark = pytest.mark.asyncio
+
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -38,7 +40,7 @@ def anyio_backend():
     return "asyncio"
 
 
-@pytest_asyncio.fixture(scope="module")
+@pytest_asyncio.fixture
 async def app_client():
     """Spin up the FastAPI app with a temp in-memory DB."""
     import server.core.database as db_mod
@@ -112,6 +114,7 @@ def _auth(token: str) -> dict:
 # ---------------------------------------------------------------------------
 
 @pytest.mark.anyio
+@pytest.mark.asyncio
 async def test_full_e2e_message_flow(app_client: AsyncClient):
     """
     Alice registers, Bob registers.
@@ -233,6 +236,7 @@ async def test_full_e2e_message_flow(app_client: AsyncClient):
 
 
 @pytest.mark.anyio
+@pytest.mark.asyncio
 async def test_replay_rejection(app_client: AsyncClient):
     """
     Posting the same message envelope twice must return 409 on the second attempt.
