@@ -204,6 +204,8 @@ class IMApp(App):
         self, msg: ConversationListScreen.ConversationSelected
     ) -> None:
         await reset_unread(msg.conv_id)
+        if self._client:
+            await self._client.mark_read(msg.conv_id)
         self._peer_usernames[msg.peer_id] = msg.peer_username
         from client.ui.screens.chat import ChatScreen
         screen = ChatScreen(
