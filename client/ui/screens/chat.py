@@ -41,23 +41,32 @@ class MessageItem(ListItem):
         # Pre-compute expiry so _sweep_ttl() can compare without re-parsing
         self._expires_at: int | None = (sent_at + ttl_seconds) if ttl_seconds else None
 
+    def on_mount(self) -> None:
+        self.add_class("mine" if self._is_mine else "theirs")
+
     def compose(self) -> ComposeResult:
         import datetime
         ts = datetime.datetime.fromtimestamp(self._sent_at).strftime("%H:%M")
-        prefix = "You" if self._is_mine else self._sender
         status_icon = {"sent": "✓", "delivered": "✓✓", "read": "✓✓"}.get(self._status, "")
 
         # Show live countdown instead of raw TTL seconds (R10)
         if self._expires_at is not None:
             remaining = self._expires_at - int(time.time())
             if remaining <= 0:
-                ttl_tag = " [🔥 expired]"
+                ttl_tag = " 🔥expired"
             else:
-                ttl_tag = f" [🔥 {remaining}s]"
+                ttl_tag = f" 🔥{remaining}s"
         else:
             ttl_tag = ""
 
-        yield Static(f"[{ts}] {prefix}: {self._text}  {status_icon}{ttl_tag}")
+        if self._is_mine:
+            # Right side: status + ttl on left of text, no sender prefix
+            line = f"{status_icon}{ttl_tag}  {self._text}  [{ts}]"
+        else:
+            # Left side: sender + text + ttl
+            line = f"[{ts}]  {self._sender}: {self._text}{ttl_tag}"
+
+        yield Static(line)
 
 
 class ChatScreen(Screen):
@@ -84,10 +93,24 @@ class ChatScreen(Screen):
         height: 1fr;
         border: solid #1a1a3e;
         background: #0a0a0f;
-    }
-    #messages > ListItem {
-        color: #c0c0e0;
         padding: 0 1;
+    }
+    /* theirs — left aligned, white */
+    #messages > ListItem.theirs {
+        color: #c0c0e0;
+        background: #0d0d1a;
+        border-left: thick #444466;
+        margin: 0 8 0 0;
+        padding: 0 1;
+    }
+    /* mine — right aligned, cyan */
+    #messages > ListItem.mine {
+        color: #00ff9f;
+        background: #001a10;
+        border-right: thick #00ff9f;
+        margin: 0 0 0 8;
+        padding: 0 1;
+        text-align: right;
     }
     #warning {
         color: #ffaa00;
@@ -140,14 +163,13 @@ class ChatScreen(Screen):
         self._key_warning    = False
 
     def compose(self) -> ComposeResult:
-        yield Header()
+        yield Static(f"◈ {self._peer_username}  ·  🔒 E2EE", id="header")
         yield Static("", id="warning")
         yield ListView(id="messages")
         with Horizontal(id="input_row"):
             yield Input(placeholder="Type a message…", id="msg_input")
             yield Button("Send", variant="primary", id="btn_send")
             yield Button("⚙", id="btn_settings", tooltip="Fingerprint / TTL")
-        yield Footer()
 
     def on_mount(self) -> None:
         self.title = f"Chat — {self.peer_username}"

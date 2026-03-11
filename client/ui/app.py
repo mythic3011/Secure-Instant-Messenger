@@ -16,6 +16,7 @@ from textual.app import App, ComposeResult
 from textual.widgets import Static
 
 from client.api.client import IMClient, IMClientError
+import httpx
 from client.crypto.session import (
     DHKeypair,
     IdentityKeyCache,
@@ -103,7 +104,8 @@ class IMApp(App):
         password  = msg.password
         totp_code = msg.totp_code
 
-        login_screen = self.query_one(LoginScreen)
+        # Capture screen reference NOW before any await displaces it
+        login_screen = self.screen  # LoginScreen is current screen at this point
 
         self._client = IMClient(self._server_url)
         await self._client.__aenter__()
@@ -114,6 +116,16 @@ class IMApp(App):
             )
         except IMClientError as e:
             login_screen.query_one("#error", Static).update(f"Login failed: {e.detail}")
+            await self._client.__aexit__(None, None, None)
+            self._client = None
+            return
+        except (httpx.ConnectError, httpx.TimeoutException, httpx.NetworkError) as e:
+            login_screen.query_one("#error", Static).update(f"Cannot reach server — is it running? ({type(e).__name__})")
+            await self._client.__aexit__(None, None, None)
+            self._client = None
+            return
+        except Exception as e:
+            login_screen.query_one("#error", Static).update(f"Unexpected error: {e}")
             await self._client.__aexit__(None, None, None)
             self._client = None
             return
@@ -143,11 +155,19 @@ class IMApp(App):
         try:
             bundle = await self._client.get_keys(username)
             self._user_id = bundle.user_id
-        except IMClientError:
+        except (IMClientError, httpx.ConnectError, httpx.TimeoutException, httpx.NetworkError):
             self._user_id = username
 
         # Connect WebSocket
-        await self._client.connect_ws(self._on_ws_message)
+        try:
+            await self._client.connect_ws(self._on_ws_message)
+        except (httpx.ConnectError, httpx.TimeoutException, httpx.NetworkError, Exception) as e:
+            login_screen.query_one("#error", Static).update(
+                f"WebSocket connection failed: {type(e).__name__} — is server running?"
+            )
+            await self._client.__aexit__(None, None, None)
+            self._client = None
+            return
 
         await self._show_conversations()
 
@@ -180,11 +200,26 @@ class IMApp(App):
                     dh_pub_b64=dh_kp.public_b64(),
                     key_sig_b64=base64.b64encode(key_sig).decode(),
                 ))
-            except IMClientError as e:
-                from client.ui.screens.register import RegisterScreen
+            except (httpx.ConnectError, httpx.TimeoutException, httpx.NetworkError) as e:
                 try:
-                    self.query_one(RegisterScreen).query_one("#error", Static).update(
+                    self.screen.query_one("#error", Static).update(
+                        f"Cannot reach server — is it running? ({type(e).__name__})"
+                    )
+                except Exception:
+                    pass
+                return
+            except IMClientError as e:
+                try:
+                    self.screen.query_one("#error", Static).update(
                         f"Registration failed: {e.detail}"
+                    )
+                except Exception:
+                    pass
+                return
+            except Exception as e:
+                try:
+                    self.screen.query_one("#error", Static).update(
+                        f"Unexpected error: {e}"
                     )
                 except Exception:
                     pass
@@ -437,7 +472,11 @@ class IMApp(App):
 
             try:
                 peer_bundle = await self._client.get_keys(peer_username)
-            except Exception:
+            except (httpx.ConnectError, httpx.TimeoutException, httpx.NetworkError) as e:
+                log.warning("get_keys network error", peer=peer_username, err=str(e))
+                return
+            except Exception as e:
+                log.warning("get_keys failed", peer=peer_username, err=str(e))
                 return
 
             peer_identity_pub = base64.b64decode(peer_bundle.identity_pub_b64)
@@ -564,7 +603,8 @@ class IMApp(App):
 
         try:
             peer_bundle = await self._client.get_keys(peer_username)
-        except IMClientError:
+        except (IMClientError, httpx.ConnectError, httpx.TimeoutException,
+                httpx.NetworkError, Exception):
             return None
 
         my_id             = self._user_id or self._username

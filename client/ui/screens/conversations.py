@@ -21,8 +21,10 @@ class ConversationItem(ListItem):
         self.unread        = unread
 
     def compose(self) -> ComposeResult:
-        badge = f"  [{self.unread}]" if self.unread > 0 else ""
-        yield Static(f"  {self.peer_username}{badge}")
+        if self.unread > 0:
+            yield Static(f"  ◉ {self.peer_username}  [{self.unread} new]")
+        else:
+            yield Static(f"  ○ {self.peer_username}")
 
 
 class ConversationListScreen(Screen):
@@ -87,15 +89,11 @@ class ConversationListScreen(Screen):
         self._items: dict[str, ConversationItem] = {}
 
     def compose(self) -> ComposeResult:
-        yield Header()
+        yield Static(f"◈ SECURE IM  ·  {self._my_username}  ·  🔒 E2EE", id="header")
         yield ListView(id="conv_list")
         with Horizontal(id="toolbar"):
-            yield Button("Friends", variant="primary", id="btn_friends")
-            yield Button("Logout",  variant="default", id="btn_logout")
-        yield Footer()
-
-    def on_mount(self) -> None:
-        self.title = f"Conversations — {self._my_username}"
+            yield Button("⊕ Friends", variant="primary", id="btn_friends")
+            yield Button("⏻ Logout",  variant="default", id="btn_logout")
 
     def populate(self, conversations: list[dict]) -> None:
         """Fill the list from a list of conversation dicts (from local store)."""
