@@ -9,11 +9,13 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-
+from contextlib import asynccontextmanager
+from scalar_fastapi import get_scalar_api_reference
 import structlog
 import uvicorn
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+from scalar_fastapi import get_scalar_api_reference
 
 from server.api.auth import require_auth, router as auth_router
 from server.api.conversations import router as conv_router
@@ -34,13 +36,33 @@ structlog.configure(
 
 log = structlog.get_logger()
 
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup
+    await init_db()
+    asyncio.create_task(_ttl_cleanup_loop())
+    log.info("server_started", port=get_settings().port)
+    yield
+    # Shutdown
+    await close_db()
+    log.info("server_stopped")
+
+
 app = FastAPI(
     title="COMP3334 Secure IM",
     version="1.0.0",
     # Disable automatic docs in production to reduce attack surface
-    docs_url="/docs" if get_settings().app_env == "development" else None,
+    docs_url="/v1/docs" if get_settings().app_env == "development" else None,
     redoc_url=None,
+    lifespan=lifespan,
 )
+
+# Add Scalar API reference
+if get_settings().app_env == "development":
+    @app.get("/v1/scalar", include_in_schema=False)
+    async def scalar_reference():
+        return get_scalar_api_reference()
 
 app.add_middleware(
     CORSMiddleware,
@@ -48,6 +70,26 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+@app.get("/", include_in_schema=False)
+async def root():
+    """Basic landing page; not authenticated.
+
+    Returns structured JSON with service info, current mode, version, and
+    helpful links when running in development.
+    """
+    settings = get_settings()
+    base = {
+        "service": "COMP3334 Secure IM",
+        "status": "ok",
+        "version": app.version,
+        "timestamp": int(time.time()),
+    }
+    if settings.app_env == "development":
+        # include dev-only helpers
+        base["dev_endpoints"] = ["/v1/scalar", "/v1/docs"]
+        base["environment"] = settings.app_env
+    return base
 
 # Register API routers
 app.include_router(auth_router)
@@ -106,21 +148,8 @@ async def health() -> dict:
 
 
 # ---------------------------------------------------------------------------
-# Startup / shutdown
+# Startup / shutdown handled by lifespan context manager above
 # ---------------------------------------------------------------------------
-
-@app.on_event("startup")
-async def startup() -> None:
-    await init_db()
-    asyncio.create_task(_ttl_cleanup_loop())
-    log.info("server_started", port=get_settings().port)
-
-
-@app.on_event("shutdown")
-async def shutdown() -> None:
-    await close_db()
-    log.info("server_stopped")
-
 
 # ---------------------------------------------------------------------------
 # R12 — TTL cleanup background task
@@ -168,7 +197,6 @@ if __name__ == "__main__":
         host=settings.host,
         port=settings.port,
         log_level=settings.log_level,
-        # TLS — use real certs in production
-        # ssl_certfile=settings.tls_cert_file,
-        # ssl_keyfile=settings.tls_key_file,
+        ssl_certfile=settings.tls_cert_file if settings.app_env == "production" else None,
+        ssl_keyfile=settings.tls_key_file if settings.app_env == "production" else None,
     )

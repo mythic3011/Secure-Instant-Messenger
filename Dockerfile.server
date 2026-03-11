@@ -30,6 +30,9 @@ COPY --from=deps /app/.venv /app/.venv
 COPY server/     ./server/
 COPY shared/     ./shared/
 
+# Change ownership to appuser for readable directories
+RUN chown -R appuser:appgroup /app/server /app/shared
+
 # Data directory for SQLite DB — writable by appuser
 RUN mkdir -p /app/data && chown appuser:appgroup /app/data
 
