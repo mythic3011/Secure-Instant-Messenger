@@ -92,7 +92,10 @@ class IMApp(App):
         yield from []  # app has no persistent widgets; screens handle layout
 
     def on_mount(self) -> None:
-        self.push_screen(LoginScreen())
+        self.push_screen(LoginScreen(prefill_username=self._username))
+
+    async def on_login_screen_exit(self, _: LoginScreen.Exit) -> None:
+        self.exit()
 
     # ------------------------------------------------------------------
     # Login flow
@@ -227,11 +230,13 @@ class IMApp(App):
 
         save_keystore(username, password, local_keys)
 
-        self.notify(
-            f"Registered! Scan this in your authenticator app:\n{resp.totp_provisioning_uri}",
-            title="TOTP Setup",
-            timeout=30,
-        )
+        # Show QR + OTP verify step on the same screen instead of a fleeting toast
+        from client.ui.screens.register import RegisterScreen
+        if isinstance(self.screen, RegisterScreen):
+            self.screen.show_totp_setup(resp.totp_provisioning_uri)
+
+    async def on_register_screen_totp_verify(self, msg: Any) -> None:
+        """User confirmed their TOTP code — pop back to the login screen."""
         self.pop_screen()
 
     # ------------------------------------------------------------------

@@ -37,6 +37,11 @@ class ConversationListScreen(Screen):
         layout: vertical;
         background: #0a0a0f;
     }
+    #btn_exit {
+        color: #ff4444;
+        border: tall #ff4444;
+    }
+    #btn_exit:hover { background: #1a0000; color: #ff6666; }
     #header {
         height: 3;
         background: #0d0d1a;
@@ -94,6 +99,7 @@ class ConversationListScreen(Screen):
         with Horizontal(id="toolbar"):
             yield Button("⊕ Friends", variant="primary", id="btn_friends")
             yield Button("⏻ Logout",  variant="default", id="btn_logout")
+            yield Button("✕ Exit",    variant="default", id="btn_exit")
 
     def populate(self, conversations: list[dict]) -> None:
         """Fill the list from a list of conversation dicts (from local store)."""
@@ -132,3 +138,5 @@ class ConversationListScreen(Screen):
             self.post_message(self.OpenFriends())
         elif event.button.id == "btn_logout":
             self.post_message(self.Logout())
+        elif event.button.id == "btn_exit":
+            self.app.exit()

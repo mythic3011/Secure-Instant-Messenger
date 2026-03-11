@@ -30,6 +30,12 @@ class RegisterScreen(Screen):
         align: center middle;
         background: #0a0a0f;
     }
+    #btn_exit {
+        background: #0d0d1a;
+        color: #ff4444;
+        border: tall #ff4444;
+    }
+    #btn_exit:hover { background: #1a0000; }
     #panel {
         width: 60;
         height: auto;
@@ -61,8 +67,14 @@ class RegisterScreen(Screen):
         color: #00ccff;
         border: tall #00ccff;
     }
+    #btn_verify {
+        background: #00ff9f;
+        color: #000000;
+        text-style: bold;
+    }
     #error { color: #ff4444; margin-bottom: 1; text-style: bold; }
     #info  { color: #00ff9f; margin-bottom: 1; }
+    .hidden { display: none; }
     """
 
     class RegisterRequest(Message):
@@ -70,6 +82,12 @@ class RegisterScreen(Screen):
             super().__init__()
             self.username = username
             self.password = password
+
+    class TotpVerify(Message):
+        """Emitted when the user confirms their TOTP code after registration."""
+        def __init__(self, code: str) -> None:
+            super().__init__()
+            self.code = code
 
     def compose(self) -> ComposeResult:
         with Center():
@@ -83,12 +101,38 @@ class RegisterScreen(Screen):
                 yield Static("", id="info")
                 yield Button("Register", variant="primary", id="btn_register")
                 yield Button("Back to login", variant="default", id="btn_back")
+                yield Button("✕ Exit", variant="default", id="btn_exit")
+                yield Input(
+                    placeholder="Enter the 6-digit code from your authenticator",
+                    id="totp_input",
+                    restrict=r"\d*",
+                    max_length=6,
+                    classes="hidden",
+                )
+                yield Button("Verify & Continue", id="btn_verify", classes="hidden")
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "btn_register":
             self._do_register()
         elif event.button.id == "btn_back":
             self.app.pop_screen()
+        elif event.button.id == "btn_exit":
+            self.app.exit()
+        elif event.button.id == "btn_verify":
+            self._do_verify_totp()
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        if event.input.id == "totp_input":
+            self._do_verify_totp()
+
+    def _do_verify_totp(self) -> None:
+        code = self.query_one("#totp_input", Input).value.strip()
+        error = self.query_one("#error", Static)
+        if not code.isdigit() or len(code) != 6:
+            error.update("Please enter the 6-digit code from your authenticator app.")
+            return
+        error.update("")
+        self.post_message(self.TotpVerify(code))
 
     def _do_register(self) -> None:
         import re
@@ -111,9 +155,14 @@ class RegisterScreen(Screen):
     def show_totp_setup(self, totp_uri: str) -> None:
         """
         Display TOTP setup info after successful registration (Task 4 / R2).
-        Shows ASCII QR code if qrcode library is available, else shows URI.
-        Called by app.py after server confirms registration.
+        Hides the registration form and shows the QR code + OTP verify input.
+        Called by app.py after the server confirms registration.
         """
+        # Hide registration form widgets
+        for widget_id in ("#username", "#password", "#confirm", "#btn_register", "#btn_back"):
+            self.query_one(widget_id).add_class("hidden")
+
+        # Build and display QR / URI in the info label
         info = self.query_one("#info", Static)
         if _HAS_QRCODE:
             qr = _qrcode.QRCode(border=1)
@@ -123,13 +172,21 @@ class RegisterScreen(Screen):
             qr.print_ascii(out=buf, invert=True)
             qr_str = buf.getvalue()
             info.update(
-                f"Registered! Scan this QR code in your authenticator:\n\n"
+                f"Scan this QR code in your authenticator app:\n\n"
                 f"{qr_str}\n"
-                f"Or enter manually:\n{totp_uri}"
+                f"Or enter manually:\n{totp_uri}\n\n"
+                f"Then enter the 6-digit code below to confirm setup."
             )
         else:
             info.update(
-                f"Registered!\nAdd this to your authenticator app:\n{totp_uri}\n\n"
+                f"Add this URI to your authenticator app:\n{totp_uri}\n\n"
+                f"Then enter the 6-digit code below to confirm setup.\n"
                 f"(Install 'qrcode' for QR display: uv add qrcode)"
             )
         self.query_one("#error", Static).update("")
+
+        # Reveal TOTP verify widgets and focus the input
+        totp_input = self.query_one("#totp_input", Input)
+        totp_input.remove_class("hidden")
+        self.query_one("#btn_verify").remove_class("hidden")
+        totp_input.focus()

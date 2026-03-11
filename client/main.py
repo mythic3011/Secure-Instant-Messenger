@@ -59,15 +59,10 @@ def main() -> None:
     _setup_logging(log_dir, verbose=args.verbose)
 
     server = args.server or os.environ.get("SERVER_URL") or "http://localhost:8443"
-    username = args.username or os.environ.get("IM_USERNAME")
-    if not username:
-        username = input("Username: ").strip()
-        if not username:
-            print("Username required.")
-            sys.exit(1)
+    username = args.username or os.environ.get("IM_USERNAME") or ""
 
     log = logging.getLogger(__name__)
-    log.info("Starting client — server=%s username=%s", server, username)
+    log.info("Starting client — server=%s username=%s", server, username or "(none)")
 
     from client.ui.app import IMApp
     try:

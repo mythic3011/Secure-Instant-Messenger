@@ -80,6 +80,12 @@ class ChatScreen(Screen):
         layout: vertical;
         background: #0a0a0f;
     }
+    #btn_back {
+        background: #0d0d1a;
+        color: #ff4444;
+        border: tall #ff4444;
+    }
+    #btn_back:hover { background: #1a0000; }
     #header {
         height: 3;
         background: #0d0d1a;
@@ -170,6 +176,7 @@ class ChatScreen(Screen):
             yield Input(placeholder="Type a message…", id="msg_input")
             yield Button("Send", variant="primary", id="btn_send")
             yield Button("⚙", id="btn_settings", tooltip="Fingerprint / TTL")
+            yield Button("✕", id="btn_back", tooltip="Back")
 
     def on_mount(self) -> None:
         self.title = f"Chat — {self.peer_username}"
@@ -246,6 +253,8 @@ class ChatScreen(Screen):
                     peer_username=self.peer_username,
                 )
             )
+        elif event.button.id == "btn_back":
+            self.app.pop_screen()
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
         if event.input.id == "msg_input":

@@ -17,11 +17,20 @@ class LoginScreen(Screen):
     On success, posts LoginSuccess message to the app.
     """
 
+    class Exit(Message):
+        pass
+
     CSS = """
     LoginScreen {
         align: center middle;
         background: #0a0a0f;
     }
+    #btn_exit {
+        background: #0d0d1a;
+        color: #ff4444;
+        border: tall #ff4444;
+    }
+    #btn_exit:hover { background: #1a0000; }
     #panel {
         width: 56;
         height: auto;
@@ -71,17 +80,27 @@ class LoginScreen(Screen):
             self.password  = password
             self.totp_code = totp_code
 
+    def __init__(self, prefill_username: str = "") -> None:
+        super().__init__()
+        self._prefill_username = prefill_username
+
     def compose(self) -> ComposeResult:
         with Center():
             with Vertical(id="panel"):
                 yield Static("◈ COMP3334 SECURE IM ◈", id="title")
                 yield Label("")
-                yield Input(placeholder="Username", id="username")
+                yield Input(placeholder="Username", id="username", value=self._prefill_username)
                 yield Input(placeholder="Password", password=True, id="password")
-                yield Input(placeholder="OTP code (6 digits)", id="totp")
+                yield Input(
+                    placeholder="OTP code (6 digits)",
+                    id="totp",
+                    restrict=r"\d*",
+                    max_length=6,
+                )
                 yield Static("", id="error")
                 yield Button("Login", variant="primary", id="btn_login")
                 yield Button("Register instead", variant="default", id="btn_register")
+                yield Button("✕ Exit", variant="default", id="btn_exit")
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "btn_login":
@@ -89,6 +108,11 @@ class LoginScreen(Screen):
         elif event.button.id == "btn_register":
             from client.ui.screens.register import RegisterScreen
             self.app.push_screen(RegisterScreen())
+        elif event.button.id == "btn_exit":
+            self.post_message(self.Exit())
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        self._do_login()
 
     def _do_login(self) -> None:
         username = self.query_one("#username", Input).value.strip()

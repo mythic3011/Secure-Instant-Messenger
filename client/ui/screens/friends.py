@@ -35,6 +35,11 @@ class FriendsScreen(Screen):
         layout: vertical;
         background: #0a0a0f;
     }
+    #btn_exit {
+        color: #ff4444;
+        border: tall #ff4444;
+    }
+    #btn_exit:hover { background: #1a0000; color: #ff6666; }
     #header {
         height: 3;
         background: #0d0d1a;
@@ -100,7 +105,9 @@ class FriendsScreen(Screen):
         with Horizontal(id="add_row"):
             yield Input(placeholder="Username to add…", id="add_input")
             yield Button("Send Request", variant="primary", id="btn_add")
-        yield Button("← Back", id="btn_back")
+        with Horizontal():
+            yield Button("← Back", id="btn_back")
+            yield Button("✕ Exit", id="btn_exit")
         yield Footer()
 
     def on_mount(self) -> None:
@@ -128,6 +135,8 @@ class FriendsScreen(Screen):
                 self.post_message(self.SendRequest(username))
         elif btn_id == "btn_back":
             self.app.pop_screen()
+        elif btn_id == "btn_exit":
+            self.app.exit()
         elif btn_id.startswith("accept_"):
             self.post_message(self.AcceptRequest(btn_id.removeprefix("accept_")))
         elif btn_id.startswith("decline_"):

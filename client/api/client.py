@@ -64,6 +64,7 @@ class IMClient:
             base_url=self._base_url,
             timeout=10.0,
             verify=use_tls,
+            trust_env=False,
         )
         return self
 
@@ -276,7 +277,44 @@ class IMClient:
 
 
 class IMClientError(Exception):
-    def __init__(self, status_code: int, detail: str) -> None:
+    def __init__(self, status_code: int, raw: str) -> None:
         self.status_code = status_code
-        self.detail = detail
-        super().__init__(f"HTTP {status_code}: {detail}")
+        self.detail = self._parse_detail(status_code, raw)
+        super().__init__(f"HTTP {status_code}: {self.detail}")
+
+    @staticmethod
+    def _parse_detail(status_code: int, raw: str) -> str:
+        """Extract a human-readable message from FastAPI/JSON error bodies."""
+        if not raw:
+            return _HTTP_STATUS.get(status_code, f"HTTP {status_code}")
+        try:
+            body = json.loads(raw)
+            if isinstance(body, dict):
+                # FastAPI validation errors: {"detail": [{"msg": "..."}]}
+                if isinstance(body.get("detail"), list):
+                    msgs = [
+                        e.get("msg", str(e))
+                        for e in body["detail"]
+                        if isinstance(e, dict)
+                    ]
+                    return "; ".join(msgs) if msgs else raw
+                # FastAPI plain errors: {"detail": "Invalid credentials"}
+                if isinstance(body.get("detail"), str):
+                    return body["detail"]
+        except (json.JSONDecodeError, KeyError, TypeError):
+            pass
+        return raw
+
+
+_HTTP_STATUS: dict[int, str] = {
+    400: "Bad request",
+    401: "Unauthorised",
+    403: "Forbidden",
+    404: "Not found",
+    409: "Conflict",
+    422: "Validation error",
+    429: "Too many requests — please wait",
+    500: "Server error",
+    502: "Cannot reach server (bad gateway)",
+    503: "Server unavailable",
+}
