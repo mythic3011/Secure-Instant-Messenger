@@ -78,6 +78,7 @@ async def send_message(
     _validate_envelope(env)
 
     if env.sender_id != session["user_id"]:
+        log.warning("send_message_rejected", reason="sender_id_mismatch", claimed_sender=env.sender_id, actual_user=session["user_id"])
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="sender_id mismatch")
 
     db = await get_db()
@@ -88,6 +89,7 @@ async def send_message(
         "SELECT 1 FROM friendships WHERE user_a_id = ? AND user_b_id = ?", (a, b)
     ) as cur:
         if not await cur.fetchone():
+            log.warning("send_message_rejected", reason="not_friends", sender=env.sender_id, recipient=env.recipient_id)
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not friends")
 
     # Verify recipient exists
@@ -95,6 +97,7 @@ async def send_message(
         "SELECT id FROM users WHERE id = ? AND deleted_at IS NULL", (env.recipient_id,)
     ) as cur:
         if not await cur.fetchone():
+            log.warning("send_message_rejected", reason="recipient_not_found", sender=env.sender_id, recipient=env.recipient_id)
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Recipient not found")
 
     # Ensure conversation row exists
@@ -123,6 +126,7 @@ async def send_message(
         )
     except Exception:
         # UNIQUE constraint violation = replay attempt
+        log.warning("replay_rejected", msg_id=env.id, sender=env.sender_id, counter=env.counter)
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Duplicate message (replay rejected)")
 
     # Update conversation metadata
@@ -146,7 +150,14 @@ async def send_message(
         )
         await db.commit()
 
-    log.info("message_stored", msg_id=env.id, sender=env.sender_id, recipient=env.recipient_id)
+    log.info(
+        "message_stored",
+        msg_id=env.id,
+        sender=env.sender_id,
+        recipient=env.recipient_id,
+        pushed=pushed,
+        ttl_seconds=env.ttl_seconds,
+    )
     return SendMessageResponse(id=env.id, stored_at=stored_at, delivered_at=delivered_at)
 
 
@@ -226,11 +237,19 @@ async def fetch_messages(
         for r in rows
     ]
 
-    return FetchMessagesResponse(
+    result = FetchMessagesResponse(
         messages=messages,
         has_more=has_more,
         next_cursor=rows[-1]["id"] if has_more and rows else None,
     )
+    log.debug(
+        "fetch_messages",
+        user_id=user_id,
+        conversation_id=conversation_id,
+        count=len(messages),
+        has_more=has_more,
+    )
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -256,9 +275,11 @@ async def delivery_ack(
         msg = await cur.fetchone()
 
     if msg is None:
+        log.debug("delivery_ack_ignored", message_id=body.message_id, reason="not_found")
         return  # silently ignore unknown message IDs
 
     if msg["recipient_id"] != user_id:
+        log.warning("delivery_ack_rejected", message_id=body.message_id, user_id=user_id, reason="not_recipient")
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not your message")
 
     if msg["delivered_at"] is None:
@@ -273,3 +294,4 @@ async def delivery_ack(
             msg["sender_id"],
             {"type": "ack", "payload": {"message_id": body.message_id, "delivered_at": now}},
         )
+        log.info("delivery_ack_processed", message_id=body.message_id, recipient=user_id, sender=msg["sender_id"])

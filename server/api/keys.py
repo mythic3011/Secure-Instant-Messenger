@@ -33,19 +33,24 @@ def _verify_key_bundle(identity_pub_b64: str, dh_pub_b64: str, key_sig_b64: str)
         dh_pub_bytes       = base64.b64decode(dh_pub_b64, validate=True)
         sig_bytes          = base64.b64decode(key_sig_b64, validate=True)
     except Exception:
+        log.warning("key_bundle_rejected", reason="invalid_base64")
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid base64 in key bundle")
 
     if len(identity_pub_bytes) != _ED25519_PUB_LEN:
+        log.warning("key_bundle_rejected", reason="identity_pub_wrong_length", got=len(identity_pub_bytes))
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="identity_pub must be 32 bytes")
     if len(dh_pub_bytes) != _X25519_PUB_LEN:
+        log.warning("key_bundle_rejected", reason="dh_pub_wrong_length", got=len(dh_pub_bytes))
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="dh_pub must be 32 bytes")
 
     try:
         pub = Ed25519PublicKey.from_public_bytes(identity_pub_bytes)
         pub.verify(sig_bytes, identity_pub_bytes + dh_pub_bytes)
     except InvalidSignature:
+        log.warning("key_bundle_rejected", reason="invalid_signature")
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Key bundle signature invalid")
     except Exception:
+        log.warning("key_bundle_rejected", reason="malformed_public_key")
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Malformed public key")
 
 
@@ -94,8 +99,10 @@ async def get_keys(
         row = await cur.fetchone()
 
     if row is None:
+        log.warning("get_keys_not_found", requested_username=username, requester=session["user_id"])
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User or keys not found")
 
+    log.info("keys_fetched", requested_username=username, requester=session["user_id"])
     return PublicKeyBundle(
         user_id=row["id"],
         username=row["username"],

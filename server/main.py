@@ -13,8 +13,10 @@ from contextlib import asynccontextmanager
 from scalar_fastapi import get_scalar_api_reference
 import structlog
 import uvicorn
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.responses import Response
 from scalar_fastapi import get_scalar_api_reference
 
 from server.api.auth import require_auth, router as auth_router
@@ -35,6 +37,26 @@ structlog.configure(
 )
 
 log = structlog.get_logger()
+
+
+# ---------------------------------------------------------------------------
+# Request access-log middleware
+# ---------------------------------------------------------------------------
+
+class _AccessLogMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next) -> Response:
+        start = time.perf_counter()
+        response = await call_next(request)
+        duration_ms = round((time.perf_counter() - start) * 1000, 1)
+        log.info(
+            "http_request",
+            method=request.method,
+            path=request.url.path,
+            status=response.status_code,
+            duration_ms=duration_ms,
+            client=request.client.host if request.client else None,
+        )
+        return response
 
 
 @asynccontextmanager
@@ -69,6 +91,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.add_middleware(_AccessLogMiddleware)
 
 @app.get("/", include_in_schema=False)
 async def root():
@@ -113,6 +136,7 @@ async def ws_endpoint(websocket: WebSocket) -> None:
 
     token = websocket.query_params.get("token")
     if not token:
+        log.warning("ws_auth_rejected", reason="missing_token", client=websocket.client.host if websocket.client else None)
         await websocket.close(code=4001)
         return
 
@@ -131,6 +155,7 @@ async def ws_endpoint(websocket: WebSocket) -> None:
         row = await cur.fetchone()
 
     if row is None:
+        log.warning("ws_auth_rejected", reason="invalid_or_expired_token", client=websocket.client.host if websocket.client else None)
         await websocket.close(code=4001)
         return
 
@@ -183,8 +208,7 @@ async def _ttl_cleanup_loop() -> None:
 
             await db.commit()
 
-            if ttl_deleted or age_deleted:
-                log.info("ttl_cleanup", ttl_deleted=ttl_deleted, age_deleted=age_deleted)
+            log.info("ttl_cleanup", ttl_deleted=ttl_deleted, age_deleted=age_deleted)
         except Exception as exc:
             log.warning("ttl_cleanup_error", error=str(exc))
 

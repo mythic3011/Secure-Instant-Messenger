@@ -33,7 +33,8 @@ async def push_to_user(user_id: str, payload: dict) -> bool:
     try:
         await ws.send_text(json.dumps(payload))
         return True
-    except Exception:
+    except Exception as exc:
+        log.warning("ws_push_failed", user_id=user_id, error=str(exc))
         async with _lock:
             _connections.pop(user_id, None)
         return False
@@ -66,7 +67,7 @@ async def websocket_endpoint(websocket: WebSocket, user_id: str) -> None:
                 await websocket.send_text(json.dumps({"type": "ping"}))
 
     except WebSocketDisconnect:
-        pass
+        log.info("ws_disconnected_clean", user_id=user_id)
     except Exception as exc:
         log.warning("ws_error", user_id=user_id, error=str(exc))
     finally:
@@ -113,7 +114,8 @@ async def _flush_offline_queue(websocket: WebSocket, user_id: str) -> None:
         try:
             await websocket.send_text(json.dumps(payload))
             delivered_ids.append(row["id"])
-        except Exception:
+        except Exception as exc:
+            log.warning("offline_queue_send_failed", user_id=user_id, msg_id=row["id"], error=str(exc))
             break  # connection dropped mid-flush
 
     if delivered_ids:
@@ -131,15 +133,18 @@ async def _handle_client_message(user_id: str, raw: str) -> None:
     try:
         msg = json.loads(raw)
     except json.JSONDecodeError:
+        log.warning("ws_invalid_json", user_id=user_id)
         return
 
     if msg.get("type") == "pong":
+        log.debug("ws_pong", user_id=user_id)
         return  # keepalive response
 
     # Client-side ACK: {"type": "ack", "message_id": "..."}
     if msg.get("type") == "ack":
         message_id = msg.get("message_id")
         if not message_id:
+            log.warning("ws_ack_missing_message_id", user_id=user_id)
             return
         db = await get_db()
         now = int(time.time())
@@ -158,3 +163,6 @@ async def _handle_client_message(user_id: str, raw: str) -> None:
                 row["sender_id"],
                 {"type": "ack", "payload": {"message_id": message_id, "delivered_at": now}},
             )
+            log.info("ws_ack_processed", message_id=message_id, recipient=user_id, sender=row["sender_id"])
+    else:
+        log.debug("ws_unknown_message_type", user_id=user_id, msg_type=msg.get("type"))

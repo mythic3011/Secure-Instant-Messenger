@@ -46,6 +46,7 @@ async def require_auth(request: Request) -> dict:
     """
     auth_header = request.headers.get("Authorization", "")
     if not auth_header.startswith("Bearer "):
+        log.warning("auth_rejected", reason="missing_bearer_token", path=request.url.path)
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing token")
 
     raw_token  = auth_header.removeprefix("Bearer ").strip()
@@ -62,6 +63,7 @@ async def require_auth(request: Request) -> dict:
         row = await cur.fetchone()
 
     if row is None:
+        log.warning("auth_rejected", reason="invalid_or_expired_token", path=request.url.path)
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or expired token")
 
     return {"session_id": row["id"], "user_id": row["user_id"], "username": row["username"]}
@@ -90,6 +92,7 @@ async def register(body: RegisterRequest, request: Request) -> RegisterResponse:
         settings.rate_limit_register_window,
     )
     if not allowed:
+        log.warning("rate_limit_exceeded", endpoint="register", client_ip=client_ip)
         raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail="Rate limit exceeded")
 
     db = await get_db()
@@ -99,6 +102,7 @@ async def register(body: RegisterRequest, request: Request) -> RegisterResponse:
         "SELECT id FROM users WHERE username = ?", (body.username,)
     ) as cur:
         if await cur.fetchone():
+            log.info("register_conflict", username=body.username, client_ip=client_ip)
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Username already taken")
 
     # Hash password
@@ -153,6 +157,7 @@ async def login(body: LoginRequest, request: Request) -> LoginResponse:
         settings.rate_limit_login_window,
     )
     if not allowed:
+        log.warning("rate_limit_exceeded", endpoint="login", client_ip=client_ip)
         raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail="Rate limit exceeded")
 
     db = await get_db()
@@ -187,7 +192,7 @@ async def login(body: LoginRequest, request: Request) -> LoginResponse:
     )
     await db.commit()
 
-    log.info("login_success", user_id=user["id"])
+    log.info("login_success", user_id=user["id"], client_ip=client_ip)
     return LoginResponse(access_token=raw_token, expires_at=expires_at)
 
 

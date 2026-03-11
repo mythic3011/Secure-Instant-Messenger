@@ -44,6 +44,7 @@ async def list_conversations(
     ) as cur:
         rows = await cur.fetchall()
 
+    log.debug("list_conversations", user_id=user_id, count=len(rows))
     return ConversationListResponse(
         conversations=[
             ConversationOut(
@@ -74,6 +75,7 @@ async def mark_read(
         row = await cur.fetchone()
 
     if row is None:
+        log.debug("mark_read_skipped", conversation_id=conversation_id, user_id=user_id, reason="not_found")
         return
 
     col = "unread_count_a" if row["user_a_id"] == user_id else "unread_count_b"
@@ -81,3 +83,4 @@ async def mark_read(
         f"UPDATE conversations SET {col} = 0 WHERE id = ?", (conversation_id,)
     )
     await db.commit()
+    log.info("mark_read", conversation_id=conversation_id, user_id=user_id)
