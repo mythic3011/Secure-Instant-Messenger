@@ -1,0 +1,65 @@
+[project]
+name = "comp3334-im"
+version = "0.1.0"
+description = "COMP3334 Secure E2EE Instant Messenger"
+requires-python = ">=3.12"
+
+dependencies = [
+    # Server
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.32.0",
+    "websockets>=13.0",
+    "aiosqlite>=0.20.0",
+
+    # Crypto — well-reviewed libraries per project spec §4.1
+    "cryptography>=43.0.0",     # PyCA: Ed25519, X25519, AES-GCM, HKDF
+    "argon2-cffi>=23.1.0",      # Argon2id password hashing
+    "pyotp>=2.9.0",             # TOTP RFC 6238
+
+    # Validation & config
+    "pydantic>=2.9.0",
+    "pydantic-settings>=2.6.0",
+
+    # HTTP client (used by client app)
+    "httpx[http2]>=0.28.0",
+
+    # TUI client
+    "textual>=0.85.0",
+
+    # Logging
+    "structlog>=24.4.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.3.0",
+    "pytest-asyncio>=0.24.0",
+    "pytest-cov>=6.0.0",
+    "httpx>=0.28.0",    # for TestClient
+    "ruff>=0.8.0",
+    "mypy>=1.13.0",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "S", "B"]
+ignore = ["S101"]   # allow assert in tests
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+ignore_missing_imports = true
+
+[tool.hatch.build.targets.wheel]
+packages = ["client", "server", "shared"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"

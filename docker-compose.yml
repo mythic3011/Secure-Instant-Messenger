@@ -1,0 +1,31 @@
+# docker-compose.yml
+# Deploy with: docker compose up --build
+# Requires: Docker 24+ with Compose V2
+
+services:
+  server:
+    build:
+      context: .
+      dockerfile: Dockerfile.server
+      target: runtime
+    env_file: .env.local
+    ports:
+      - "127.0.0.1:8443:8443"   # HTTPS/WSS — bind to localhost only in dev
+    volumes:
+      - server_data:/app/data    # SQLite database persisted here
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8443/health"]
+      interval: 30s
+      timeout: 5s
+      start_period: 15s
+      retries: 3
+    restart: unless-stopped
+    networks:
+      - internal
+
+volumes:
+  server_data:
+
+networks:
+  internal:
+    driver: bridge

@@ -1,0 +1,76 @@
+"""
+client/ui/screens/register.py — Registration screen.
+"""
+
+from __future__ import annotations
+
+from textual.app import ComposeResult
+from textual.containers import Center, Vertical
+from textual.screen import Screen
+from textual.widgets import Button, Input, Label, Static
+
+
+class RegisterScreen(Screen):
+    """
+    Registration screen: username + password (×2).
+    Crypto key generation happens in the app layer after this screen.
+    """
+
+    CSS = """
+    RegisterScreen {
+        align: center middle;
+    }
+    #panel {
+        width: 54;
+        height: auto;
+        border: solid $primary;
+        padding: 1 2;
+    }
+    Input { margin-bottom: 1; }
+    #error { color: $error; margin-bottom: 1; }
+    #info  { color: $success; margin-bottom: 1; }
+    """
+
+    class RegisterRequest:
+        def __init__(self, username: str, password: str) -> None:
+            self.username = username
+            self.password = password
+
+    def compose(self) -> ComposeResult:
+        with Center():
+            with Vertical(id="panel"):
+                yield Static("Create Account", id="title")
+                yield Label("")
+                yield Input(placeholder="Username (3–32 chars, a-z 0-9 _-)", id="username")
+                yield Input(placeholder="Password (min 12 chars)", password=True, id="password")
+                yield Input(placeholder="Confirm password", password=True, id="confirm")
+                yield Static("", id="error")
+                yield Static("", id="info")
+                yield Button("Register", variant="primary", id="btn_register")
+                yield Button("Back to login", variant="default", id="btn_back")
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "btn_register":
+            self._do_register()
+        elif event.button.id == "btn_back":
+            self.app.pop_screen()
+
+    def _do_register(self) -> None:
+        import re
+        username = self.query_one("#username", Input).value.strip()
+        password = self.query_one("#password", Input).value
+        confirm  = self.query_one("#confirm", Input).value
+        error    = self.query_one("#error", Static)
+
+        if not re.match(r"^[a-zA-Z0-9_\-]{3,32}$", username):
+            error.update("Username: 3–32 chars, letters/digits/_/- only.")
+            return
+        if len(password) < 12:
+            error.update("Password must be at least 12 characters.")
+            return
+        if password != confirm:
+            error.update("Passwords do not match.")
+            return
+
+        error.update("")
+        self.post_message(self.RegisterRequest(username, password))
