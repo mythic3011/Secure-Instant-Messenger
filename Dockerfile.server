@@ -18,7 +18,7 @@ RUN uv sync --frozen --no-dev --no-editable
 # ── Stage 2: runtime ─────────────────────────────────────────────────────────
 FROM python:3.12.9-slim AS runtime
 
-# Non-root user — mandatory per CLAUDE.md §6.1
+# Non-root user — mandatory per
 RUN groupadd -r appgroup && useradd -r -g appgroup -s /sbin/nologin appuser
 
 WORKDIR /app
