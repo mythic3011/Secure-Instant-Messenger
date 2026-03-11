@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING
 
 from textual.app import ComposeResult
 from textual.containers import Horizontal, Vertical
+from textual.message import Message
 from textual.screen import Screen
 from textual.widgets import Button, Footer, Header, Input, Label, ListItem, ListView, Static
 
@@ -31,19 +32,31 @@ class MessageItem(ListItem):
         is_mine: bool,
     ) -> None:
         super().__init__()
-        self._sender    = sender
-        self._text      = text
-        self._sent_at   = sent_at
-        self._status    = status
-        self._ttl       = ttl_seconds
-        self._is_mine   = is_mine
+        self._sender     = sender
+        self._text       = text
+        self._sent_at    = sent_at
+        self._status     = status
+        self._ttl        = ttl_seconds
+        self._is_mine    = is_mine
+        # Pre-compute expiry so _sweep_ttl() can compare without re-parsing
+        self._expires_at: int | None = (sent_at + ttl_seconds) if ttl_seconds else None
 
     def compose(self) -> ComposeResult:
         import datetime
         ts = datetime.datetime.fromtimestamp(self._sent_at).strftime("%H:%M")
         prefix = "You" if self._is_mine else self._sender
         status_icon = {"sent": "✓", "delivered": "✓✓", "read": "✓✓"}.get(self._status, "")
-        ttl_tag = f" [TTL {self._ttl}s]" if self._ttl else ""
+
+        # Show live countdown instead of raw TTL seconds (R10)
+        if self._expires_at is not None:
+            remaining = self._expires_at - int(time.time())
+            if remaining <= 0:
+                ttl_tag = " [🔥 expired]"
+            else:
+                ttl_tag = f" [🔥 {remaining}s]"
+        else:
+            ttl_tag = ""
+
         yield Static(f"[{ts}] {prefix}: {self._text}  {status_icon}{ttl_tag}")
 
 
@@ -61,8 +74,9 @@ class ChatScreen(Screen):
     #msg_input { width: 1fr; }
     """
 
-    class SendMessage:
+    class SendMessage(Message):
         def __init__(self, text: str, ttl: int | None) -> None:
+            super().__init__()
             self.text = text
             self.ttl  = ttl
 
@@ -93,6 +107,8 @@ class ChatScreen(Screen):
     def on_mount(self) -> None:
         self.title = f"Chat — {self.peer_username}"
         self.app.call_later(self._load_history)
+        # R11: sweep expired messages every 30 s while chat is open
+        self._ttl_timer = self.set_interval(30, self._sweep_ttl)
 
     async def _load_history(self) -> None:
         from client.state.store import get_messages
@@ -108,6 +124,28 @@ class ChatScreen(Screen):
                 is_mine=(m["sender_id"] == self.my_user_id),
             ))
         lv.scroll_end(animate=False)
+
+    async def _sweep_ttl(self) -> None:
+        """
+        R11: Remove expired TTL messages from the UI and local storage.
+        Called every 30 s by the interval timer set in on_mount().
+        Also called on startup via app.py sweep_expired() (local DB layer).
+        """
+        from client.state.store import sweep_expired
+        # Purge expired rows from local SQLite first
+        await sweep_expired()
+
+        # Remove expired MessageItems from the visible ListView
+        now = int(time.time())
+        lv = self.query_one("#messages", ListView)
+        expired = [
+            item for item in lv.children
+            if isinstance(item, MessageItem)
+            and item._expires_at is not None
+            and item._expires_at <= now
+        ]
+        for item in expired:
+            await item.remove()
 
     def show_key_warning(self, peer_username: str) -> None:
         """Display key change warning (R6)."""
@@ -152,5 +190,6 @@ class ChatScreen(Screen):
         if not text:
             return
         inp.value = ""
-        # TTL is set via settings screen; default None (no expiry)
+        # TTL is managed by app._ttl_settings; pass None here,
+        # app.on_chat_screen_send_message reads it from its own state.
         self.post_message(self.SendMessage(text, ttl=None))
