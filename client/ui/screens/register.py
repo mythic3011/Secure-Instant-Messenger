@@ -5,6 +5,7 @@ client/ui/screens/register.py — Registration screen.
 from __future__ import annotations
 
 import io
+from urllib.parse import urlparse, parse_qs
 
 from textual.message import Message
 from textual.app import ComposeResult
@@ -17,6 +18,15 @@ try:
     _HAS_QRCODE = True
 except ImportError:
     _HAS_QRCODE = False
+
+
+def _extract_totp_secret(totp_uri: str) -> str:
+    """Return just the base32 secret from an otpauth:// URI."""
+    try:
+        qs = parse_qs(urlparse(totp_uri).query)
+        return qs["secret"][0]
+    except (KeyError, IndexError, ValueError):
+        return totp_uri  # fallback: show full URI if parsing fails
 
 
 class RegisterScreen(Screen):
@@ -164,6 +174,7 @@ class RegisterScreen(Screen):
 
         # Build and display QR / URI in the info label
         info = self.query_one("#info", Static)
+        secret = _extract_totp_secret(totp_uri)
         if _HAS_QRCODE:
             qr = _qrcode.QRCode(border=1)
             qr.add_data(totp_uri)
@@ -174,12 +185,12 @@ class RegisterScreen(Screen):
             info.update(
                 f"Scan this QR code in your authenticator app:\n\n"
                 f"{qr_str}\n"
-                f"Or enter manually:\n{totp_uri}\n\n"
+                f"Or enter manually:\n{secret}\n\n"
                 f"Then enter the 6-digit code below to confirm setup."
             )
         else:
             info.update(
-                f"Add this URI to your authenticator app:\n{totp_uri}\n\n"
+                f"Enter this secret key in your authenticator app:\n{secret}\n\n"
                 f"Then enter the 6-digit code below to confirm setup.\n"
                 f"(Install 'qrcode' for QR display: uv add qrcode)"
             )
