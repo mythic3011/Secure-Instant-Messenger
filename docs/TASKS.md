@@ -22,7 +22,7 @@
 - `server/api/keys.py` — R4 public key upload/fetch with self-signature verification
 - `server/api/friends.py` — R13–R16 friend requests, accept/decline/cancel, block, remove
 - `server/api/messages.py` — R8/R9/R16/R17/R18/R20/R22 send, fetch (paginated), delivery ACK
-- `server/api/conversations.py` — R23/R24 conversation list, unread counters
+- `server/api/conversations.py` — R23/R24 conversation list, unread counters, mark-read endpoint
 - `server/ws/handler.py` — WebSocket connection manager, offline queue flush
 
 ### Client Crypto (Done)
@@ -35,9 +35,9 @@
 - `client/main.py` — CLI entrypoint
 - `client/ui/app.py` — main Textual TUI app, wires all screens + crypto + WS
 - `client/ui/screens/login.py` — login form
-- `client/ui/screens/register.py` — registration form
+- `client/ui/screens/register.py` — registration form + TOTP QR code display (R2)
 - `client/ui/screens/conversations.py` — conversation list (R23/R24)
-- `client/ui/screens/chat.py` — chat view, key change warning, TTL display
+- `client/ui/screens/chat.py` — chat view, key change warning, TTL countdown + sweep every 30s (R10/R11)
 - `client/ui/screens/friends.py` — friend request management
 - `client/ui/screens/settings.py` — fingerprint display (R5), TTL config (R10)
 
@@ -57,26 +57,23 @@
 
 ## Remaining Tasks 🔲
 
-### Week 2 Priority (Mar 17–23)
+### Week 2 (Mar 17–23) — mostly done
 
 | # | Task | Owner | Req |
 |---|------|-------|-----|
 | 1 | **Wire up `client/ui/app.py` event handlers** — test login→conversation→chat flow end-to-end manually | P4 | All |
 | 2 | **`client/ui/widgets/message_list.py`** — optional: extract MessageItem widget for reuse | P4 | R23 |
-| 3 | **TTL countdown timer in ChatScreen** — schedule `sweep_expired()` every 30s while chat is open | P4 | R11 |
-| 4 | **TOTP QR code display** — `qrcode` lib already in deps; render ASCII QR in terminal on registration | P4 | R2 |
-| 5 | **`server/api/conversations.py` mark-read endpoint** — `POST /v1/conversations/{id}/read` resets unread | P2 | R24 |
-| 6 | **P5 task assignment** — assign P5 to a remaining task or report section | All | — |
+| 3 | **P5 task assignment** — assign P5 to a remaining task or report section | All | — |
 
 ### Week 3 Priority (Mar 24–Apr 1)
 
 | # | Task | Owner | Req |
 |---|------|-------|-----|
-| 7 | **End-to-end manual test** — two terminals, Alice+Bob full conversation | All | All |
-| 8 | **Windows 11 deploy test** — follow DEPLOY.md on clean Windows VM | P4 | §9 |
-| 9 | **Ubuntu deploy test** — follow DEPLOY.md on clean Ubuntu VM | P4 | §9 |
-| 10 | **Report writing** — split by section (see below), merge Apr 1 | All | §8 |
-| 11 | **Presentation video** — 10 min, record by Apr 1 | All | §10 |
+| 4 | **End-to-end manual test** — two terminals, Alice+Bob full conversation | All | All |
+| 5 | **Windows 11 deploy test** — follow DEPLOY.md on clean Windows VM | P5 | §9 |
+| 6 | **Ubuntu deploy test** — follow DEPLOY.md on clean Ubuntu VM | P5 | §9 |
+| 7 | **Report writing** — split by section (see below), merge Apr 1 | All | §8 |
+| 8 | **Presentation video** — 10 min, record by Apr 1 | All | §10 |
 
 ---
 
@@ -101,8 +98,7 @@
 1. **`client/ui/app.py` event handler naming** — Textual uses `on_<screen_class>_<message_class>` naming. Verify all handler names match exactly (snake_case of class names).
 2. **`make_key_signature` import in `client/crypto/storage.py`** — imported from `session.py` but not re-exported. Verify import path in `app.py`.
 3. **TLS in dev** — client uses `verify=False`. For production, use real certs and set `verify=True`.
-4. **TOTP QR code** — `qrcode` lib is in deps; render ASCII QR in terminal on registration screen.
-5. **pytest requires `--extra dev`** — run as `uv run --extra dev pytest` (pytest is in `[project.optional-dependencies].dev`).
+4. **pytest requires `--extra dev`** — run as `uv run --extra dev pytest` (pytest is in `[project.optional-dependencies].dev`).
 
 ---
 
