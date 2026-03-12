@@ -57,13 +57,13 @@
 
 ## Remaining Tasks 🔲
 
-### Week 2 (Mar 17–23) — mostly done
+### Week 2 (Mar 17–23) — ✅ Done
 
-| # | Task | Owner | Req |
-|---|------|-------|-----|
-| 1 | **Wire up `client/ui/app.py` event handlers** — test login→conversation→chat flow end-to-end manually | P4 | All |
-| 2 | **`client/ui/widgets/message_list.py`** — optional: extract MessageItem widget for reuse | P4 | R23 |
-| 3 | **P5 task assignment** — assign P5 to a remaining task or report section | All | — |
+| # | Task | Owner | Req | Status |
+|---|------|-------|-----|--------|
+| 1 | **Wire up `client/ui/app.py` event handlers** — login→conversation→chat flow | P4 | All | ✅ Done |
+| 2 | **`MessageItem` widget** — implemented inline in `client/ui/screens/chat.py` | P4 | R23 | ✅ Done |
+| 3 | **P5 task assignment** — assign P5 to deploy testing + report §10 | All | — | ✅ Done |
 
 ### Week 3 Priority (Mar 24–Apr 1)
 
@@ -95,8 +95,8 @@
 
 ## Known Issues / Risks
 
-1. **`client/ui/app.py` event handler naming** — Textual uses `on_<screen_class>_<message_class>` naming. Verify all handler names match exactly (snake_case of class names).
-2. **`make_key_signature` import in `client/crypto/storage.py`** — imported from `session.py` but not re-exported. Verify import path in `app.py`.
+1. ~~**`client/ui/app.py` event handler naming**~~ — ✅ All handlers verified correct (`on_login_screen_login_success`, `on_conversation_list_screen_conversation_selected`, etc.).
+2. ~~**`make_key_signature` import**~~ — ✅ Imported directly from `client/crypto/session.py` in `app.py:31`. No issue.
 3. **TLS in dev** — client uses `verify=False`. For production, use real certs and set `verify=True`.
 4. **pytest requires `--extra dev`** — run as `uv run --extra dev pytest` (pytest is in `[project.optional-dependencies].dev`).
 
