@@ -218,16 +218,16 @@ You will be prompted for your username if not provided via `--username`.
 uv sync --extra dev
 
 # Unit tests only (no server needed, fast)
-uv run pytest tests/unit/ -v
+uv run --extra dev pytest tests/unit/ -v
 
 # Integration tests (uses in-memory test server, no real DB)
-uv run pytest tests/integration/ -v
+uv run --extra dev pytest tests/integration/ -v
 
 # Security tests (replay attack, ciphertext tampering)
-uv run pytest tests/security/ -v
+uv run --extra dev pytest tests/security/ -v
 
 # All tests
-uv run pytest -v
+uv run --extra dev pytest -v
 ```
 
 Expected output: **45 tests passed**.
