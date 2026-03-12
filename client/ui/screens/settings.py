@@ -123,6 +123,13 @@ class SettingsScreen(Screen):
         elif event.button.id == "btn_ttl":
             self._save_ttl()
 
+    def on_key(self, event) -> None:
+        if event.key == "ctrl+a":
+            inp = self.focused
+            if isinstance(inp, Input):
+                inp.action_select_all()
+                event.stop()
+
     def _save_ttl(self) -> None:
         raw = self.query_one("#ttl_input", Input).value.strip()
         status = self.query_one("#status", Static)

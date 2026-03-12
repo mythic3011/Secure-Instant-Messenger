@@ -1,0 +1,447 @@
+#!/usr/bin/env python3
+"""
+scripts/seed.py — Seed mock users, friendships, and messages for dev/demo.
+
+Usage:
+    uv run python scripts/seed.py                        # default server
+    uv run python scripts/seed.py --server https://localhost:8443
+    uv run python scripts/seed.py --server https://localhost:8443 --clean
+
+Custom users: edit SEED_USERS below.
+
+TOTP QR codes are saved to /tmp/comp3334_totp_<username>.md
+Credentials summary saved to /tmp/comp3334_seed_credentials.md
+"""
+
+from __future__ import annotations
+
+import argparse
+import asyncio
+import json
+import os
+import ssl
+import sys
+import time
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any
+
+import httpx
+
+# ── Custom user config ────────────────────────────────────────────────────────
+# Edit this list to add/remove seed users.
+# password: plain text (will be sent to /register, stored as argon2id hash)
+# friends:  list of usernames this user should be friends with (mutual)
+# messages: list of (recipient_username, message_text) tuples
+
+SEED_USERS: list[dict] = [
+    {
+        "username": "alice",
+        "password": "Alice@12345",
+        "display_name": "Alice Wong",
+        "friends": ["bob", "charlie"],
+        "messages_to": [
+            ("bob",     "Hey Bob! This is Alice. Can you hear me? 🔒"),
+            ("bob",     "E2EE is working great on this system!"),
+            ("charlie", "Hi Charlie, welcome to the secure channel."),
+        ],
+    },
+    {
+        "username": "bob",
+        "password": "Bob@12345",
+        "display_name": "Bob Chan",
+        "friends": ["alice", "charlie"],
+        "messages_to": [
+            ("alice",   "Alice! Loud and clear. The encryption looks solid."),
+            ("charlie", "Charlie, did you get Alice's message?"),
+        ],
+    },
+    {
+        "username": "charlie",
+        "password": "Charlie@12345",
+        "display_name": "Charlie Lee",
+        "friends": ["alice", "bob"],
+        "messages_to": [
+            ("alice", "Got it Alice! Keys exchanged successfully."),
+            ("bob",   "Bob, all messages verified. Replay protection is on."),
+        ],
+    },
+    {
+        "username": "dave",
+        "password": "Dave@12345",
+        "display_name": "Dave Ng",
+        "friends": ["alice"],
+        "messages_to": [
+            ("alice", "Alice, this is Dave. Just joined the network."),
+        ],
+    },
+]
+
+# ── Globals ───────────────────────────────────────────────────────────────────
+TMP_DIR = Path("/tmp")
+CRED_FILE = TMP_DIR / "comp3334_seed_credentials.md"
+
+# ssl context — accepts self-signed certs
+_SSL_CTX = ssl.create_default_context()
+_SSL_CTX.check_hostname = False
+_SSL_CTX.verify_mode = ssl.CERT_NONE
+
+
+# ── Colours ───────────────────────────────────────────────────────────────────
+RED    = "\033[0;31m"
+GREEN  = "\033[0;32m"
+YELLOW = "\033[1;33m"
+CYAN   = "\033[0;36m"
+BOLD   = "\033[1m"
+NC     = "\033[0m"
+
+def info(msg: str)    -> None: print(f"{GREEN}[seed]{NC} {msg}")
+def warn(msg: str)    -> None: print(f"{YELLOW}[seed]{NC} {msg}")
+def error(msg: str)   -> None: print(f"{RED}[seed]{NC} {msg}", file=sys.stderr)
+def header(msg: str)  -> None: print(f"\n{BOLD}{CYAN}── {msg} ──{NC}")
+
+
+# ── HTTP helpers ──────────────────────────────────────────────────────────────
+@dataclass
+class Session:
+    username: str
+    password: str
+    token: str = ""
+    user_id: str = ""
+    totp_secret: str = ""
+    identity_key: str = ""  # base64 public key
+
+
+async def api(
+    client: httpx.AsyncClient,
+    method: str,
+    path: str,
+    token: str = "",
+    **kwargs: Any,
+) -> dict:
+    headers = {"Authorization": f"Bearer {token}"} if token else {}
+    resp = await client.request(method, path, headers=headers, **kwargs)
+    if resp.status_code >= 400:
+        raise RuntimeError(f"{method} {path} → HTTP {resp.status_code}: {resp.text[:300]}")
+    return resp.json()
+
+
+# ── QR code helper ────────────────────────────────────────────────────────────
+def _totp_uri(username: str, secret: str, issuer: str = "COMP3334-IM") -> str:
+    return f"otpauth://totp/{issuer}:{username}?secret={secret}&issuer={issuer}&algorithm=SHA1&digits=6&period=30"
+
+
+def save_totp_md(username: str, secret: str) -> Path:
+    """Save TOTP secret + QR URI as a markdown file in /tmp."""
+    uri = _totp_uri(username, secret)
+    out = TMP_DIR / f"comp3334_totp_{username}.md"
+
+    qr_block = ""
+    try:
+        import qrcode
+        qr = qrcode.QRCode(border=1)
+        qr.add_data(uri)
+        qr.make(fit=True)
+        import io
+        buf = io.StringIO()
+        qr.print_ascii(out=buf)
+        qr_block = f"\n```\n{buf.getvalue()}```\n"
+    except ImportError:
+        qr_block = "\n_(install `qrcode` for ASCII QR: `uv add qrcode`)_\n"
+
+    md = f"""# TOTP Setup — {username}
+
+Scan this in Google Authenticator / Aegis / any TOTP app.
+
+**Secret:** `{secret}`
+
+**URI:**
+```
+{uri}
+```
+{qr_block}
+> Generated by `scripts/seed.py` on {time.strftime('%Y-%m-%d %H:%M:%S')}
+"""
+    out.write_text(md)
+    return out
+
+
+# ── Crypto helpers (minimal — uploads Ed25519 + X25519 keys) ─────────────────
+def _gen_key_bundle() -> tuple[dict, bytes, bytes]:
+    """
+    Generate a minimal key bundle for seed users.
+    Returns (PublicKeyBundle dict, identity_privkey_bytes, dh_privkey_bytes).
+    Uses the same crypto as client/crypto/session.py.
+    """
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+    from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey
+    from cryptography.hazmat.primitives.serialization import (
+        Encoding, PublicFormat, PrivateFormat, NoEncryption,
+    )
+    import base64
+
+    ik = Ed25519PrivateKey.generate()
+    spk = X25519PrivateKey.generate()
+
+    ik_pub_bytes  = ik.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
+    spk_pub_bytes = spk.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
+
+    # Sign SPK with identity key
+    sig = ik.sign(spk_pub_bytes)
+
+    bundle = {
+        "identity_key":      base64.b64encode(ik_pub_bytes).decode(),
+        "signed_prekey":     base64.b64encode(spk_pub_bytes).decode(),
+        "prekey_signature":  base64.b64encode(sig).decode(),
+    }
+    return bundle, ik_pub_bytes, spk_pub_bytes
+
+
+# ── Seed logic ────────────────────────────────────────────────────────────────
+async def register_user(
+    client: httpx.AsyncClient,
+    user: dict,
+) -> Session:
+    username = user["username"]
+    password = user["password"]
+
+    # Try register
+    try:
+        resp = await api(client, "POST", "/v1/auth/register", json={
+            "username": username,
+            "password": password,
+        })
+        totp_secret = resp.get("totp_secret", "")
+        totp_file = save_totp_md(username, totp_secret)
+        info(f"  Registered {username!r} | TOTP → {totp_file}")
+    except RuntimeError as exc:
+        if "409" in str(exc) or "already" in str(exc).lower():
+            warn(f"  {username!r} already exists — skipping register")
+            totp_secret = ""
+        else:
+            raise
+
+    # Login (no TOTP for seed users — server skips if totp_enabled=False)
+    resp = await api(client, "POST", "/v1/auth/login", json={
+        "username": username,
+        "password": password,
+    })
+    token   = resp["access_token"]
+    user_id = resp.get("user_id", "")
+    info(f"  Logged in  {username!r} (user_id={user_id[:8]}…)")
+
+    # Upload key bundle
+    bundle, _, _ = _gen_key_bundle()
+    try:
+        await api(client, "POST", "/v1/keys/upload", token=token, json=bundle)
+        info(f"  Keys uploaded for {username!r}")
+    except RuntimeError as exc:
+        if "409" in str(exc) or "already" in str(exc).lower():
+            warn(f"  Keys already uploaded for {username!r}")
+        else:
+            raise
+
+    return Session(
+        username=username,
+        password=password,
+        token=token,
+        user_id=user_id,
+        totp_secret=totp_secret,
+    )
+
+
+async def setup_friendships(
+    client: httpx.AsyncClient,
+    sessions: dict[str, Session],
+    users: list[dict],
+) -> None:
+    """Send + auto-accept all friend requests."""
+    done: set[frozenset] = set()
+
+    for user in users:
+        uname = user["username"]
+        sess  = sessions[uname]
+        for friend in user.get("friends", []):
+            pair = frozenset({uname, friend})
+            if pair in done:
+                continue
+            done.add(pair)
+
+            if friend not in sessions:
+                warn(f"  Friend {friend!r} not in seed list — skipping")
+                continue
+
+            fsess = sessions[friend]
+
+            # Send request
+            try:
+                resp = await api(
+                    client, "POST", "/v1/friends/request",
+                    token=sess.token,
+                    json={"recipient_username": friend},
+                )
+                req_id = resp.get("id", "")
+                info(f"  Friend request {uname!r} → {friend!r} (id={req_id[:8]}…)")
+
+                # Auto-accept from the other side
+                await api(
+                    client, "PUT", f"/v1/friends/request/{req_id}",
+                    token=fsess.token,
+                    json={"action": "accept"},
+                )
+                info(f"  Accepted by {friend!r}")
+            except RuntimeError as exc:
+                if "409" in str(exc) or "already" in str(exc).lower():
+                    warn(f"  {uname!r} ↔ {friend!r} already friends")
+                else:
+                    warn(f"  Friendship {uname!r}↔{friend!r} skipped: {exc}")
+
+
+async def send_mock_messages(
+    client: httpx.AsyncClient,
+    sessions: dict[str, Session],
+    users: list[dict],
+) -> None:
+    """
+    Send mock messages via the API.
+    Messages are sent as plaintext wrapped in a minimal envelope
+    (seed data only — not real E2EE, for demo/dev purposes).
+    """
+    import base64, os as _os
+
+    for user in users:
+        uname = user["username"]
+        sess  = sessions[uname]
+
+        for (recipient, text) in user.get("messages_to", []):
+            if recipient not in sessions:
+                warn(f"  Recipient {recipient!r} not in seed list — skipping")
+                continue
+
+            # Get recipient's keys to find conversation_id
+            try:
+                keys_resp = await api(
+                    client, "GET", f"/v1/keys/{recipient}",
+                    token=sess.token,
+                )
+            except RuntimeError as exc:
+                warn(f"  Cannot get keys for {recipient!r}: {exc}")
+                continue
+
+            # Build a minimal envelope (seed placeholder — plaintext base64)
+            # Real clients use full X25519/AES-GCM; this is dev seed data only
+            payload = base64.b64encode(text.encode()).decode()
+            nonce   = base64.b64encode(_os.urandom(12)).decode()
+            now     = int(time.time())
+
+            # Derive conversation_id (same logic as client/crypto/session.py)
+            ids = sorted([sess.user_id, sessions[recipient].user_id])
+            conv_id = f"{ids[0]}_{ids[1]}"
+
+            envelope = {
+                "conversation_id": conv_id,
+                "sender_id":       sess.user_id,
+                "recipient_id":    sessions[recipient].user_id,
+                "ciphertext":      payload,
+                "nonce":           nonce,
+                "sender_identity_key": keys_resp.get("identity_key", ""),
+                "counter":         0,
+                "sent_at":         now,
+                "ttl":             86400,
+            }
+
+            try:
+                await api(
+                    client, "POST", "/v1/messages",
+                    token=sess.token,
+                    json={"envelope": envelope},
+                )
+                info(f"  Message {uname!r} → {recipient!r}: {text[:40]!r}")
+            except RuntimeError as exc:
+                warn(f"  Message failed {uname!r}→{recipient!r}: {exc}")
+
+
+def save_credentials(users: list[dict], sessions: dict[str, Session]) -> Path:
+    lines = [
+        "# COMP3334 Seed Credentials\n",
+        f"> Generated: {time.strftime('%Y-%m-%d %H:%M:%S')}\n\n",
+        "| Username | Password | TOTP file | User ID |\n",
+        "|----------|----------|-----------|----------|\n",
+    ]
+    for user in users:
+        u = user["username"]
+        s = sessions.get(u)
+        totp_file = f"`/tmp/comp3334_totp_{u}.md`" if s and s.totp_secret else "_(existing)_"
+        uid = s.user_id[:12] + "…" if s else "?"
+        lines.append(f"| `{u}` | `{user['password']}` | {totp_file} | `{uid}` |\n")
+
+    CRED_FILE.write_text("".join(lines))
+    return CRED_FILE
+
+
+# ── Main ──────────────────────────────────────────────────────────────────────
+async def main() -> None:
+    parser = argparse.ArgumentParser(description="Seed mock data for COMP3334 IM")
+    parser.add_argument("--server", default="https://localhost:8443", help="Server base URL")
+    parser.add_argument("--clean",  action="store_true", help="Drop + reinit DB before seeding (requires docker)")
+    args = parser.parse_args()
+
+    server = args.server.rstrip("/")
+
+    if args.clean:
+        warn("--clean: stopping containers, removing volumes, restarting…")
+        os.system("docker compose down -v && docker compose up -d")
+        info("Waiting 5s for server to start…")
+        await asyncio.sleep(5)
+
+    print(f"\n{BOLD}COMP3334 Seed Script{NC}")
+    print(f"Server : {server}")
+    print(f"Users  : {', '.join(u['username'] for u in SEED_USERS)}")
+
+    async with httpx.AsyncClient(
+        base_url=server,
+        verify=False,
+        timeout=15.0,
+    ) as client:
+        # Health check
+        try:
+            await api(client, "GET", "/health")
+            info("Server reachable ✓")
+        except Exception as exc:
+            error(f"Server not reachable at {server}: {exc}")
+            sys.exit(1)
+
+        sessions: dict[str, Session] = {}
+
+        header("Registering users")
+        for user in SEED_USERS:
+            try:
+                sess = await register_user(client, user)
+                sessions[user["username"]] = sess
+            except Exception as exc:
+                error(f"  Failed to register {user['username']!r}: {exc}")
+
+        header("Setting up friendships")
+        await setup_friendships(client, sessions, SEED_USERS)
+
+        header("Sending mock messages")
+        await send_mock_messages(client, sessions, SEED_USERS)
+
+        header("Saving credentials")
+        cred_path = save_credentials(SEED_USERS, sessions)
+        info(f"Credentials → {cred_path}")
+        for u in SEED_USERS:
+            totp_path = TMP_DIR / f"comp3334_totp_{u['username']}.md"
+            if totp_path.exists():
+                info(f"TOTP QR     → {totp_path}")
+
+    print(f"\n{GREEN}{BOLD}Seed complete!{NC}")
+    print(f"\nLogin with any seed user:")
+    for u in SEED_USERS:
+        print(f"  {u['username']:<12} / {u['password']}")
+    print(f"\nCredentials: {CRED_FILE}")
+    print(f"TOTP files:  /tmp/comp3334_totp_<username>.md\n")
+
+
+if __name__ == "__main__":
+    asyncio.run(main())

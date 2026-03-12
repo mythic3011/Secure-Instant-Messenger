@@ -111,6 +111,13 @@ class LoginScreen(Screen):
         elif event.button.id == "btn_exit":
             self.post_message(self.Exit())
 
+    def on_key(self, event) -> None:
+        if event.key == "ctrl+a":
+            inp = self.focused
+            if isinstance(inp, Input):
+                inp.action_select_all()
+                event.stop()
+
     def on_input_submitted(self, event: Input.Submitted) -> None:
         self._do_login()
 

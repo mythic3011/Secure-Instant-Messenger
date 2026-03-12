@@ -131,6 +131,13 @@ class RegisterScreen(Screen):
         elif event.button.id == "btn_verify":
             self._do_verify_totp()
 
+    def on_key(self, event) -> None:
+        if event.key == "ctrl+a":
+            inp = self.focused
+            if isinstance(inp, Input):
+                inp.action_select_all()
+                event.stop()
+
     def on_input_submitted(self, event: Input.Submitted) -> None:
         if event.input.id == "totp_input":
             self._do_verify_totp()

@@ -256,6 +256,13 @@ class ChatScreen(Screen):
         elif event.button.id == "btn_back":
             self.app.pop_screen()
 
+    def on_key(self, event) -> None:
+        if event.key == "ctrl+a":
+            inp = self.focused
+            if isinstance(inp, Input):
+                inp.action_select_all()
+                event.stop()
+
     def on_input_submitted(self, event: Input.Submitted) -> None:
         if event.input.id == "msg_input":
             self._send()

@@ -1,22 +1,21 @@
 """
 server/main.py — FastAPI application entrypoint.
-Wires up all routers, WebSocket endpoint, startup/shutdown lifecycle,
-and the TTL cleanup background task.
+Wires up all routers, WebSocket endpoint, lifespan, graceful shutdown,
+accurate TTL cleanup, and health/readiness probes.
 """
 
 from __future__ import annotations
 
 import asyncio
-import logging
+import os
+import signal
 import time
 from contextlib import asynccontextmanager
-from scalar_fastapi import get_scalar_api_reference
+
 import structlog
 import uvicorn
-from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
-from starlette.middleware.base import BaseHTTPMiddleware
-from starlette.responses import Response
 from scalar_fastapi import get_scalar_api_reference
 
 from server.api.auth import require_auth, router as auth_router
@@ -39,38 +38,26 @@ structlog.configure(
 log = structlog.get_logger()
 
 
-# ---------------------------------------------------------------------------
-# Request access-log middleware
-# ---------------------------------------------------------------------------
-
-class _AccessLogMiddleware(BaseHTTPMiddleware):
-    async def dispatch(self, request: Request, call_next) -> Response:
-        start = time.perf_counter()
-        response = await call_next(request)
-        duration_ms = round((time.perf_counter() - start) * 1000, 1)
-        log.info(
-            "http_request",
-            method=request.method,
-            path=request.url.path,
-            status=response.status_code,
-            duration_ms=duration_ms,
-            client=request.client.host if request.client else None,
-        )
-        return response
-
-
+# ── Lifespan ──────────────────────────────────────────────────────────────────
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup
     await init_db()
-    asyncio.create_task(_ttl_cleanup_loop())
+    cleanup_task = asyncio.create_task(_ttl_cleanup_loop())
     log.info("server_started", port=get_settings().port)
-    yield
-    # Shutdown
-    await close_db()
-    log.info("server_stopped")
+    try:
+        yield
+    finally:
+        # Cancel background task cleanly on shutdown
+        cleanup_task.cancel()
+        try:
+            await cleanup_task
+        except asyncio.CancelledError:
+            pass
+        await close_db()
+        log.info("server_stopped")
 
 
+# ── App ───────────────────────────────────────────────────────────────────────
 app = FastAPI(
     title="COMP3334 Secure IM",
     version="1.0.0",
@@ -79,27 +66,24 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# Add Scalar API reference
 if get_settings().app_env == "development":
     @app.get("/v1/scalar", include_in_schema=False)
     async def scalar_reference():
-        return get_scalar_api_reference()
+        return get_scalar_api_reference(
+            openapi_url=app.openapi_url,
+            title=app.title,
+        )
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],   # tighten in production
+    allow_origins=["*"],
     allow_methods=["*"],
     allow_headers=["*"],
 )
-app.add_middleware(_AccessLogMiddleware)
+
 
 @app.get("/", include_in_schema=False)
 async def root():
-    """Basic landing page; not authenticated.
-
-    Returns structured JSON with service info, current mode, version, and
-    helpful links when running in development.
-    """
     settings = get_settings()
     base = {
         "service": "COMP3334 Secure IM",
@@ -108,12 +92,40 @@ async def root():
         "timestamp": int(time.time()),
     }
     if settings.app_env == "development":
-        # include dev-only helpers
         base["dev_endpoints"] = ["/v1/scalar", "/v1/docs"]
         base["environment"] = settings.app_env
     return base
 
-# Register API routers
+
+# ── Health / readiness probes ─────────────────────────────────────────────────
+@app.get("/health")
+async def health() -> dict:
+    """Liveness probe — returns ok if process is alive."""
+    return {"status": "ok", "timestamp": int(time.time())}
+
+
+@app.get("/ready")
+async def ready():
+    """
+    Readiness probe — verifies DB is reachable.
+    Returns HTTP 503 if DB check fails (container orchestrators use this
+    to hold traffic until the server is truly ready).
+    """
+    try:
+        db = await get_db()
+        async with db.execute("SELECT 1") as cur:
+            await cur.fetchone()
+        return {"status": "ready", "timestamp": int(time.time())}
+    except Exception as exc:
+        log.warning("readiness_check_failed", error=str(exc))
+        from fastapi.responses import JSONResponse
+        return JSONResponse(
+            status_code=503,
+            content={"status": "not_ready", "error": str(exc)},
+        )
+
+
+# ── Routers ───────────────────────────────────────────────────────────────────
 app.include_router(auth_router)
 app.include_router(keys_router)
 app.include_router(friends_router)
@@ -121,32 +133,23 @@ app.include_router(msg_router)
 app.include_router(conv_router)
 
 
-# ---------------------------------------------------------------------------
-# WebSocket endpoint — authenticated via token query param
-# ---------------------------------------------------------------------------
-
+# ── WebSocket ─────────────────────────────────────────────────────────────────
 @app.websocket("/v1/ws")
 async def ws_endpoint(websocket: WebSocket) -> None:
     """
-    WebSocket connection. Client must pass ?token=<bearer_token> in the URL.
-    We cannot use Authorization header in WebSocket handshake from most clients.
+    WebSocket connection. Client passes ?token=<bearer_token> in the URL.
+    Authorization header is not available in WS handshake on most clients.
     """
-    from fastapi import Request
-    from starlette.datastructures import Headers
-
     token = websocket.query_params.get("token")
     if not token:
-        log.warning("ws_auth_rejected", reason="missing_token", client=websocket.client.host if websocket.client else None)
         await websocket.close(code=4001)
         return
 
-    # Reuse require_auth logic by constructing a mock request
     from server.core.security import hash_token
-    from server.core.database import get_db as _get_db
 
     token_hash = hash_token(token)
     now = int(time.time())
-    db = await _get_db()
+    db = await get_db()
     async with db.execute(
         "SELECT s.user_id FROM sessions s "
         "WHERE s.token_hash = ? AND s.revoked = 0 AND s.expires_at > ?",
@@ -155,51 +158,37 @@ async def ws_endpoint(websocket: WebSocket) -> None:
         row = await cur.fetchone()
 
     if row is None:
-        log.warning("ws_auth_rejected", reason="invalid_or_expired_token", client=websocket.client.host if websocket.client else None)
         await websocket.close(code=4001)
         return
 
     await websocket_endpoint(websocket, row["user_id"])
 
 
-# ---------------------------------------------------------------------------
-# Health check
-# ---------------------------------------------------------------------------
-
-@app.get("/health")
-async def health() -> dict:
-    return {"status": "ok"}
-
-
-# ---------------------------------------------------------------------------
-# Startup / shutdown handled by lifespan context manager above
-# ---------------------------------------------------------------------------
-
-# ---------------------------------------------------------------------------
-# R12 — TTL cleanup background task
-# ---------------------------------------------------------------------------
-
+# ── TTL cleanup background task (R12) ─────────────────────────────────────────
 async def _ttl_cleanup_loop() -> None:
     """
-    Periodically delete expired messages from the server (R12).
-    Also deletes messages older than MAX_MESSAGE_AGE_DAYS even without TTL.
+    Accurately delete expired messages (R12).
+
+    Uses drift-corrected sleep: subtracts DB query time from the interval
+    so the schedule stays accurate even under load. Previous implementation
+    used a fixed asyncio.sleep(300) which drifted by query duration each cycle.
     """
     settings = get_settings()
+    interval = float(settings.ttl_cleanup_interval)
+
     while True:
-        await asyncio.sleep(settings.ttl_cleanup_interval)
+        tick = time.monotonic()
         try:
             db = await get_db()
             now = int(time.time())
             max_age_cutoff = now - (settings.max_message_age_days * 86400)
 
-            # Delete TTL-expired messages
             result = await db.execute(
                 "DELETE FROM messages WHERE expires_at IS NOT NULL AND expires_at <= ?",
                 (now,),
             )
             ttl_deleted = result.rowcount
 
-            # Delete messages older than max retention age
             result = await db.execute(
                 "DELETE FROM messages WHERE stored_at < ?",
                 (max_age_cutoff,),
@@ -208,18 +197,44 @@ async def _ttl_cleanup_loop() -> None:
 
             await db.commit()
 
-            log.info("ttl_cleanup", ttl_deleted=ttl_deleted, age_deleted=age_deleted)
+            if ttl_deleted or age_deleted:
+                log.info("ttl_cleanup", ttl_deleted=ttl_deleted, age_deleted=age_deleted)
+
+        except asyncio.CancelledError:
+            raise
         except Exception as exc:
             log.warning("ttl_cleanup_error", error=str(exc))
 
+        # Drift-corrected: sleep only the remaining time in this interval
+        elapsed = time.monotonic() - tick
+        await asyncio.sleep(max(0.0, interval - elapsed))
 
+
+# ── Entrypoint ────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     settings = get_settings()
+
+    # Auto-detect TLS: use SSL if cert files exist.
+    # Docker entrypoint (scripts/docker-entrypoint.sh) auto-generates them.
+    cert = settings.tls_cert_file
+    key  = settings.tls_key_file
+    use_tls = os.path.isfile(cert) and os.path.isfile(key)
+
+    if use_tls:
+        log.info("tls_enabled", cert=cert, key=key)
+    else:
+        log.warning(
+            "tls_disabled",
+            reason="cert/key not found — plain HTTP (dev only)",
+            cert=cert,
+            key=key,
+        )
+
     uvicorn.run(
         "server.main:app",
         host=settings.host,
         port=settings.port,
         log_level=settings.log_level,
-        ssl_certfile=settings.tls_cert_file if settings.app_env == "production" else None,
-        ssl_keyfile=settings.tls_key_file if settings.app_env == "production" else None,
+        ssl_certfile=cert if use_tls else None,
+        ssl_keyfile=key  if use_tls else None,
     )

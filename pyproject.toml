@@ -26,6 +26,7 @@ dependencies = [
     "structlog>=24.4.0",
     "qrcode>=8.2",
     "rich>=14.3.3",
+    "python-socks>=2.8.1",
 ]
 
 [project.optional-dependencies]
@@ -62,3 +63,8 @@ packages = ["client", "server", "shared"]
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+[dependency-groups]
+dev = [
+    "python-socks>=2.8.1",
+]
