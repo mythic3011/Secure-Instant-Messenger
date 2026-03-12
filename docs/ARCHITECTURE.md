@@ -1,6 +1,6 @@
 # COMP3334 Secure IM — Architecture & Protocol Design
-> Stack-agnostic. Finalise stack after reviewing this doc.
-> 4-person team | Deadline: 2 April 2026
+> Stack: Python (FastAPI + Textual + SQLite). Decided.
+> 5-person team | Deadline: 2 April 2026
 
 ---
 
@@ -525,169 +525,86 @@ Logging policy (PDF §7 — minimal sensitive logging):
 
 ---
 
-## 7. Stack Decision Matrix
+## 7. Stack Decision
 
-### Option A — Python (Recommended for 3-week deadline)
+**Decided: Python**
 
 ```
 Server:  FastAPI + WebSockets + SQLite (aiosqlite)
-Client:  Python CLI (Textual TUI or prompt_toolkit)
-Crypto:  cryptography (PyCA) + argon2-cffi + pyotp
-Deploy:  Docker Compose (one command)
+Client:  Textual TUI
+Crypto:  cryptography (PyCA) + argon2-cffi + pyotp + qrcode
+Deploy:  Docker Compose (one command) + uv for local dev
 Package: uv
 ```
 
-**Pro:**  Fastest dev speed. PyCA is the gold standard Python crypto library.
-         Single language across entire team. CLI is explicitly permitted.
-         Docker Compose → clean deploy from bare OS.
-**Con:**  CLI UX. Python startup ~200ms (fine for a desktop client).
-**Verdict:** Ship all 25 requirements cleanly in 3 weeks. Recommend this.
+Single language across the full team. PyCA is the gold standard Python crypto library.
+Docker Compose → clean one-command deploy on Windows 11 and Ubuntu.
 
 ---
 
-### Option B — Go (Best deployment story)
-
-```
-Server:  chi + gorilla/websocket + SQLite (modernc, pure Go)
-Client:  bubbletea TUI
-Crypto:  crypto/ed25519, golang.org/x/crypto (X25519, HKDF, Argon2id)
-Deploy:  Single binary per platform (no Docker needed for client)
-```
-
-**Pro:**  Single binary = easiest deploy on Win11/Ubuntu (examiner-friendly).
-         Go crypto stdlib is excellent. Strong type safety. CTF-relevant.
-**Con:**  Slower dev speed vs Python. bubbletea TUI learning curve.
-         Need to cross-compile for Win11 if developing on Linux.
-**Verdict:** Better deployment story. Harder to hit deadline without Go experience.
-
----
-
-### Option C — TypeScript/Bun + Tauri (Best UX, hardest to ship)
-
-```
-Server:  Bun + Hono + WebSocket + Drizzle + SQLite
-Client:  Tauri 2 + React
-Crypto:  @noble/curves (X25519, Ed25519) + WebCrypto (AES-GCM) + argon2-browser
-Deploy:  Docker (server) + Tauri installer (client, needs Rust toolchain)
-```
-
-**Pro:**  Best UI. Full-stack TypeScript. Aligns with your primary language.
-**Con:**  Most complex. Rust toolchain for Tauri. 3-week timeline very tight.
-         WebCrypto API nonce management requires extra care.
-**Verdict:** Only if all 4 team members know TypeScript and at least 1 knows Tauri.
-
----
-
-## 8. File Structure (per stack)
-
-### Option A — Python
+## 8. File Structure (actual)
 
 ```
 project/
 ├── server/
-│   ├── main.py                    # FastAPI app entrypoint
+│   ├── main.py                    # FastAPI app, routers, TTL cleanup loop
 │   ├── api/
-│   │   ├── __init__.py
 │   │   ├── auth.py                # R1, R2, R3 — register, login, logout
 │   │   ├── keys.py                # R4 — public key upload/fetch
-│   │   ├── friends.py             # R13–R16 — friend requests, block
-│   │   ├── messages.py            # R17–R22 — send, receive, delivery
-│   │   └── conversations.py       # R23–R25 — list, unread, pagination
+│   │   ├── friends.py             # R13–R16 — friend requests, block, remove
+│   │   ├── messages.py            # R8/R9/R17–R22 — send, fetch, delivery ACK
+│   │   └── conversations.py       # R23–R25 — list, unread, mark-read
 │   ├── core/
-│   │   ├── __init__.py
-│   │   ├── database.py            # aiosqlite setup, migrations
-│   │   ├── models.py              # Pydantic v2 schemas
-│   │   ├── security.py            # argon2id, token validation, rate limiting
+│   │   ├── database.py            # aiosqlite, migration runner
+│   │   ├── security.py            # argon2id, opaque tokens, TOTP encryption, rate limiting
 │   │   └── config.py              # pydantic-settings env config
 │   ├── ws/
-│   │   ├── __init__.py
-│   │   └── handler.py             # WebSocket connection manager, push
+│   │   └── handler.py             # WebSocket connection manager, offline queue flush
 │   └── migrations/
-│       ├── 001_init.sql
-│       └── 002_add_ttl.sql
+│       └── 001_init.sql
 ├── client/
 │   ├── main.py                    # CLI entrypoint
 │   ├── crypto/
-│   │   ├── __init__.py
-│   │   ├── identity.py            # Ed25519 keygen, storage, fingerprint
-│   │   ├── session.py             # X25519 ECDH, HKDF, AES-GCM
-│   │   └── storage.py             # encrypted local key store (Fernet or AES-GCM)
+│   │   ├── session.py             # Ed25519, X25519 2-DH, HKDF-SHA256, AES-256-GCM,
+│   │   │                          # replay protection, key change detection
+│   │   └── storage.py             # Argon2id-derived storage key, AES-GCM keystore
 │   ├── api/
-│   │   ├── __init__.py
-│   │   └── client.py              # httpx async client, WS listener
+│   │   └── client.py              # httpx async HTTP client + WebSocket listener
 │   ├── state/
-│   │   ├── __init__.py
-│   │   ├── store.py               # local SQLite for messages, sessions
-│   │   └── replay.py              # counter tracking, seen_ids set
+│   │   └── store.py               # local SQLite message store, TTL sweep
 │   └── ui/
-│       ├── __init__.py
-│       ├── app.py                 # Textual TUI App
+│       ├── app.py                 # Textual TUI App, wires screens + crypto + WS
 │       ├── screens/
 │       │   ├── login.py
-│       │   ├── chat.py
-│       │   ├── friends.py
-│       │   └── settings.py
+│       │   ├── register.py        # includes TOTP QR code display
+│       │   ├── conversations.py   # conversation list + unread counters
+│       │   ├── chat.py            # chat view, key change warning, TTL display
+│       │   ├── friends.py         # friend request management
+│       │   └── settings.py        # fingerprint display (R5), TTL config (R10)
 │       └── widgets/
-│           ├── message_list.py
-│           └── conversation_list.py
 ├── shared/
-│   └── protocol.py                # shared Pydantic models, constants
+│   └── protocol.py                # Pydantic wire models, make_conversation_id(), enums
 ├── tests/
 │   ├── unit/
-│   │   ├── test_crypto.py         # session key derivation, AES-GCM, replay
-│   │   └── test_auth.py           # argon2id, TOTP
-│   └── integration/
-│       ├── test_e2e_message.py    # Alice sends → Bob receives → decrypt
-│       └── test_replay.py         # replay attack simulation
+│   │   ├── test_crypto.py         # Ed25519, X25519, AES-GCM, replay, fingerprint (22 tests)
+│   │   └── test_auth.py           # argon2id, bearer tokens, TOTP encryption (10 tests)
+│   ├── integration/
+│   │   ├── test_e2e_message.py    # register→login→friend→send→decrypt + replay (2 tests)
+│   │   └── test_offline_queue.py  # offline queue store-and-forward + replay (2 tests)
+│   ├── security/
+│   │   └── test_replay_attack.py  # replay, tampering, session key derivation (13 tests)
+│   └── ui/
+│       └── test_textual.py        # Textual TUI smoke test
+├── scripts/
+│   └── seed.py                    # seed data helper
+├── docs/
+│   ├── ARCHITECTURE.md            # this file
+│   ├── TASKS.md                   # task breakdown + status
+│   └── DEPLOY.md                  # step-by-step deploy guide
 ├── docker-compose.yml
 ├── Dockerfile.server
 ├── .env.example
 ├── pyproject.toml                 # uv managed
-├── DEPLOY.md                      # step-by-step deploy guide
-└── README.md
-```
-
-### Option B — Go
-
-```
-project/
-├── cmd/
-│   ├── server/
-│   │   └── main.go
-│   └── client/
-│       └── main.go
-├── internal/
-│   ├── crypto/
-│   │   ├── identity.go            # Ed25519 keygen, fingerprint
-│   │   ├── session.go             # X25519, HKDF, AES-GCM
-│   │   └── replay.go             # counter + ID dedup
-│   ├── server/
-│   │   ├── api/
-│   │   │   ├── auth.go
-│   │   │   ├── keys.go
-│   │   │   ├── friends.go
-│   │   │   ├── messages.go
-│   │   │   └── conversations.go
-│   │   ├── ws/
-│   │   │   └── hub.go            # WebSocket connection hub
-│   │   ├── db/
-│   │   │   ├── schema.sql
-│   │   │   └── queries.sql       # sqlc input
-│   │   └── middleware/
-│   │       ├── auth.go
-│   │       └── ratelimit.go
-│   └── client/
-│       ├── session/
-│       │   └── manager.go
-│       ├── storage/
-│       │   └── local.go          # encrypted local SQLite
-│       └── ui/
-│           └── tui.go            # bubbletea app
-├── docker-compose.yml
-├── Dockerfile
-├── go.mod
-├── go.sum
-├── DEPLOY.md
 └── README.md
 ```
 
@@ -695,7 +612,7 @@ project/
 
 ## 9. Team Task Split
 
-**Recommended split for 4 people:**
+**Split for 5 people:**
 
 ```
 Person 1 — Server Auth & Key Infrastructure
@@ -719,12 +636,13 @@ Person 2 — Server Messaging & WebSocket
     - GET  /v1/messages (paginated fetch, cursor-based)
     - POST /v1/friends/request, GET /v1/friends/pending, PUT /accept/decline
     - GET  /v1/conversations (ordered by last_message_at, unread counts)
+    - POST /v1/conversations/{id}/read (mark-read, reset unread counter)
     - Delivery ACK handling
     - TTL cleanup cron job
     - DB schema: messages, conversations, friend_requests, blocks tables
 
 Person 3 — Client Crypto Engine
-  Owns: client/crypto/, client/state/replay.py, shared/protocol.py
+  Owns: client/crypto/, client/state/, shared/protocol.py
   Covers: R4, R5, R6, R7, R8, R9
   Deliverables:
     - Ed25519 keypair generation + secure local storage
@@ -735,17 +653,27 @@ Person 3 — Client Crypto Engine
     - Replay protection (counter tracking, seen_ids)
     - Encrypted local DB for sessions + message history
 
-Person 4 — Client UI & Friends
-  Owns: client/ui/, client/api/client.py
+Person 4 — Client UI & Integration
+  Owns: client/ui/, client/api/client.py, client/main.py
   Covers: R5, R10, R11, R13–R25 (client side)
   Deliverables:
     - httpx async API client (auth, keys, messages, friends)
     - WebSocket listener + message dispatch
-    - TUI screens: login, OTP, conversation list, chat view, friends
+    - TUI screens: login, register, conversation list, chat view, friends, settings
     - Unread counter display
     - TTL countdown + auto-delete from UI
     - Key change warning display
     - Friend request UI (send, pending, accept/decline)
+    - TOTP QR code display on registration
+
+Person 5 — Testing, Deployment & Report
+  Owns: tests/, DEPLOY.md, docs/
+  Covers: §8 (testing), §9 (deployment)
+  Deliverables:
+    - Integration + security test suite maintenance
+    - DEPLOY.md — clean install on Windows 11 + Ubuntu
+    - Report §10 (Deployment & Setup Guide)
+    - Presentation video coordination
 ```
 
 **Cross-team integration points (must agree on interface early):**
@@ -761,28 +689,30 @@ P3 ↔ P4:  crypto module API — encrypt(session_key, plaintext, ad) → envelo
 ## 10. Timeline (3 Weeks)
 
 ```
-Week 1 (Mar 10–16) — Foundation
-  All:  Agree on stack. Set up repo, Docker, shared protocol.py.
-  P1:   DB schema done. Register + login working (no OTP yet).
-  P2:   WebSocket hub skeleton. Basic message POST/GET endpoints.
+Week 1 (Mar 10–16) — Foundation ✅ DONE
+  All:  Stack agreed (Python). Repo, Docker, shared protocol.py set up.
+  P1:   DB schema done. Register + login + TOTP working.
+  P2:   WebSocket hub. Message POST/GET. Friend request endpoints.
   P3:   Ed25519 + X25519 keygen. AES-GCM encrypt/decrypt unit tested.
-  P4:   httpx client connecting. Login screen working end-to-end.
+  P4:   httpx client. Login + register screens working.
+  P5:   Test scaffolding. Unit + integration tests passing.
 
-Week 2 (Mar 17–23) — Core Features
-  P1:   OTP (TOTP) integrated. Rate limiting. Token revocation.
-  P2:   Offline queue. Friend request endpoints. Delivery ACK.
-        TTL cleanup cron. Replay detection server-side.
-  P3:   Full session establishment (2-DH). Key change detection.
-        Replay protection client-side. Encrypted local storage.
-  P4:   Chat screen. Friend request UI. Conversation list + unread.
-        TTL countdown in UI. Fingerprint display.
+Week 2 (Mar 17–23) — Core Features (current)
+  P1:   Rate limiting. Token revocation. [DONE]
+  P2:   Offline queue. Delivery ACK. TTL cleanup cron. [DONE]
+        mark-read endpoint (POST /v1/conversations/{id}/read). [TODO]
+  P3:   Full session establishment. Key change detection.
+        Replay protection. Encrypted local storage. [DONE]
+  P4:   Chat screen. Friend request UI. Conversation list + unread. [DONE]
+        TTL countdown in UI. TOTP QR code display. [TODO]
+  P5:   Offline queue integration test. Security test suite. [DONE]
 
-Week 3 (Mar 24–Apr 1) — Polish, Security Tests, Report
-  All:  Integration testing. Fix edge cases.
-  P1+2: Write security test cases (replay attack, MITM, brute force).
-  P3:   Audit nonce handling. Verify AD is correctly bound.
+Week 3 (Mar 24–Apr 1) — Polish, Deploy, Report
+  All:  End-to-end manual test (two terminals, Alice+Bob).
+  P2:   Fix any remaining edge cases in messaging/friends.
+  P3:   Audit nonce handling. Verify AD binding.
   P4:   DEPLOY.md — test clean install on Windows 11 + Ubuntu.
-        Presentation video recording.
+  P5:   Presentation video recording.
   All:  Report writing (split by section, merge Friday Apr 1).
 
 Apr 2:  Submit by 16:59.

@@ -1,6 +1,7 @@
 # COMP3334 Project — Task Breakdown
 
-## Status: In Progress — 34/34 tests passing ✅
+## Status: In Progress — 45/45 tests passing ✅
+**Team:** 5 people (P1–P5)
 **Deadline:** April 2, 2026 16:59
 
 ---
@@ -41,10 +42,12 @@
 - `client/ui/screens/settings.py` — fingerprint display (R5), TTL config (R10)
 
 ### Tests (Done)
-- `test_replay_attack.py` — security test: replay resistance + ciphertext tampering
-- `tests/unit/test_crypto.py` — Ed25519, X25519, AES-GCM, replay protector, fingerprint
-- `tests/unit/test_auth.py` — Argon2id, bearer tokens, TOTP encryption
-- `tests/integration/test_e2e_message.py` — full E2E: register→login→friend→send→decrypt + replay rejection
+- `tests/security/test_replay_attack.py` — replay resistance, ciphertext tampering, session key derivation (13 tests)
+- `tests/unit/test_crypto.py` — Ed25519, X25519, AES-GCM, replay protector, fingerprint, envelope (22 tests)
+- `tests/unit/test_auth.py` — Argon2id, bearer tokens, TOTP encryption (10 tests)
+- `tests/integration/test_e2e_message.py` — full E2E: register→login→friend→send→decrypt + replay rejection (2 tests)
+- `tests/integration/test_offline_queue.py` — offline queue store-and-forward + replay rejection (2 tests)
+- `tests/ui/test_textual.py` — Textual TUI smoke test
 
 ### Docs (Done)
 - `ARCHITECTURE.md` — full design doc with session state machine, secure storage design, TOTP encryption scheme, input validation policy, logging policy, auth token design
@@ -61,9 +64,9 @@
 | 1 | **Wire up `client/ui/app.py` event handlers** — test login→conversation→chat flow end-to-end manually | P4 | All |
 | 2 | **`client/ui/widgets/message_list.py`** — optional: extract MessageItem widget for reuse | P4 | R23 |
 | 3 | **TTL countdown timer in ChatScreen** — schedule `sweep_expired()` every 30s while chat is open | P4 | R11 |
-| 4 | **TOTP QR code display** — show QR code image or URI on registration (currently just notifies) | P4 | R2 |
+| 4 | **TOTP QR code display** — `qrcode` lib already in deps; render ASCII QR in terminal on registration | P4 | R2 |
 | 5 | **`server/api/conversations.py` mark-read endpoint** — `POST /v1/conversations/{id}/read` resets unread | P2 | R24 |
-| 6 | **Offline queue test** — integration test: send while Bob offline, Bob connects, gets message | P2 | R20 |
+| 6 | **P5 task assignment** — assign P5 to a remaining task or report section | All | — |
 
 ### Week 3 Priority (Mar 24–Apr 1)
 
@@ -88,7 +91,8 @@
 | 7 | Cryptographic Choices & Rationale | P3 |
 | 8 | Security Analysis (server can't decrypt, metadata exposure, limitations) | P1 |
 | 9 | Testing & Evaluation (demo + 2 security test cases) | P2 |
-| 10–11 | Future Works, References | All |
+| 10 | Deployment & Setup Guide | P5 |
+| 11–12 | Future Works, References | All |
 
 ---
 
@@ -96,9 +100,9 @@
 
 1. **`client/ui/app.py` event handler naming** — Textual uses `on_<screen_class>_<message_class>` naming. Verify all handler names match exactly (snake_case of class names).
 2. **`make_key_signature` import in `client/crypto/storage.py`** — imported from `session.py` but not re-exported. Verify import path in `app.py`.
-3. **`anyio` backend for integration tests** — `pyproject.toml` sets `asyncio_mode = "auto"`. Integration tests use `anyio` fixture — may need `pytest-anyio` or adjust to `asyncio` only.
-4. **TLS in dev** — client uses `verify=False`. For production, use real certs and set `verify=True`.
-5. **TOTP QR code** — currently only shows `otpauth://` URI as a notification. Consider adding `qrcode` library to render ASCII QR in terminal.
+3. **TLS in dev** — client uses `verify=False`. For production, use real certs and set `verify=True`.
+4. **TOTP QR code** — `qrcode` lib is in deps; render ASCII QR in terminal on registration screen.
+5. **pytest requires `--extra dev`** — run as `uv run --extra dev pytest` (pytest is in `[project.optional-dependencies].dev`).
 
 ---
 
@@ -108,6 +112,9 @@
 # Install deps
 uv sync
 
+# Install dev deps (needed for tests)
+uv sync --extra dev
+
 # Run server (dev)
 uv run uvicorn server.main:app --host 0.0.0.0 --port 8443
 
@@ -115,13 +122,16 @@ uv run uvicorn server.main:app --host 0.0.0.0 --port 8443
 uv run python -m client.main --server https://localhost:8443
 
 # Run all tests
-uv run pytest -v
+uv run --extra dev pytest -v
 
 # Run only unit tests (fast, no server)
-uv run pytest tests/unit/ -v
+uv run --extra dev pytest tests/unit/ -v
 
 # Run security tests
-uv run pytest test_replay_attack.py -v
+uv run --extra dev pytest tests/security/ -v
+
+# Run integration tests
+uv run --extra dev pytest tests/integration/ -v
 
 # Docker
 docker compose up --build

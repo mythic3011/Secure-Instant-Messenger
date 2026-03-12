@@ -1,99 +1,104 @@
 # COMP3334 Secure Instant Messenger
 
-This repository contains the code for a secure, end‑to‑end encrypted instant messaging application developed as part of the COMP3334 project. The system is designed to demonstrate strong cryptographic practices, replay protection and an honest‑but‑curious server model.
+End-to-end encrypted instant messaging application built for COMP3334. Demonstrates strong cryptographic practices, replay protection, and an honest-but-curious server model.
+
+**Team:** 5 people | **Deadline:** April 2, 2026 16:59 | **Tests:** 45/45 passing ✅
 
 ## Features
 
-- End‑to‑end encryption using X25519/AES‑256‑GCM
-- Identity keys (Ed25519) and per‑conversation sessions
+- End-to-end encryption using X25519/AES-256-GCM
+- Identity keys (Ed25519) and per-conversation sessions
 - Offline message queue with ciphertext blobs only
-- Argon2id password hashing and TOTP-based 2FA
-- Python implementation with SQLite backend (server) and a lightweight client
-- Test suite covering unit and integration scenarios
+- Argon2id password hashing and TOTP-based 2FA with QR code
+- Replay protection (monotonic counter + message ID dedup)
+- Key change detection with fingerprint verification
+- Timed self-destruct messages (TTL in authenticated data)
+- Python implementation with SQLite backend and Textual TUI client
 
 ## Repository structure
 
 ```
-├── client/                # client application code (UI + crypto)
-├── server/                # server application and API handlers
-├── shared/                # protocol definitions shared between client/server
-├── tests/                 # unit & integration tests
-│   ├── unit/
-│   └── integration/
-├── Tutorial/              # notebooks and learning material
-├── docs/                  # architecture & protocol documentation
-├── pyproject.toml         # Python project configuration
-├── Dockerfile.server      # container image for the server
-├── docker-compose.yml     # development environment configuration
-└── README.md              # this file
+├── client/                # client application (TUI + crypto)
+│   ├── api/               # httpx async HTTP + WebSocket client
+│   ├── crypto/            # Ed25519, X25519, AES-GCM, storage
+│   ├── state/             # local SQLite message store, TTL sweep
+│   └── ui/                # Textual TUI screens + widgets
+├── server/                # FastAPI server
+│   ├── api/               # auth, keys, friends, messages, conversations
+│   ├── core/              # config, database, security
+│   └── ws/                # WebSocket connection manager
+├── shared/                # Pydantic wire models shared by client + server
+├── tests/
+│   ├── unit/              # crypto, auth unit tests
+│   ├── integration/       # E2E message flow, offline queue
+│   ├── security/          # replay attack, ciphertext tampering
+│   └── ui/                # Textual TUI smoke test
+├── docs/                  # ARCHITECTURE.md, TASKS.md, DEPLOY.md
+├── scripts/               # seed data helpers
+├── pyproject.toml         # uv managed
+├── Dockerfile.server
+└── docker-compose.yml
 ```
 
 ## Getting started
 
-1. **Copy the environment file**: `cp .env.example .env.local` and fill in secrets
-   generated with `python -c "import secrets; print(secrets.token_hex(32))"`.
-
-2. **Create a virtual environment**:
+1. **Copy the environment file** and fill in secrets:
 
    ```bash
-   python -m venv .venv
-   source .venv/bin/activate
-   pip install -e .
+   cp .env.example .env.local
+   # Generate a secret: python -c "import secrets; print(secrets.token_hex(32))"
    ```
 
-3. **Run database migrations** (server currently uses SQLite or Postgres configured
-   via `DATABASE_URL`):
+2. **Install dependencies** (requires [uv](https://docs.astral.sh/uv/)):
 
    ```bash
-   # simple sqlite migration
-   sqlite3 server/data/im.db < server/migrations/001_init.sql
+   uv sync
    ```
 
-4. **Start the server** (use the `uv` shortcut if installed):
+3. **Start the server:**
 
    ```bash
-   # uv is a lightweight entry point for uvicorn (install with `pip install uv`)
-   uv server.main:app --reload --host 0.0.0.0 --port 8443
+   uv run uvicorn server.main:app --host 0.0.0.0 --port 8443
    ```
 
-5. **Launch the client** (open `client/main.py` or run via UI):
+4. **Launch the client** (in a separate terminal):
 
    ```bash
-   python client/main.py
+   uv run python -m client.main --server https://localhost:8443
    ```
 
-   The client stores identity keys and session state in an encrypted local file.
+   The client stores identity keys and session state in an encrypted local file at `~/.comp3334im/<username>/`.
 
 ## Testing
 
-Execute the full test suite with:
+```bash
+# Run all tests
+uv run --extra dev pytest -v
+
+# Unit tests only (fast, no server needed)
+uv run --extra dev pytest tests/unit/ -v
+
+# Security tests (replay, tampering)
+uv run --extra dev pytest tests/security/ -v
+
+# Integration tests (requires no running server — uses in-process fixtures)
+uv run --extra dev pytest tests/integration/ -v
+```
+
+## Docker
 
 ```bash
-pytest -q
+docker compose up --build
 ```
 
 ## Architecture & Protocol
 
-Detailed design decisions, protocol flows, and security mappings are described in
-`docs/ARCHITECTURE.md`. That document includes diagrams, cryptographic choices,
-and the trust model used for the honest‑but‑curious server.
+See `docs/ARCHITECTURE.md` for the full design: session state machine, 2-DH key exchange, replay protection, secure local storage, TOTP encryption scheme, input validation policy, and trust model.
 
-## Development workflow
+## Deployment
 
-- Use `docker-compose up` for a containerised development stack.
-- The client and server are written in Python; keep dependencies pinned in
-  `pyproject.toml`.
-- Add new features with corresponding unit tests and update integration tests
-  under `tests/integration`.
-
-## Contribution guidelines
-
-1. Create a new branch for each feature or bugfix.
-2. Run the existing tests and add new ones for any changes.
-3. When the implementation is complete and tests pass, open a pull request and
-   ensure at least one teammate reviews the changes.
+See `docs/DEPLOY.md` for step-by-step instructions for Windows 11 and Ubuntu.
 
 ## License
 
-This project is for academic purposes and is not intended for production use.
-Please refer to your course guidelines regarding licensing and attribution.
+Academic project for COMP3334. Not intended for production use.

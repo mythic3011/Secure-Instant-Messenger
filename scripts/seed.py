@@ -22,7 +22,7 @@ import os
 import ssl
 import sys
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -79,12 +79,27 @@ SEED_USERS: list[dict] = [
 
 # ── Globals ───────────────────────────────────────────────────────────────────
 TMP_DIR = Path("/tmp")
-CRED_FILE = TMP_DIR / "comp3334_seed_credentials.md"
+CRED_FILE       = TMP_DIR / "comp3334_seed_credentials.md"
+TOTP_STATE_FILE = TMP_DIR / "comp3334_seed_totp_state.json"
 
 # ssl context — accepts self-signed certs
 _SSL_CTX = ssl.create_default_context()
 _SSL_CTX.check_hostname = False
 _SSL_CTX.verify_mode = ssl.CERT_NONE
+
+
+def _load_totp_secrets() -> dict[str, str]:
+    """Load persisted TOTP secrets from previous runs (needed to re-login existing users)."""
+    if TOTP_STATE_FILE.exists():
+        try:
+            return json.loads(TOTP_STATE_FILE.read_text())
+        except Exception:
+            pass
+    return {}
+
+
+def _save_totp_secrets(secrets: dict[str, str]) -> None:
+    TOTP_STATE_FILE.write_text(json.dumps(secrets, indent=2))
 
 
 # ── Colours ───────────────────────────────────────────────────────────────────
@@ -109,7 +124,6 @@ class Session:
     token: str = ""
     user_id: str = ""
     totp_secret: str = ""
-    identity_key: str = ""  # base64 public key
 
 
 async def api(
@@ -167,79 +181,94 @@ Scan this in Google Authenticator / Aegis / any TOTP app.
 
 
 # ── Crypto helpers (minimal — uploads Ed25519 + X25519 keys) ─────────────────
-def _gen_key_bundle() -> tuple[dict, bytes, bytes]:
+def _gen_key_bundle() -> dict:
     """
     Generate a minimal key bundle for seed users.
-    Returns (PublicKeyBundle dict, identity_privkey_bytes, dh_privkey_bytes).
+    Returns dict with identity_pub_b64, dh_pub_b64, key_sig_b64.
     Uses the same crypto as client/crypto/session.py.
     """
     from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
     from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey
-    from cryptography.hazmat.primitives.serialization import (
-        Encoding, PublicFormat, PrivateFormat, NoEncryption,
-    )
+    from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
     import base64
 
     ik = Ed25519PrivateKey.generate()
-    spk = X25519PrivateKey.generate()
+    dh = X25519PrivateKey.generate()
 
-    ik_pub_bytes  = ik.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
-    spk_pub_bytes = spk.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
+    ik_pub_bytes = ik.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
+    dh_pub_bytes = dh.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
 
-    # Sign SPK with identity key
-    sig = ik.sign(spk_pub_bytes)
+    # Sign (identity_pub || dh_pub) with identity key
+    sig = ik.sign(ik_pub_bytes + dh_pub_bytes)
 
-    bundle = {
-        "identity_key":      base64.b64encode(ik_pub_bytes).decode(),
-        "signed_prekey":     base64.b64encode(spk_pub_bytes).decode(),
-        "prekey_signature":  base64.b64encode(sig).decode(),
+    return {
+        "identity_pub_b64": base64.b64encode(ik_pub_bytes).decode(),
+        "dh_pub_b64":       base64.b64encode(dh_pub_bytes).decode(),
+        "key_sig_b64":      base64.b64encode(sig).decode(),
     }
-    return bundle, ik_pub_bytes, spk_pub_bytes
 
 
 # ── Seed logic ────────────────────────────────────────────────────────────────
 async def register_user(
     client: httpx.AsyncClient,
     user: dict,
+    totp_secrets: dict[str, str],
 ) -> Session:
+    """
+    Register (if needed) and login a seed user.
+    totp_secrets is a mutable dict used to persist TOTP secrets across re-runs.
+    """
     username = user["username"]
     password = user["password"]
+    totp_secret = ""
 
-    # Try register
+    # Try register — includes key bundle in the same request
+    bundle = _gen_key_bundle()
     try:
         resp = await api(client, "POST", "/v1/auth/register", json={
             "username": username,
             "password": password,
+            **bundle,
         })
-        totp_secret = resp.get("totp_secret", "")
+        # Server returns totp_provisioning_uri, extract secret from it
+        uri = resp.get("totp_provisioning_uri", "")
+        # URI format: otpauth://totp/ISSUER:user?secret=BASE32SECRET&...
+        import urllib.parse
+        qs = urllib.parse.parse_qs(urllib.parse.urlparse(uri).query)
+        totp_secret = qs.get("secret", [""])[0]
+        totp_secrets[username] = totp_secret
         totp_file = save_totp_md(username, totp_secret)
         info(f"  Registered {username!r} | TOTP → {totp_file}")
     except RuntimeError as exc:
         if "409" in str(exc) or "already" in str(exc).lower():
             warn(f"  {username!r} already exists — skipping register")
-            totp_secret = ""
+            totp_secret = totp_secrets.get(username, "")
+            if not totp_secret:
+                error(f"  No saved TOTP secret for {username!r} — cannot login. Run with --clean to reset.")
+                raise RuntimeError(f"No TOTP secret for existing user {username!r}") from exc
         else:
             raise
 
-    # Login (no TOTP for seed users — server skips if totp_enabled=False)
+    # Generate TOTP code for login
+    try:
+        import pyotp
+        totp_code = pyotp.TOTP(totp_secret).now()
+    except ImportError:
+        error("pyotp is required for login. Run: uv add pyotp")
+        raise
+
     resp = await api(client, "POST", "/v1/auth/login", json={
         "username": username,
         "password": password,
+        "totp_code": totp_code,
     })
-    token   = resp["access_token"]
-    user_id = resp.get("user_id", "")
-    info(f"  Logged in  {username!r} (user_id={user_id[:8]}…)")
+    token = resp["access_token"]
+    info(f"  Logged in  {username!r}")
 
-    # Upload key bundle
-    bundle, _, _ = _gen_key_bundle()
-    try:
-        await api(client, "POST", "/v1/keys/upload", token=token, json=bundle)
-        info(f"  Keys uploaded for {username!r}")
-    except RuntimeError as exc:
-        if "409" in str(exc) or "already" in str(exc).lower():
-            warn(f"  Keys already uploaded for {username!r}")
-        else:
-            raise
+    # Fetch user_id from keys endpoint (server doesn't return it on login)
+    keys_resp = await api(client, "GET", f"/v1/keys/{username}", token=token)
+    user_id = keys_resp.get("user_id", "")
+    info(f"  Resolved   {username!r} → user_id={user_id[:8]}…")
 
     return Session(
         username=username,
@@ -297,57 +326,73 @@ async def setup_friendships(
                     warn(f"  Friendship {uname!r}↔{friend!r} skipped: {exc}")
 
 
+def _make_conversation_id(user_a: str, user_b: str) -> str:
+    import hashlib
+    pair = "|".join(sorted([user_a, user_b])).encode()
+    return hashlib.sha256(pair).hexdigest()[:16]
+
+
+def _encrypt_seed_message(text: str) -> tuple[str, str]:
+    """
+    Encrypt seed message text with AES-256-GCM using a random key.
+    Returns (nonce_b64, ciphertext_b64).
+    This is real encryption but with a throwaway key — seed data only.
+    """
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+    import base64, os as _os
+
+    key   = _os.urandom(32)
+    nonce = _os.urandom(12)
+    ct    = AESGCM(key).encrypt(nonce, text.encode(), None)
+    return base64.b64encode(nonce).decode(), base64.b64encode(ct).decode()
+
+
 async def send_mock_messages(
     client: httpx.AsyncClient,
     sessions: dict[str, Session],
     users: list[dict],
 ) -> None:
     """
-    Send mock messages via the API.
-    Messages are sent as plaintext wrapped in a minimal envelope
-    (seed data only — not real E2EE, for demo/dev purposes).
+    Send mock messages via the API using the correct MessageEnvelope format.
+    Messages are encrypted with a throwaway key (seed data — not real E2EE).
     """
-    import base64, os as _os
+    import uuid
+
+    # Per-pair counters so replay protection doesn't reject sequential messages
+    counters: dict[tuple[str, str], int] = {}
 
     for user in users:
         uname = user["username"]
-        sess  = sessions[uname]
+        sess  = sessions.get(uname)
+        if sess is None:
+            continue
 
         for (recipient, text) in user.get("messages_to", []):
-            if recipient not in sessions:
+            rsess = sessions.get(recipient)
+            if rsess is None:
                 warn(f"  Recipient {recipient!r} not in seed list — skipping")
                 continue
 
-            # Get recipient's keys to find conversation_id
-            try:
-                keys_resp = await api(
-                    client, "GET", f"/v1/keys/{recipient}",
-                    token=sess.token,
-                )
-            except RuntimeError as exc:
-                warn(f"  Cannot get keys for {recipient!r}: {exc}")
-                continue
+            conv_id = _make_conversation_id(sess.user_id, rsess.user_id)
+            pair_key = (sess.user_id, rsess.user_id)
+            counter = counters.get(pair_key, 0)
+            counters[pair_key] = counter + 1
 
-            # Build a minimal envelope (seed placeholder — plaintext base64)
-            # Real clients use full X25519/AES-GCM; this is dev seed data only
-            payload = base64.b64encode(text.encode()).decode()
-            nonce   = base64.b64encode(_os.urandom(12)).decode()
-            now     = int(time.time())
-
-            # Derive conversation_id (same logic as client/crypto/session.py)
-            ids = sorted([sess.user_id, sessions[recipient].user_id])
-            conv_id = f"{ids[0]}_{ids[1]}"
+            nonce_b64, ciphertext_b64 = _encrypt_seed_message(text)
+            now = int(time.time())
 
             envelope = {
-                "conversation_id": conv_id,
+                "id":              str(uuid.uuid4()),
+                "type":            "message",
                 "sender_id":       sess.user_id,
-                "recipient_id":    sessions[recipient].user_id,
-                "ciphertext":      payload,
-                "nonce":           nonce,
-                "sender_identity_key": keys_resp.get("identity_key", ""),
-                "counter":         0,
+                "recipient_id":    rsess.user_id,
+                "conversation_id": conv_id,
+                "counter":         counter,
+                "nonce_b64":       nonce_b64,
+                "ciphertext_b64":  ciphertext_b64,
+                "eph_pub_b64":     None,
+                "ttl_seconds":     None,
                 "sent_at":         now,
-                "ttl":             86400,
             }
 
             try:
@@ -412,14 +457,18 @@ async def main() -> None:
             sys.exit(1)
 
         sessions: dict[str, Session] = {}
+        # Persists TOTP secrets across re-runs (needed to login existing users)
+        totp_secrets: dict[str, str] = _load_totp_secrets()
 
         header("Registering users")
         for user in SEED_USERS:
             try:
-                sess = await register_user(client, user)
+                sess = await register_user(client, user, totp_secrets)
                 sessions[user["username"]] = sess
             except Exception as exc:
                 error(f"  Failed to register {user['username']!r}: {exc}")
+
+        _save_totp_secrets(totp_secrets)
 
         header("Setting up friendships")
         await setup_friendships(client, sessions, SEED_USERS)
