@@ -71,10 +71,11 @@ class IMApp(App):
 
     TITLE = "COMP3334 Secure IM"
 
-    def __init__(self, server_url: str, username: str) -> None:
+    def __init__(self, server_url: str, username: str, verify_tls: bool = True) -> None:
         super().__init__()
         self._server_url = server_url
         self._username   = username
+        self._verify_tls = verify_tls
         self._client: IMClient | None = None
         self._local_keys: LocalKeys | None = None
         self._password: str | None = None
@@ -110,7 +111,7 @@ class IMApp(App):
         # Capture screen reference NOW before any await displaces it
         login_screen = self.screen  # LoginScreen is current screen at this point
 
-        self._client = IMClient(self._server_url)
+        self._client = IMClient(self._server_url, verify_tls=self._verify_tls)
         await self._client.__aenter__()
 
         try:
@@ -193,7 +194,7 @@ class IMApp(App):
         key_sig     = make_key_signature(identity_kp, dh_kp)
         local_keys  = LocalKeys(identity_kp=identity_kp, dh_kp=dh_kp, key_sig=key_sig)
 
-        client = IMClient(self._server_url)
+        client = IMClient(self._server_url, verify_tls=self._verify_tls)
         async with client:
             try:
                 resp = await client.register(RegisterRequest(
@@ -579,8 +580,6 @@ class IMApp(App):
                 await self._client.send_ack(DeliveryAck(
                     message_id=envelope.id,
                     conversation_id=conv_id,
-                    ack_nonce_b64="",
-                    ack_ct_b64="",
                 ))
             except Exception:
                 pass

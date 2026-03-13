@@ -53,6 +53,14 @@ def main() -> None:
     parser.add_argument("--username", default=None, help="Username (prompted if omitted or from USERNAME env)")
     parser.add_argument("--log-dir", default=None, help="Directory for log files (default: ./logs)")
     parser.add_argument("--verbose", "-v", action="store_true", help="Print DEBUG logs to stderr as well")
+    parser.add_argument(
+        "--verify-tls", dest="verify_tls", action="store_true", default=True,
+        help="Verify server TLS certificate (default: enabled)",
+    )
+    parser.add_argument(
+        "--no-verify-tls", dest="verify_tls", action="store_false",
+        help="Disable TLS certificate verification (dev only, self-signed certs)",
+    )
     args = parser.parse_args()
 
     log_dir = Path(args.log_dir) if args.log_dir else Path("logs")
@@ -66,7 +74,7 @@ def main() -> None:
 
     from client.ui.app import IMApp
     try:
-        IMApp(server_url=server, username=username).run()
+        IMApp(server_url=server, username=username, verify_tls=args.verify_tls).run()
     except KeyboardInterrupt:
         log.info("Client shut down by user (KeyboardInterrupt)")
 

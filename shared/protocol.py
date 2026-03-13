@@ -189,13 +189,14 @@ class FetchMessagesResponse(BaseModel):
 class DeliveryAck(BaseModel):
     """
     Recipient sends this after successfully decrypting a message.
-    The ack itself is encrypted so the server cannot correlate
-    decryption success with specific messages (best-effort).
+    The ACK is plaintext — the server learns which message was decrypted.
+    This is a known metadata exposure documented in ARCHITECTURE.md §14.
+    Encrypting the ACK payload would require the server to forward opaque
+    blobs to the sender, adding complexity without meaningful privacy gain
+    (the server already knows sender, recipient, and timing).
     """
     message_id:      str
     conversation_id: str
-    ack_nonce_b64:   str       # encrypted ack payload nonce
-    ack_ct_b64:      str       # encrypted ack payload (contains message_id)
 
 
 # ---------------------------------------------------------------------------

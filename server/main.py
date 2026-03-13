@@ -7,6 +7,7 @@ accurate TTL cleanup, and health/readiness probes.
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import signal
 import time
@@ -137,17 +138,36 @@ app.include_router(conv_router)
 @app.websocket("/v1/ws")
 async def ws_endpoint(websocket: WebSocket) -> None:
     """
-    WebSocket connection. Client passes ?token=<bearer_token> in the URL.
-    Authorization header is not available in WS handshake on most clients.
+    WebSocket connection with first-frame authentication.
+
+    Why first-frame auth instead of query-parameter token:
+      Tokens in ?token=<token> appear in server access logs, proxy logs,
+      and potentially browser history. Sending the token as the first
+      WebSocket frame after the TLS handshake keeps it out of URL-based
+      logging. The trade-off is slightly more complex handshake code.
     """
-    token = websocket.query_params.get("token")
-    if not token:
+    await websocket.accept()
+
+    # Wait for auth frame (5-second timeout to prevent idle connections)
+    try:
+        raw = await asyncio.wait_for(websocket.receive_text(), timeout=5.0)
+    except (asyncio.TimeoutError, Exception):
+        await websocket.close(code=4001)
+        return
+
+    try:
+        auth_msg = json.loads(raw)
+    except (ValueError, TypeError):
+        await websocket.close(code=4001)
+        return
+
+    if auth_msg.get("type") != "auth" or not auth_msg.get("token"):
         await websocket.close(code=4001)
         return
 
     from server.core.security import hash_token
 
-    token_hash = hash_token(token)
+    token_hash = hash_token(auth_msg["token"])
     now = int(time.time())
     db = await get_db()
     async with db.execute(

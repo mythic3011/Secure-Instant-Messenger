@@ -229,7 +229,7 @@ async def test_full_e2e_message_flow(app_client: AsyncClient):
 
     # 12. Bob sends ACK
     resp = await client.post("/v1/messages/ack",
-        json={"message_id": msg_id, "conversation_id": conv_id, "ack_nonce_b64": "", "ack_ct_b64": ""},
+        json={"message_id": msg_id, "conversation_id": conv_id},
         headers=_auth(bob_token),
     )
     assert resp.status_code == 204, resp.text

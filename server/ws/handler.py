@@ -43,10 +43,12 @@ async def push_to_user(user_id: str, payload: dict) -> bool:
 async def websocket_endpoint(websocket: WebSocket, user_id: str) -> None:
     """
     Handle a WebSocket connection for an authenticated user.
+    Connection is already accepted and authenticated by ws_endpoint() in main.py.
     On connect: deliver any queued offline messages.
     On message: handle delivery ACKs from client.
     """
-    await websocket.accept()
+    # websocket.accept() already called by ws_endpoint() in main.py
+    # after first-frame authentication succeeded.
 
     async with _lock:
         _connections[user_id] = websocket

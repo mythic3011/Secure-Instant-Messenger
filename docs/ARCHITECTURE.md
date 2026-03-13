@@ -21,6 +21,7 @@
 11. [Stack & File Structure](#11-stack--file-structure)
 12. [Database Schema](#12-database-schema)
 13. [CI / Deploy](#13-ci--deploy)
+14. [Security Limitations & Trade-offs](#14-security-limitations--trade-offs)
 
 ---
 
@@ -688,4 +689,52 @@ Mirrors CI locally. Checks prerequisites, runs tests, builds Docker image, waits
 *Threat model: HbC server + network attacker + malicious users*
 *Crypto: X25519 + HKDF-SHA256 + AES-256-GCM + Ed25519 + Argon2id + TOTP*
 *All primitives from well-reviewed libraries — no custom crypto*
-*Last updated: 2026-03-12*
+*Last updated: 2026-03-13*
+
+---
+
+## 14. Security Limitations & Trade-offs
+
+This section documents known limitations. These are intentional trade-offs made for implementation simplicity within the project scope, not oversights.
+
+### 14.1 No Per-Message Forward Secrecy
+
+The 2-DH protocol provides forward secrecy for the initial key exchange (the ephemeral key is discarded after session establishment), but subsequent messages reuse the cached session key with only a counter increment. If the session key is compromised (e.g., via memory dump on the client), all past and future messages in that conversation are exposed.
+
+**Mitigation in a production system:** Implement the Double Ratchet algorithm (as in Signal) to derive a new symmetric key for each message. This was not implemented due to the significant complexity of handling out-of-order messages, lost messages, and ratchet state persistence.
+
+### 14.2 Static DH Key Reuse Across Conversations
+
+The X25519 DH keypair is long-term and used as the static-static component (DH1) in every conversation. If this key is compromised, the DH1 component is broken for all conversations. The ephemeral-static component (DH2) still provides per-session uniqueness, but the blast radius of a static key compromise is all conversations.
+
+**Mitigation in a production system:** Use per-conversation one-time pre-keys (as in Signal's X3DH) so that compromising one pre-key affects only one conversation.
+
+### 14.3 Metadata Exposure to Honest-but-Curious Server
+
+The server learns:
+- **Contact graph:** who talks to whom (friendship table + message routing)
+- **Timing:** when messages are sent, delivered, and acknowledged
+- **Message sizes:** approximate plaintext length (ciphertext size minus GCM overhead)
+- **Online status:** WebSocket connection state
+- **Delivery ACKs:** which specific messages were successfully decrypted (ACK is plaintext; see `DeliveryAck` docstring in `shared/protocol.py` for rationale)
+- **Conversation IDs:** deterministic (`SHA256(sorted(user_a, user_b))[:16]`), so anyone who knows two user IDs can compute their conversation ID
+
+**Mitigation in a production system:** Metadata-resistant messaging requires techniques like sealed sender (Signal), onion routing, or private information retrieval — all far beyond the scope of this project.
+
+### 14.4 No Key Rotation Mechanism
+
+There is no way to rotate the long-term identity key (Ed25519) or DH key (X25519) without re-registering. If a key is suspected compromised, the user must create a new account.
+
+**Mitigation in a production system:** Implement key rotation with a signed key update message that chains the old identity to the new one, allowing contacts to verify the transition.
+
+### 14.5 Self-Destruct Limitations
+
+The TTL-based self-destruct (R10–R12) is best-effort:
+- Cannot prevent screenshots or screen recording
+- A malicious client can ignore TTL and retain messages indefinitely
+- Server-side deletion runs on a configurable interval (default 300s), so messages may persist briefly past expiry
+- Client-side deletion depends on the app running; messages on disk persist until next launch
+
+### 14.6 Deterministic Conversation ID
+
+`make_conversation_id(a, b) = SHA256(sorted(a, b))[:16]` is deterministic. Under the HbC model this is acceptable (the server already knows both participants), but any party who knows two user IDs can compute whether a conversation exists between them. This does not leak message content but could confirm social connections.

@@ -37,27 +37,34 @@ log = logging.getLogger(__name__)
 MessageCallback = Callable[[dict], Awaitable[None]]
 
 
-def _make_ssl_ctx() -> ssl.SSLContext:
-    """Return an SSL context that accepts self-signed certs (dev only)."""
+def _make_ssl_ctx(verify: bool = True) -> ssl.SSLContext:
+    """
+    Return an SSL context for WebSocket connections.
+    When verify=False (dev only with self-signed certs), hostname checking
+    and certificate verification are disabled. In production, use verify=True
+    with a proper CA-signed certificate.
+    """
     ctx = ssl.create_default_context()
-    ctx.check_hostname = False
-    ctx.verify_mode = ssl.CERT_NONE
+    if not verify:
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
     return ctx
 
 
 class IMClient:
-    def __init__(self, base_url: str) -> None:
+    def __init__(self, base_url: str, verify_tls: bool = True) -> None:
         self._base_url = base_url.rstrip("/")
         self._token: str | None = None
         self._http: httpx.AsyncClient | None = None
         self._ws_task: asyncio.Task | None = None
         self._on_message: MessageCallback | None = None
+        self._verify_tls = verify_tls
 
     async def __aenter__(self) -> "IMClient":
         self._http = httpx.AsyncClient(
             base_url=self._base_url,
             timeout=10.0,
-            verify=False,  # self-signed cert in dev
+            verify=self._verify_tls,
             trust_env=False,
         )
         return self
@@ -175,15 +182,18 @@ class IMClient:
     async def _ws_loop(self) -> None:
         """WebSocket listener with automatic reconnect."""
         ws_url = self._base_url.replace("https://", "wss://").replace("http://", "ws://")
-        ws_url = f"{ws_url}/v1/ws?token={self._token}"
+        ws_url = f"{ws_url}/v1/ws"
         use_tls = ws_url.startswith("wss://")
-        ssl_ctx = _make_ssl_ctx() if use_tls else None
+        ssl_ctx = _make_ssl_ctx(verify=self._verify_tls) if use_tls else None
 
         retry_count = 0
         while True:
             try:
-                log.debug("WS connecting to %s (attempt #%d)", ws_url.split('?')[0], retry_count + 1)
+                log.debug("WS connecting to %s (attempt #%d)", ws_url, retry_count + 1)
                 async with websockets.connect(ws_url, ssl=ssl_ctx, proxy=None) as ws:
+                    # First-frame auth: send token in the WebSocket payload,
+                    # not the URL, to keep it out of server/proxy access logs.
+                    await ws.send(json.dumps({"type": "auth", "token": self._token}))
                     retry_count = 0
                     log.info("WebSocket connected")
                     async for raw in ws:

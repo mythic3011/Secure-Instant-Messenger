@@ -169,6 +169,16 @@ def compute_fingerprint(my_pub: bytes, their_pub: bytes) -> str:
 
 # ---------------------------------------------------------------------------
 # Session establishment — 2-DH + HKDF
+#
+# Why 2-DH and not X3DH or Double Ratchet:
+#   X3DH requires a server-managed one-time pre-key bundle with replenishment
+#   logic. Double Ratchet requires per-message ratchet state and out-of-order
+#   message handling. Both add significant complexity. Our 2-DH (static-static
+#   + ephemeral-static) provides forward secrecy for the initial exchange via
+#   the ephemeral key, but reuses the session key for subsequent messages.
+#   Trade-off: simpler implementation at the cost of no per-message forward
+#   secrecy. If the session key leaks, all messages in that conversation are
+#   exposed. This is documented in ARCHITECTURE.md §14.
 # ---------------------------------------------------------------------------
 
 @dataclass
@@ -265,7 +275,14 @@ def _hkdf_derive(
     HKDF-SHA256 derivation.
     Salt and info are protocol constants — never empty.
     """
+    # Salt is a fixed protocol constant — not secret, but ensures domain
+    # separation from other HKDF uses. Using a non-empty salt is recommended
+    # by RFC 5869 §3.1.
     salt = f"{KDF_INFO_PREFIX}-salt".encode()
+    # Info binds the derived key to this specific conversation between these
+    # specific users. Even if two conversations share the same DH output
+    # (e.g., same static keys), the derived session keys will differ because
+    # info differs. This prevents cross-conversation key reuse.
     info = f"{KDF_INFO_PREFIX}:{initiator_id}:{responder_id}:{conversation_id}".encode()
 
     return HKDF(
@@ -384,6 +401,15 @@ class IdentityKeyCache:
 
 # ---------------------------------------------------------------------------
 # Replay protection
+#
+# Why replay window is 50:
+#   The window must be large enough to tolerate out-of-order delivery
+#   (e.g., messages arriving via offline queue in non-sequential order)
+#   but small enough that an attacker cannot stockpile old messages for
+#   delayed replay. 50 is a practical balance — Signal uses a similar
+#   window size. The counter is also bound in AES-GCM AD, so forging
+#   a counter value causes an InvalidTag error even if it passes the
+#   window check.
 # ---------------------------------------------------------------------------
 
 class ReplayProtector:

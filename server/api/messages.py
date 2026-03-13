@@ -111,7 +111,12 @@ async def send_message(
         (conv_id, ca, cb),
     )
 
-    # Insert message — UNIQUE(conversation_id, sender_id, counter) prevents replay
+    # Server-side replay prevention: the UNIQUE(conversation_id, sender_id, counter)
+    # constraint rejects duplicate counters at the DB level. This is the second
+    # layer of replay defense — the client also checks counters locally. Having
+    # both layers means a compromised client cannot replay messages to other
+    # clients through the server, and a compromised server cannot replay
+    # messages to clients (client-side check catches it).
     try:
         await db.execute(
             """INSERT INTO messages

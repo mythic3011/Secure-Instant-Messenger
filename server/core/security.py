@@ -20,6 +20,15 @@ from server.core.config import get_settings
 
 # ---------------------------------------------------------------------------
 # Password hashing — Argon2id
+#
+# Why Argon2id with t=3, m=64MiB, p=1:
+#   Argon2id is the PHC winner and recommended by OWASP. The 'id' variant
+#   combines Argon2i (side-channel resistant) and Argon2d (GPU resistant).
+#   Parameters follow OWASP's "first recommended option":
+#     t=3 iterations, m=64MiB memory, p=1 parallelism.
+#   Higher memory cost is the primary defense against GPU/ASIC attacks.
+#   p=1 is sufficient for a single-server deployment; higher parallelism
+#   would reduce wall-clock time but increase peak memory per request.
 # ---------------------------------------------------------------------------
 
 # OWASP recommended parameters
@@ -59,6 +68,15 @@ def verify_password(password: str, pw_hash: str) -> bool:
 
 # ---------------------------------------------------------------------------
 # Bearer token — opaque, SHA256-hashed in DB
+#
+# Why opaque tokens over JWT:
+#   1. Instant revocation — revoking a JWT requires a blocklist or short expiry
+#      with refresh tokens, adding complexity. Opaque tokens are revoked by
+#      flipping revoked=1 in the DB, effective immediately.
+#   2. SHA256 in DB — if the DB is stolen, the attacker gets hashes, not tokens.
+#      JWT secrets in the DB would allow forging new tokens.
+#   3. No key management — RS256 JWT requires RSA key rotation. We already have
+#      a DB for every request, so stateless verification adds no benefit.
 # ---------------------------------------------------------------------------
 
 def generate_token() -> tuple[str, str]:
@@ -145,58 +163,58 @@ def verify_totp(secret: str, code: str) -> bool:
 
 async def check_rate_limit(key: str, max_attempts: int, window_seconds: int) -> bool:
     """
-    Check and increment rate limit counter for a given key.
+    Atomic rate limit check using INSERT ... ON CONFLICT (upsert).
     Returns True if the request is allowed, False if rate-limited.
     key format: "login:<ip>" or "register:<ip>"
+
+    Why upsert instead of the previous SELECT-then-UPDATE:
+      The old implementation had a TOCTOU race — two concurrent requests
+      could both read attempts=4 (below max=5) and both pass, exceeding
+      the limit. The upsert makes the read-check-write a single SQL
+      statement, which SQLite executes under its internal write lock.
     """
     from server.core.database import get_db
     db = await get_db()
     now = int(time.time())
 
+    # Fast path: if currently locked out, reject without writing
     async with db.execute(
-        "SELECT attempts, window_start, locked_until FROM rate_limits WHERE key = ?",
-        (key,),
+        "SELECT locked_until FROM rate_limits WHERE key = ?", (key,),
+    ) as cur:
+        row = await cur.fetchone()
+    if row and row["locked_until"] and now < row["locked_until"]:
+        return False
+
+    # Atomic upsert — increment or reset window in one statement.
+    # SQLite's ON CONFLICT executes atomically under the write lock.
+    await db.execute(
+        """INSERT INTO rate_limits (key, attempts, window_start, locked_until)
+           VALUES (?1, 1, ?2, NULL)
+           ON CONFLICT(key) DO UPDATE SET
+               attempts = CASE
+                   WHEN ?2 - rate_limits.window_start > ?3 THEN 1
+                   ELSE rate_limits.attempts + 1
+               END,
+               window_start = CASE
+                   WHEN ?2 - rate_limits.window_start > ?3 THEN ?2
+                   ELSE rate_limits.window_start
+               END,
+               locked_until = CASE
+                   WHEN ?2 - rate_limits.window_start <= ?3
+                        AND rate_limits.attempts + 1 > ?4
+                   THEN ?2 + ?3
+                   ELSE NULL
+               END""",
+        (key, now, window_seconds, max_attempts),
+    )
+    await db.commit()
+
+    # Read back to determine if this request was allowed
+    async with db.execute(
+        "SELECT attempts, locked_until FROM rate_limits WHERE key = ?", (key,),
     ) as cur:
         row = await cur.fetchone()
 
-    if row is None:
-        # First attempt
-        await db.execute(
-            "INSERT INTO rate_limits (key, attempts, window_start) VALUES (?, 1, ?)",
-            (key, now),
-        )
-        await db.commit()
-        return True
-
-    locked_until = row["locked_until"]
-    if locked_until and now < locked_until:
-        return False  # still locked
-
-    window_start = row["window_start"]
-    attempts     = row["attempts"]
-
-    if now - window_start > window_seconds:
-        # Window expired — reset
-        await db.execute(
-            "UPDATE rate_limits SET attempts = 1, window_start = ?, locked_until = NULL WHERE key = ?",
-            (now, key),
-        )
-        await db.commit()
-        return True
-
-    if attempts >= max_attempts:
-        # Lock out
-        locked_until = now + window_seconds
-        await db.execute(
-            "UPDATE rate_limits SET locked_until = ? WHERE key = ?",
-            (locked_until, key),
-        )
-        await db.commit()
+    if row and row["locked_until"] and now < row["locked_until"]:
         return False
-
-    await db.execute(
-        "UPDATE rate_limits SET attempts = attempts + 1 WHERE key = ?",
-        (key,),
-    )
-    await db.commit()
-    return True
+    return row["attempts"] <= max_attempts if row else True
