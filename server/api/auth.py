@@ -117,6 +117,9 @@ async def register(body: RegisterRequest, request: Request) -> RegisterResponse:
         (body.username, pw_hash),
     ) as cur:
         row = await cur.fetchone()
+        log.info("user_created", username=body.username, client_ip=client_ip)
+    if row is None:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to create user")
     user_id = row["id"]
 
     # Encrypt TOTP secret with user_id as AD
