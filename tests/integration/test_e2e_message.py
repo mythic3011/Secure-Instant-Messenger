@@ -19,7 +19,6 @@ from httpx import ASGITransport, AsyncClient
 from client.crypto.session import (
     DHKeypair,
     IdentityKeypair,
-    RatchetChain,
     ReplayProtector,
     build_and_encrypt,
     decrypt_envelope,
