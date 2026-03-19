@@ -32,8 +32,13 @@ if [ ! -f "$CERT_FILE" ] || [ ! -f "$KEY_FILE" ]; then
     2>/dev/null
     chmod 600 "$KEY_FILE"
     echo "[entrypoint] TLS cert ready at $CERT_FILE"
+    FINGERPRINT=$(openssl x509 -in "$CERT_FILE" -outform DER | sha256sum | cut -d' ' -f1)
+    echo "[entrypoint] Cert SHA256 pin: $FINGERPRINT"
+    echo "[entrypoint] Use: --ca-cert $CERT_FILE  or  --pin-cert $FINGERPRINT"
 else
     echo "[entrypoint] TLS cert already exists at $CERT_FILE"
+    FINGERPRINT=$(openssl x509 -in "$CERT_FILE" -outform DER | sha256sum | cut -d' ' -f1)
+    echo "[entrypoint] Cert SHA256 pin: $FINGERPRINT"
 fi
 
 # ── Exec server ─────────────────────────────────────────────────────────────

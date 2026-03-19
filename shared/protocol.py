@@ -25,6 +25,7 @@ NONCE_BYTES      = 12     # AES-GCM nonce size
 KEY_BYTES        = 32     # AES-256 key size
 MAX_MESSAGE_BYTES = 64_000  # ~64 KB plaintext limit
 REPLAY_WINDOW    = 50     # accept counters within last 50 of max seen
+MAX_SKIP         = 50     # max skipped messages in ratchet chain
 
 
 # ---------------------------------------------------------------------------
@@ -127,6 +128,7 @@ class MessageEnvelope(BaseModel):
     ciphertext_b64:  str          # base64(AES-256-GCM output)
     eph_pub_b64:     str | None = None   # X25519 ephemeral pub, first message only
     conv_dh_pub_b64: str | None = None   # X25519 per-conversation DH pub, first message only
+    chain_index:     int = 0             # ratchet chain index for this message
     ttl_seconds:     int | None = None   # None = no expiry
     sent_at:         int          # unix timestamp (client clock)
     delivery_status: DeliveryStatus = DeliveryStatus.SENT

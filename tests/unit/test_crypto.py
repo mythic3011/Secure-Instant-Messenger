@@ -18,12 +18,14 @@ from client.crypto.session import (
     IdentityKeyCache,
     IdentityKeypair,
     KeyChangeWarning,
+    RatchetChain,
     ReplayError,
     ReplayProtector,
     SessionKey,
     compute_fingerprint,
     decrypt_envelope,
     decrypt_message,
+    derive_ratchet_chains,
     derive_session_key_as_initiator,
     derive_session_key_as_responder,
     encrypt_message,
@@ -135,18 +137,21 @@ def _make_session(alice_id="alice", bob_id="bob"):
         conversation_id=conv_id,
     )
 
-    return alice_sk, bob_sk, conv_id
+    alice_send, alice_recv = derive_ratchet_chains(alice_sk.raw, initiator=True)
+    bob_send,   bob_recv   = derive_ratchet_chains(bob_sk.raw,   initiator=False)
+
+    return alice_sk, bob_sk, conv_id, alice_send, alice_recv, bob_send, bob_recv
 
 
 def test_session_key_both_sides_match():
-    alice_sk, bob_sk, _ = _make_session()
+    alice_sk, bob_sk, _, _, _, _, _ = _make_session()
     assert alice_sk.raw == bob_sk.raw
     assert len(alice_sk.raw) == 32
 
 
 def test_session_key_different_conversations():
-    alice_sk1, _, _ = _make_session("alice", "bob")
-    alice_sk2, _, _ = _make_session("alice", "carol")
+    alice_sk1, _, _, _, _, _, _ = _make_session("alice", "bob")
+    alice_sk2, _, _, _, _, _, _ = _make_session("alice", "carol")
     assert alice_sk1.raw != alice_sk2.raw
 
 
@@ -233,11 +238,11 @@ def test_replay_protector_serialise_roundtrip():
 # ---------------------------------------------------------------------------
 
 def test_build_and_decrypt_envelope():
-    alice_sk, bob_sk, conv_id = _make_session()
+    alice_sk, bob_sk, conv_id, alice_send, alice_recv, bob_send, bob_recv = _make_session()
     import time
 
     env = build_and_encrypt(
-        session_key=alice_sk,
+        send_chain=alice_send,
         plaintext="hello bob",
         sender_id="alice",
         recipient_id="bob",
@@ -248,16 +253,16 @@ def test_build_and_decrypt_envelope():
     )
 
     rp = ReplayProtector()
-    plaintext = decrypt_envelope(session_key=bob_sk, envelope=env, replay_protector=rp)
+    plaintext = decrypt_envelope(recv_chain=bob_recv, envelope=env, replay_protector=rp)
     assert plaintext == "hello bob"
 
 
 def test_decrypt_envelope_replay_rejected():
-    alice_sk, bob_sk, conv_id = _make_session()
+    alice_sk, bob_sk, conv_id, alice_send, alice_recv, bob_send, bob_recv = _make_session()
     import time
 
     env = build_and_encrypt(
-        session_key=alice_sk,
+        send_chain=alice_send,
         plaintext="hello",
         sender_id="alice",
         recipient_id="bob",
@@ -268,9 +273,84 @@ def test_decrypt_envelope_replay_rejected():
     )
 
     rp = ReplayProtector()
-    decrypt_envelope(session_key=bob_sk, envelope=env, replay_protector=rp)
+    decrypt_envelope(recv_chain=bob_recv, envelope=env, replay_protector=rp)
     with pytest.raises(ReplayError):
-        decrypt_envelope(session_key=bob_sk, envelope=env, replay_protector=rp)
+        decrypt_envelope(recv_chain=bob_recv, envelope=env, replay_protector=rp)
+
+
+# ---------------------------------------------------------------------------
+# Ratchet chain tests
+# ---------------------------------------------------------------------------
+
+def test_ratchet_each_message_different_key():
+    """Each message must use a different key — forward secrecy."""
+    import time
+    alice_sk, bob_sk, conv_id, alice_send, alice_recv, bob_send, bob_recv = _make_session()
+
+    envs = []
+    for i in range(3):
+        env = build_and_encrypt(
+            send_chain=alice_send,
+            plaintext=f"message {i}",
+            sender_id="alice",
+            recipient_id="bob",
+            conversation_id=conv_id,
+            counter=i,
+            ttl_seconds=None,
+            sent_at=int(time.time()),
+        )
+        envs.append(env)
+
+    # All nonces differ (different keys → different ciphertexts)
+    nonces = [e.nonce_b64 for e in envs]
+    assert len(set(nonces)) == 3, "Each message must use a unique nonce"
+
+    # Bob can decrypt all in order
+    rp = ReplayProtector()
+    for i, env in enumerate(envs):
+        pt = decrypt_envelope(recv_chain=bob_recv, envelope=env, replay_protector=rp)
+        assert pt == f"message {i}"
+
+
+def test_ratchet_out_of_order_within_window():
+    """Out-of-order messages within MAX_SKIP must be decryptable."""
+    import time
+    alice_sk, bob_sk, conv_id, alice_send, alice_recv, bob_send, bob_recv = _make_session()
+
+    # Alice sends 3 messages
+    envs = []
+    for i in range(3):
+        env = build_and_encrypt(
+            send_chain=alice_send,
+            plaintext=f"msg {i}",
+            sender_id="alice",
+            recipient_id="bob",
+            conversation_id=conv_id,
+            counter=i,
+            ttl_seconds=None,
+            sent_at=int(time.time()),
+        )
+        envs.append(env)
+
+    # Bob receives them out of order: 2, 0, 1
+    rp = ReplayProtector()
+    pt2 = decrypt_envelope(recv_chain=bob_recv, envelope=envs[2], replay_protector=rp)
+    assert pt2 == "msg 2"
+    pt0 = decrypt_envelope(recv_chain=bob_recv, envelope=envs[0], replay_protector=rp)
+    assert pt0 == "msg 0"
+    pt1 = decrypt_envelope(recv_chain=bob_recv, envelope=envs[1], replay_protector=rp)
+    assert pt1 == "msg 1"
+
+
+def test_ratchet_chain_serialise_roundtrip():
+    """RatchetChain.as_dict / from_dict must preserve state."""
+    chain = RatchetChain(chain_key=os.urandom(32))
+    chain.advance()
+    chain.advance()
+    d = chain.as_dict()
+    chain2 = RatchetChain.from_dict(d)
+    assert chain2.chain_key == chain.chain_key
+    assert chain2.index == chain.index
 
 
 # ---------------------------------------------------------------------------

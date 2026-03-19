@@ -59,7 +59,15 @@ def main() -> None:
     )
     parser.add_argument(
         "--no-verify-tls", dest="verify_tls", action="store_false",
-        help="Disable TLS certificate verification (dev only, self-signed certs)",
+        help="Disable TLS certificate verification (insecure; use --ca-cert instead)",
+    )
+    parser.add_argument(
+        "--ca-cert", default=None,
+        help="Path to CA cert or self-signed cert to trust (use instead of --no-verify-tls)",
+    )
+    parser.add_argument(
+        "--pin-cert", default=None,
+        help="Expected SHA256 fingerprint of server cert (hex, 64 chars) for cert pinning",
     )
     args = parser.parse_args()
 
@@ -74,7 +82,13 @@ def main() -> None:
 
     from client.ui.app import IMApp
     try:
-        IMApp(server_url=server, username=username, verify_tls=args.verify_tls).run()
+        IMApp(
+            server_url=server,
+            username=username,
+            verify_tls=args.verify_tls,
+            ca_cert=args.ca_cert,
+            pin_sha256=args.pin_cert,
+        ).run()
     except KeyboardInterrupt:
         log.info("Client shut down by user (KeyboardInterrupt)")
 

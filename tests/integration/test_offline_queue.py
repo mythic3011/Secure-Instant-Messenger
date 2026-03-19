@@ -26,6 +26,7 @@ from client.crypto.session import (
     ReplayProtector,
     build_and_encrypt,
     decrypt_envelope,
+    derive_ratchet_chains,
     derive_session_key_as_initiator,
     derive_session_key_as_responder,
     make_key_signature,
@@ -130,9 +131,10 @@ async def test_offline_queue_store_and_forward(app_client):
         peer_identity_pub_bytes=bob_id_pub, peer_dh_pub_bytes=bob_dh_pub,
         my_user_id=alice_id, peer_user_id=bob_id, conversation_id=conv_id,
     )
+    alice_send, _ = derive_ratchet_chains(alice_sess.raw, initiator=True)
     plaintext = "Hey Bob, you were offline!"
     env = build_and_encrypt(
-        session_key=alice_sess, plaintext=plaintext,
+        send_chain=alice_send, plaintext=plaintext,
         sender_id=alice_id, recipient_id=bob_id,
         conversation_id=conv_id, counter=0,
         ttl_seconds=None, sent_at=int(time.time()),
@@ -165,9 +167,10 @@ async def test_offline_queue_store_and_forward(app_client):
         conv_dh_pub_bytes=base64.b64decode(msgs[0]["conv_dh_pub_b64"]),
         my_user_id=bob_id, peer_user_id=alice_id, conversation_id=conv_id,
     )
+    _, bob_recv = derive_ratchet_chains(bob_sess.raw, initiator=False)
     from shared.protocol import MessageEnvelope
     decrypted = decrypt_envelope(
-        session_key=bob_sess,
+        recv_chain=bob_recv,
         envelope=MessageEnvelope.model_validate(msgs[0]),
         replay_protector=ReplayProtector(),
     )
@@ -208,8 +211,9 @@ async def test_offline_queue_replay_rejected(app_client):
         peer_identity_pub_bytes=bob_id_pub, peer_dh_pub_bytes=bob_dh_pub,
         my_user_id=alice_id, peer_user_id=bob_id, conversation_id=conv_id,
     )
+    alice_send, _ = derive_ratchet_chains(alice_sess.raw, initiator=True)
     env = build_and_encrypt(
-        session_key=alice_sess, plaintext="replay test",
+        send_chain=alice_send, plaintext="replay test",
         sender_id=alice_id, recipient_id=bob_id,
         conversation_id=conv_id, counter=0,
         ttl_seconds=None, sent_at=int(time.time()),

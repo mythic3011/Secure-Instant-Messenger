@@ -19,9 +19,11 @@ from httpx import ASGITransport, AsyncClient
 from client.crypto.session import (
     DHKeypair,
     IdentityKeypair,
+    RatchetChain,
     ReplayProtector,
     build_and_encrypt,
     decrypt_envelope,
+    derive_ratchet_chains,
     derive_session_key_as_initiator,
     derive_session_key_as_responder,
     make_key_signature,
@@ -173,11 +175,12 @@ async def test_full_e2e_message_flow(app_client: AsyncClient):
         peer_user_id=bob_user_id,
         conversation_id=conv_id,
     )
+    alice_send, alice_recv = derive_ratchet_chains(alice_sk.raw, initiator=True)
 
     # 7. Alice encrypts a message
     plaintext = "Hello Bob, this is E2EE!"
     envelope = build_and_encrypt(
-        session_key=alice_sk,
+        send_chain=alice_send,
         plaintext=plaintext,
         sender_id=alice_user_id,
         recipient_id=bob_user_id,
@@ -222,6 +225,7 @@ async def test_full_e2e_message_flow(app_client: AsyncClient):
         peer_user_id=alice_user_id,
         conversation_id=conv_id,
     )
+    _, bob_recv = derive_ratchet_chains(bob_sk.raw, initiator=False)
 
     # Both sides must derive the same key
     assert alice_sk.raw == bob_sk.raw
@@ -230,7 +234,7 @@ async def test_full_e2e_message_flow(app_client: AsyncClient):
     from shared.protocol import MessageEnvelope
     env = MessageEnvelope.model_validate(received)
     rp = ReplayProtector()
-    decrypted = decrypt_envelope(session_key=bob_sk, envelope=env, replay_protector=rp)
+    decrypted = decrypt_envelope(recv_chain=bob_recv, envelope=env, replay_protector=rp)
     assert decrypted == plaintext
 
     # 12. Bob sends ACK
@@ -286,9 +290,10 @@ async def test_replay_rejection(app_client: AsyncClient):
         peer_user_id=bob_user_id,
         conversation_id=conv_id,
     )
+    alice_send, _ = derive_ratchet_chains(alice_sk.raw, initiator=True)
 
     envelope = build_and_encrypt(
-        session_key=alice_sk,
+        send_chain=alice_send,
         plaintext="replay test",
         sender_id=alice_user_id,
         recipient_id=bob_user_id,

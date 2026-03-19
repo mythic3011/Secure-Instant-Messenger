@@ -52,6 +52,7 @@ from client.crypto.session import (
     DHKeypair,
     IdentityKeypair,
     IdentityKeyCache,
+    RatchetChain,
     ReplayProtector,
     SessionKey,
 )
@@ -207,7 +208,9 @@ def keystore_exists(username: str) -> bool:
 
 @dataclass
 class SessionState:
-    session_key:        SessionKey
+    session_key:        SessionKey      # root key — kept for fingerprint/peer_id
+    send_chain:         RatchetChain
+    recv_chain:         RatchetChain
     replay_protector:   ReplayProtector
     identity_key_cache: IdentityKeyCache
 
@@ -234,6 +237,8 @@ def save_sessions(
             "session_key_ct_b64":    base64.b64encode(sk_ct).decode(),
             "peer_id":               state.session_key.peer_id,
             "replay_state":          state.replay_protector.as_dict(),
+            "send_chain":            state.send_chain.as_dict(),
+            "recv_chain":            state.recv_chain.as_dict(),
             # Identity key cache: store as {peer_id: hex_pub}
             "identity_key_cache": {
                 pid: pub.hex()
@@ -283,6 +288,8 @@ def load_sessions(
                 conversation_id=conv_id,
                 peer_id=entry["peer_id"],
             ),
+            send_chain=RatchetChain.from_dict(entry["send_chain"]),
+            recv_chain=RatchetChain.from_dict(entry["recv_chain"]),
             replay_protector=ReplayProtector(state=entry.get("replay_state")),
             identity_key_cache=IdentityKeyCache(
                 store={

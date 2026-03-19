@@ -128,11 +128,13 @@ async def send_message(
         await db.execute(
             """INSERT INTO messages
                (id, conversation_id, sender_id, recipient_id, counter,
-                nonce_b64, ciphertext_b64, eph_pub_b64, ttl_seconds, sent_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                nonce_b64, ciphertext_b64, eph_pub_b64, conv_dh_pub_b64, chain_index,
+                ttl_seconds, sent_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 env.id, conv_id, env.sender_id, env.recipient_id, env.counter,
                 env.nonce_b64, env.ciphertext_b64, env.eph_pub_b64,
+                env.conv_dh_pub_b64, env.chain_index,
                 env.ttl_seconds, env.sent_at,
             ),
         )
@@ -210,7 +212,7 @@ async def fetch_messages(
 
         async with db.execute(
             """SELECT id, sender_id, recipient_id, counter, nonce_b64, ciphertext_b64,
-                      eph_pub_b64, ttl_seconds, sent_at, delivered_at
+                      eph_pub_b64, conv_dh_pub_b64, chain_index, ttl_seconds, sent_at, delivered_at
                FROM messages
                WHERE conversation_id = ? AND sent_at < ?
                ORDER BY sent_at DESC LIMIT ?""",
@@ -220,7 +222,7 @@ async def fetch_messages(
     else:
         async with db.execute(
             """SELECT id, sender_id, recipient_id, counter, nonce_b64, ciphertext_b64,
-                      eph_pub_b64, ttl_seconds, sent_at, delivered_at
+                      eph_pub_b64, conv_dh_pub_b64, chain_index, ttl_seconds, sent_at, delivered_at
                FROM messages
                WHERE conversation_id = ?
                ORDER BY sent_at DESC LIMIT ?""",
@@ -242,6 +244,8 @@ async def fetch_messages(
             nonce_b64=r["nonce_b64"],
             ciphertext_b64=r["ciphertext_b64"],
             eph_pub_b64=r["eph_pub_b64"],
+            conv_dh_pub_b64=r["conv_dh_pub_b64"],
+            chain_index=r["chain_index"] if r["chain_index"] is not None else 0,
             ttl_seconds=r["ttl_seconds"],
             sent_at=r["sent_at"],
             delivery_status=DeliveryStatus.DELIVERED if r["delivered_at"] else DeliveryStatus.SENT,

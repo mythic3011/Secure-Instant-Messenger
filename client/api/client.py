@@ -6,9 +6,11 @@ Handles all server communication for the client application.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import ssl
+import warnings
 from typing import Callable, Awaitable, Literal
 
 import httpx
@@ -37,34 +39,55 @@ log = logging.getLogger(__name__)
 MessageCallback = Callable[[dict], Awaitable[None]]
 
 
-def _make_ssl_ctx(verify: bool = True) -> ssl.SSLContext:
+def _make_ssl_ctx(
+    verify: bool = True,
+    ca_cert: str | None = None,
+) -> ssl.SSLContext:
     """
     Return an SSL context for WebSocket connections.
-    When verify=False (dev only with self-signed certs), hostname checking
-    and certificate verification are disabled. In production, use verify=True
-    with a proper CA-signed certificate.
+
+    Priority:
+      1. ca_cert provided → load it as trusted CA (for self-signed certs)
+      2. verify=False     → disable verification with deprecation warning
+      3. default          → system CA bundle
     """
     ctx = ssl.create_default_context()
-    if not verify:
+    if ca_cert:
+        ctx.load_verify_locations(ca_cert)
+    elif not verify:
+        warnings.warn(
+            "--no-verify-tls is insecure; use --ca-cert instead",
+            stacklevel=2,
+        )
         ctx.check_hostname = False
         ctx.verify_mode = ssl.CERT_NONE
     return ctx
 
 
 class IMClient:
-    def __init__(self, base_url: str, verify_tls: bool = True) -> None:
+    def __init__(
+        self,
+        base_url: str,
+        verify_tls: bool = True,
+        ca_cert: str | None = None,
+        pin_sha256: str | None = None,
+    ) -> None:
         self._base_url = base_url.rstrip("/")
         self._token: str | None = None
         self._http: httpx.AsyncClient | None = None
         self._ws_task: asyncio.Task | None = None
         self._on_message: MessageCallback | None = None
         self._verify_tls = verify_tls
+        self._ca_cert = ca_cert
+        self._pin_sha256 = pin_sha256.lower() if pin_sha256 else None
 
     async def __aenter__(self) -> "IMClient":
+        # httpx: use ca_cert path if provided, else fall back to verify_tls bool
+        verify: bool | str = self._ca_cert if self._ca_cert else self._verify_tls
         self._http = httpx.AsyncClient(
             base_url=self._base_url,
             timeout=10.0,
-            verify=self._verify_tls,
+            verify=verify,
             trust_env=False,
         )
         return self
@@ -179,18 +202,38 @@ class IMClient:
                 pass
             self._ws_task = None
 
+    async def _verify_pin(self, ssl_object: ssl.SSLObject) -> None:
+        """Verify the server cert matches the expected SHA256 pin."""
+        cert_der = ssl_object.getpeercert(binary_form=True)
+        if cert_der is None:
+            raise ssl.SSLError("No peer certificate received")
+        cert_hash = hashlib.sha256(cert_der).hexdigest()
+        if cert_hash != self._pin_sha256:
+            raise ssl.SSLError(
+                f"Certificate pin mismatch: expected {self._pin_sha256}, got {cert_hash}"
+            )
+
     async def _ws_loop(self) -> None:
         """WebSocket listener with automatic reconnect."""
         ws_url = self._base_url.replace("https://", "wss://").replace("http://", "ws://")
         ws_url = f"{ws_url}/v1/ws"
         use_tls = ws_url.startswith("wss://")
-        ssl_ctx = _make_ssl_ctx(verify=self._verify_tls) if use_tls else None
+        ssl_ctx = _make_ssl_ctx(verify=self._verify_tls, ca_cert=self._ca_cert) if use_tls else None
 
         retry_count = 0
         while True:
             try:
                 log.debug("WS connecting to %s (attempt #%d)", ws_url, retry_count + 1)
                 async with websockets.connect(ws_url, ssl=ssl_ctx, proxy=None) as ws:
+                    # Cert pin check after TLS handshake
+                    if self._pin_sha256 and use_tls:
+                        ssl_obj = ws.socket.getpeercert(binary_form=True)  # type: ignore[attr-defined]
+                        if ssl_obj is not None:
+                            cert_hash = hashlib.sha256(ssl_obj).hexdigest()
+                            if cert_hash != self._pin_sha256:
+                                raise ssl.SSLError(
+                                    f"Certificate pin mismatch: expected {self._pin_sha256}, got {cert_hash}"
+                                )
                     # First-frame auth: send token in the WebSocket payload,
                     # not the URL, to keep it out of server/proxy access logs.
                     await ws.send(json.dumps({"type": "auth", "token": self._token}))

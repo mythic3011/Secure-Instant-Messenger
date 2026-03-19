@@ -17,6 +17,8 @@ from client.crypto.session import (
     IdentityKeypair,
     DHKeypair,
     SessionKey,
+    RatchetChain,
+    derive_ratchet_chains,
     derive_session_key_as_initiator,
     derive_session_key_as_responder,
     build_and_encrypt,
@@ -68,7 +70,9 @@ def session_keys(alice_keys, bob_keys):
         peer_user_id          = "alice",
         conversation_id       = conv_id,
     )
-    return alice_session, bob_session, conv_id
+    alice_send, alice_recv = derive_ratchet_chains(alice_session.raw, initiator=True)
+    bob_send,   bob_recv   = derive_ratchet_chains(bob_session.raw,   initiator=False)
+    return alice_session, bob_session, conv_id, alice_send, alice_recv, bob_send, bob_recv
 
 
 # ── Security Test Case 1: Replay Attack ──────────────────────────────────────
@@ -87,11 +91,11 @@ class TestReplayAttack:
 
     def test_duplicate_message_id_rejected(self, session_keys):
         """Same message ID submitted twice must be rejected."""
-        alice_session, bob_session, conv_id = session_keys
+        alice_session, bob_session, conv_id, alice_send, alice_recv, bob_send, bob_recv = session_keys
         replay_protector = ReplayProtector()
 
         envelope = build_and_encrypt(
-            session_key     = alice_session,
+            send_chain      = alice_send,
             plaintext       = "Hello Bob, this is a secret.",
             sender_id       = "alice",
             recipient_id    = "bob",
@@ -103,7 +107,7 @@ class TestReplayAttack:
 
         # First delivery — should succeed
         plaintext = decrypt_envelope(
-            session_key      = bob_session,
+            recv_chain       = bob_recv,
             envelope         = envelope,
             replay_protector = replay_protector,
         )
@@ -112,7 +116,7 @@ class TestReplayAttack:
         # Second delivery (replay) — must be rejected
         with pytest.raises(ReplayError, match="Duplicate message ID"):
             decrypt_envelope(
-                session_key      = bob_session,
+                recv_chain       = bob_recv,
                 envelope         = envelope,
                 replay_protector = replay_protector,
             )
@@ -122,39 +126,39 @@ class TestReplayAttack:
         A message with a counter that has already been seen
         (even with a different ID) must be rejected.
         """
-        alice_session, bob_session, conv_id = session_keys
+        alice_session, bob_session, conv_id, alice_send, alice_recv, bob_send, bob_recv = session_keys
         replay_protector = ReplayProtector()
 
-        # Deliver message with counter=5
+        # Deliver message with counter=5 (skip 0-4 to set chain_index=5)
         env1 = build_and_encrypt(
-            session_key=alice_session, plaintext="message 1",
+            send_chain=alice_send, plaintext="message 1",
             sender_id="alice", recipient_id="bob",
             conversation_id=conv_id, counter=5,
             ttl_seconds=None, sent_at=int(time.time()),
         )
-        decrypt_envelope(session_key=bob_session, envelope=env1,
+        decrypt_envelope(recv_chain=bob_recv, envelope=env1,
                          replay_protector=replay_protector)
 
         # Deliver many more to advance the window past replay threshold
         for i in range(6, 6 + 60):
             env = build_and_encrypt(
-                session_key=alice_session, plaintext=f"message {i}",
+                send_chain=alice_send, plaintext=f"message {i}",
                 sender_id="alice", recipient_id="bob",
                 conversation_id=conv_id, counter=i,
                 ttl_seconds=None, sent_at=int(time.time()),
             )
-            decrypt_envelope(session_key=bob_session, envelope=env,
+            decrypt_envelope(recv_chain=bob_recv, envelope=env,
                              replay_protector=replay_protector)
 
         # Now try to replay counter=5 (outside window) — must be rejected
         env_replay = build_and_encrypt(
-            session_key=alice_session, plaintext="replayed message",
+            send_chain=alice_send, plaintext="replayed message",
             sender_id="alice", recipient_id="bob",
             conversation_id=conv_id, counter=5,
             ttl_seconds=None, sent_at=int(time.time()),
         )
         with pytest.raises(ReplayError, match="outside replay window"):
-            decrypt_envelope(session_key=bob_session, envelope=env_replay,
+            decrypt_envelope(recv_chain=bob_recv, envelope=env_replay,
                              replay_protector=replay_protector)
 
 
@@ -176,9 +180,9 @@ class TestCiphertextTampering:
     Expected result: InvalidTag raised for all tampering attempts.
     """
 
-    def _fresh_envelope(self, alice_session, conv_id, counter=0, ttl=None):
+    def _fresh_envelope(self, alice_send, conv_id, counter=0, ttl=None):
         return build_and_encrypt(
-            session_key=alice_session,
+            send_chain=alice_send,
             plaintext="Sensitive message content.",
             sender_id="alice",
             recipient_id="bob",
@@ -190,8 +194,8 @@ class TestCiphertextTampering:
 
     def test_tampered_ciphertext_rejected(self, session_keys):
         """Bit-flip in ciphertext must cause decryption failure."""
-        alice_session, bob_session, conv_id = session_keys
-        env = self._fresh_envelope(alice_session, conv_id)
+        alice_session, bob_session, conv_id, alice_send, alice_recv, bob_send, bob_recv = session_keys
+        env = self._fresh_envelope(alice_send, conv_id)
 
         # Flip a byte in the ciphertext
         ct = bytearray(base64.b64decode(env.ciphertext_b64))
@@ -200,7 +204,7 @@ class TestCiphertextTampering:
 
         with pytest.raises(InvalidTag):
             decrypt_envelope(
-                session_key=bob_session,
+                recv_chain=bob_recv,
                 envelope=env,
                 replay_protector=ReplayProtector(),
             )
@@ -210,14 +214,14 @@ class TestCiphertextTampering:
         Changing sender_id in the envelope changes the AD,
         which invalidates the GCM tag.
         """
-        alice_session, bob_session, conv_id = session_keys
-        env = self._fresh_envelope(alice_session, conv_id)
+        alice_session, bob_session, conv_id, alice_send, alice_recv, bob_send, bob_recv = session_keys
+        env = self._fresh_envelope(alice_send, conv_id)
 
         env.sender_id = "mallory"   # attacker impersonates alice
 
         with pytest.raises(InvalidTag):
             decrypt_envelope(
-                session_key=bob_session,
+                recv_chain=bob_recv,
                 envelope=env,
                 replay_protector=ReplayProtector(),
             )
@@ -227,28 +231,28 @@ class TestCiphertextTampering:
         TTL is in AD. Attacker cannot extend message lifetime
         without breaking the authentication tag.
         """
-        alice_session, bob_session, conv_id = session_keys
-        env = self._fresh_envelope(alice_session, conv_id, ttl=30)
+        alice_session, bob_session, conv_id, alice_send, alice_recv, bob_send, bob_recv = session_keys
+        env = self._fresh_envelope(alice_send, conv_id, ttl=30)
 
         env.ttl_seconds = 999999   # attacker tries to extend TTL
 
         with pytest.raises(InvalidTag):
             decrypt_envelope(
-                session_key=bob_session,
+                recv_chain=bob_recv,
                 envelope=env,
                 replay_protector=ReplayProtector(),
             )
 
     def test_tampered_counter_rejected(self, session_keys):
         """Counter is in AD. Cannot be altered without breaking tag."""
-        alice_session, bob_session, conv_id = session_keys
-        env = self._fresh_envelope(alice_session, conv_id, counter=10)
+        alice_session, bob_session, conv_id, alice_send, alice_recv, bob_send, bob_recv = session_keys
+        env = self._fresh_envelope(alice_send, conv_id, counter=10)
 
         env.counter = 999   # attacker changes counter
 
         with pytest.raises(InvalidTag):
             decrypt_envelope(
-                session_key=bob_session,
+                recv_chain=bob_recv,
                 envelope=env,
                 replay_protector=ReplayProtector(),
             )
@@ -258,15 +262,15 @@ class TestCiphertextTampering:
         A message encrypted for conversation A cannot be injected
         into conversation B (conversation_id is in AD).
         """
-        alice_session, bob_session, conv_id = session_keys
-        env = self._fresh_envelope(alice_session, conv_id)
+        alice_session, bob_session, conv_id, alice_send, alice_recv, bob_send, bob_recv = session_keys
+        env = self._fresh_envelope(alice_send, conv_id)
 
         # Attacker changes conversation_id to redirect message
         env.conversation_id = "deadbeef12345678"
 
         with pytest.raises(InvalidTag):
             decrypt_envelope(
-                session_key=bob_session,
+                recv_chain=bob_recv,
                 envelope=env,
                 replay_protector=ReplayProtector(),
             )
@@ -281,7 +285,7 @@ class TestSessionKeyDerivation:
     """
 
     def test_both_sides_derive_same_key(self, session_keys):
-        alice_session, bob_session, _ = session_keys
+        alice_session, bob_session, _, _, _, _, _ = session_keys
         assert alice_session.raw == bob_session.raw, (
             "Alice and Bob derived DIFFERENT session keys — protocol error!"
         )

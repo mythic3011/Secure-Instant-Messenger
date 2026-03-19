@@ -103,6 +103,8 @@ CREATE TABLE IF NOT EXISTS messages (
     nonce_b64       TEXT NOT NULL,
     ciphertext_b64  TEXT NOT NULL,
     eph_pub_b64     TEXT,                       -- non-null on session-initiating message only
+    conv_dh_pub_b64 TEXT,                       -- per-conversation DH pub, first message only
+    chain_index     INTEGER NOT NULL DEFAULT 0, -- ratchet chain index for this message
     ttl_seconds     INTEGER,                    -- NULL = no expiry
     sent_at         INTEGER NOT NULL,           -- client clock (unix)
     stored_at       INTEGER NOT NULL DEFAULT (unixepoch()),

@@ -48,6 +48,7 @@ from cryptography.exceptions import InvalidSignature, InvalidTag
 from shared.protocol import (
     KDF_INFO_PREFIX,
     KEY_BYTES,
+    MAX_SKIP,
     NONCE_BYTES,
     REPLAY_WINDOW,
     MessageEnvelope,
@@ -298,6 +299,95 @@ def _hkdf_derive(
     ).derive(ikm)
 
 
+def _hkdf_simple(key: bytes, info: bytes, length: int = KEY_BYTES) -> bytes:
+    """Single-key HKDF derivation with no salt (used for ratchet steps)."""
+    return HKDF(
+        algorithm=SHA256(),
+        length=length,
+        salt=None,
+        info=info,
+    ).derive(key)
+
+
+# ---------------------------------------------------------------------------
+# Symmetric ratchet chain — per-message forward secrecy
+#
+# Each message gets a unique key derived from a chain key that advances
+# after each use. Old chain keys are overwritten. Skipped keys are cached
+# up to MAX_SKIP to handle out-of-order delivery.
+# ---------------------------------------------------------------------------
+
+@dataclass
+class RatchetChain:
+    """
+    Symmetric ratchet chain for per-message forward secrecy.
+
+    chain_key advances after each message; old values are not retained.
+    skipped_keys caches keys for out-of-order messages (up to MAX_SKIP).
+    """
+    chain_key:    bytes
+    index:        int = 0
+    skipped_keys: dict = field(default_factory=dict)  # index → msg_key
+
+    def advance(self) -> bytes:
+        """Derive message_key, advance chain_key. Returns message_key."""
+        msg_key    = _hkdf_simple(self.chain_key, b"COMP3334-msg-key")
+        next_chain = _hkdf_simple(self.chain_key, b"COMP3334-chain-advance")
+        # Overwrite old chain_key — forward secrecy
+        self.chain_key = next_chain
+        self.index += 1
+        return msg_key
+
+    def advance_to(self, target: int) -> bytes:
+        """
+        Advance to target index, caching skipped message keys.
+        Raises ValueError if target - current > MAX_SKIP.
+        """
+        if target < self.index:
+            raise ValueError(f"Target index {target} is behind current {self.index}")
+        if target - self.index > MAX_SKIP:
+            raise ValueError(
+                f"Too many skipped messages: target={target}, current={self.index}"
+            )
+        while self.index < target:
+            skipped_key = self.advance()
+            self.skipped_keys[self.index - 1] = skipped_key
+        return self.advance()
+
+    def try_skipped(self, index: int) -> Optional[bytes]:
+        """Pop and return a previously cached skipped key, or None."""
+        return self.skipped_keys.pop(index, None)
+
+    def as_dict(self) -> dict:
+        return {
+            "chain_key_hex": self.chain_key.hex(),
+            "index":         self.index,
+            "skipped_keys":  {str(k): v.hex() for k, v in self.skipped_keys.items()},
+        }
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "RatchetChain":
+        return cls(
+            chain_key=bytes.fromhex(d["chain_key_hex"]),
+            index=d["index"],
+            skipped_keys={int(k): bytes.fromhex(v) for k, v in d.get("skipped_keys", {}).items()},
+        )
+
+
+def derive_ratchet_chains(root_key: bytes, initiator: bool) -> tuple["RatchetChain", "RatchetChain"]:
+    """
+    Derive send and receive ratchet chains from the root session key.
+
+    Initiator's send_chain == Responder's recv_chain (and vice versa).
+    """
+    chain_a = _hkdf_simple(root_key, b"COMP3334-chain-a")
+    chain_b = _hkdf_simple(root_key, b"COMP3334-chain-b")
+    if initiator:
+        return RatchetChain(chain_key=chain_a), RatchetChain(chain_key=chain_b)
+    else:
+        return RatchetChain(chain_key=chain_b), RatchetChain(chain_key=chain_a)
+
+
 # ---------------------------------------------------------------------------
 # AES-256-GCM encrypt / decrypt
 # ---------------------------------------------------------------------------
@@ -485,7 +575,7 @@ class ReplayError(Exception):
 
 def build_and_encrypt(
     *,
-    session_key: SessionKey,
+    send_chain: "RatchetChain",
     plaintext: str,
     sender_id: str,
     recipient_id: str,
@@ -495,11 +585,14 @@ def build_and_encrypt(
     sent_at: int,
 ) -> MessageEnvelope:
     """
-    Convenience wrapper: build a MessageEnvelope from plaintext.
-    Handles nonce generation, AD construction, and base64 encoding.
+    Convenience wrapper: build a MessageEnvelope from plaintext using the ratchet chain.
+    Advances the send chain and sets chain_index on the envelope.
     """
     from shared.protocol import MessageEnvelope
-    import time
+
+    # Advance ratchet to get a per-message key
+    msg_key = send_chain.advance()
+    chain_index = send_chain.index - 1  # index of the key just used
 
     # Build envelope skeleton first (needed for AD computation)
     env = MessageEnvelope(
@@ -507,6 +600,7 @@ def build_and_encrypt(
         recipient_id    = recipient_id,
         conversation_id = conversation_id,
         counter         = counter,
+        chain_index     = chain_index,
         nonce_b64       = base64.b64encode(os.urandom(NONCE_BYTES)).decode(),  # placeholder
         ciphertext_b64  = "",   # placeholder
         ttl_seconds     = ttl_seconds,
@@ -514,11 +608,8 @@ def build_and_encrypt(
     )
 
     ad = env.compute_ad()
-    ciphertext, nonce = encrypt_message(
-        session_key,
-        plaintext.encode("utf-8"),
-        ad,
-    )
+    msg_sk = SessionKey(raw=msg_key, conversation_id=conversation_id, peer_id=recipient_id)
+    ciphertext, nonce = encrypt_message(msg_sk, plaintext.encode("utf-8"), ad)
 
     env.nonce_b64      = base64.b64encode(nonce).decode()
     env.ciphertext_b64 = base64.b64encode(ciphertext).decode()
@@ -527,12 +618,13 @@ def build_and_encrypt(
 
 def decrypt_envelope(
     *,
-    session_key: SessionKey,
+    recv_chain: "RatchetChain",
     envelope: MessageEnvelope,
     replay_protector: ReplayProtector,
 ) -> str:
     """
     Convenience wrapper: verify replay protection and decrypt a MessageEnvelope.
+    Uses the ratchet recv_chain to derive the per-message key.
 
     Raises:
         ReplayError:  duplicate or replayed message
@@ -542,14 +634,21 @@ def decrypt_envelope(
     # Step 1: replay check (before touching crypto)
     replay_protector.check(envelope.id, envelope.counter)
 
-    # Step 2: reconstruct AD and decrypt
+    # Step 2: get per-message key from ratchet
+    chain_index = envelope.chain_index
+    msg_key = recv_chain.try_skipped(chain_index)
+    if msg_key is None:
+        msg_key = recv_chain.advance_to(chain_index)
+
+    # Step 3: reconstruct AD and decrypt
     ad         = envelope.compute_ad()
     nonce      = base64.b64decode(envelope.nonce_b64)
     ciphertext = base64.b64decode(envelope.ciphertext_b64)
 
-    plaintext_bytes = decrypt_message(session_key, ciphertext, nonce, ad)
+    msg_sk = SessionKey(raw=msg_key, conversation_id=envelope.conversation_id, peer_id=envelope.sender_id)
+    plaintext_bytes = decrypt_message(msg_sk, ciphertext, nonce, ad)
 
-    # Step 3: commit only after successful decryption
+    # Step 4: commit only after successful decryption
     replay_protector.commit(envelope.id, envelope.counter)
 
     return plaintext_bytes.decode("utf-8")

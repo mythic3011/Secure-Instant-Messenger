@@ -22,10 +22,12 @@ from client.crypto.session import (
     IdentityKeyCache,
     IdentityKeypair,
     KeyChangeWarning,
+    RatchetChain,
     ReplayProtector,
     build_and_encrypt,
     compute_fingerprint,
     decrypt_envelope,
+    derive_ratchet_chains,
     derive_session_key_as_initiator,
     derive_session_key_as_responder,
     make_key_signature,
@@ -71,11 +73,20 @@ class IMApp(App):
 
     TITLE = "COMP3334 Secure IM"
 
-    def __init__(self, server_url: str, username: str, verify_tls: bool = True) -> None:
+    def __init__(
+        self,
+        server_url: str,
+        username: str,
+        verify_tls: bool = True,
+        ca_cert: str | None = None,
+        pin_sha256: str | None = None,
+    ) -> None:
         super().__init__()
         self._server_url = server_url
         self._username   = username
         self._verify_tls = verify_tls
+        self._ca_cert    = ca_cert
+        self._pin_sha256 = pin_sha256
         self._client: IMClient | None = None
         self._local_keys: LocalKeys | None = None
         self._password: str | None = None
@@ -111,7 +122,7 @@ class IMApp(App):
         # Capture screen reference NOW before any await displaces it
         login_screen = self.screen  # LoginScreen is current screen at this point
 
-        self._client = IMClient(self._server_url, verify_tls=self._verify_tls)
+        self._client = IMClient(self._server_url, verify_tls=self._verify_tls, ca_cert=self._ca_cert, pin_sha256=self._pin_sha256)
         await self._client.__aenter__()
 
         try:
@@ -194,7 +205,7 @@ class IMApp(App):
         key_sig     = make_key_signature(identity_kp, dh_kp)
         local_keys  = LocalKeys(identity_kp=identity_kp, dh_kp=dh_kp, key_sig=key_sig)
 
-        client = IMClient(self._server_url, verify_tls=self._verify_tls)
+        client = IMClient(self._server_url, verify_tls=self._verify_tls, ca_cert=self._ca_cert, pin_sha256=self._pin_sha256)
         async with client:
             try:
                 resp = await client.register(RegisterRequest(
@@ -307,7 +318,7 @@ class IMApp(App):
 
         sent_at  = int(time.time())
         envelope = build_and_encrypt(
-            session_key=session_state.session_key,
+            send_chain=session_state.send_chain,
             plaintext=msg.text,
             sender_id=my_id,
             recipient_id=peer_id,
@@ -503,10 +514,13 @@ class IMApp(App):
                 peer_user_id=peer_id,
                 conversation_id=conv_id,
             )
+            send_chain, recv_chain = derive_ratchet_chains(session_key.raw, initiator=False)
             cache = IdentityKeyCache()
             cache.check_and_update(peer_id, peer_identity_pub)
             state = SessionState(
                 session_key=session_key,
+                send_chain=send_chain,
+                recv_chain=recv_chain,
                 replay_protector=ReplayProtector(),
                 identity_key_cache=cache,
             )
@@ -530,7 +544,7 @@ class IMApp(App):
         # Decrypt — drop silently on replay or tamper
         try:
             plaintext = decrypt_envelope(
-                session_key=state.session_key,
+                recv_chain=state.recv_chain,
                 envelope=envelope,
                 replay_protector=state.replay_protector,
             )
@@ -629,11 +643,14 @@ class IMApp(App):
             conversation_id=conv_id,
         )
 
+        send_chain, recv_chain = derive_ratchet_chains(session_key.raw, initiator=True)
         cache = IdentityKeyCache()
         cache.check_and_update(peer_id, peer_identity_pub)
 
         state = SessionState(
             session_key=session_key,
+            send_chain=send_chain,
+            recv_chain=recv_chain,
             replay_protector=ReplayProtector(),
             identity_key_cache=cache,
         )
