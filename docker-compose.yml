@@ -9,6 +9,8 @@ services:
       dockerfile: Dockerfile.server
       target: runtime
     env_file: .env.local
+    labels:
+      - dev.orbstack.https-port=8443 # L4 passthrough — prevents OrbStack double-TLS (alert 46)
     ports:
       - "127.0.0.1:8443:8443" # HTTPS/WSS — bind to localhost only in dev
     volumes:
@@ -19,7 +21,7 @@ services:
           "CMD",
           "python",
           "-c",
-          "import urllib.request; urllib.request.urlopen('http://localhost:8443/health')",
+          "import urllib.request, ssl; ctx = ssl.create_default_context(); ctx.check_hostname = False; ctx.verify_mode = ssl.CERT_NONE; urllib.request.urlopen('https://localhost:8443/health', context=ctx)",
         ]
       interval: 30s
       timeout: 5s
