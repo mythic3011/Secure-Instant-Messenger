@@ -30,7 +30,6 @@ from client.crypto.session import (
     derive_session_key_as_responder,
     make_key_signature,
 )
-from shared.protocol import make_conversation_id
 
 pytestmark = pytest.mark.asyncio
 
@@ -122,8 +121,11 @@ async def test_offline_queue_store_and_forward(app_client):
     assert r.status_code in (200, 204), r.text
 
     # Alice derives session and encrypts
-    conv_id = make_conversation_id(alice_id, bob_id)
-    alice_sess, eph_pub = derive_session_key_as_initiator(
+    # Get conversation ID from server (created on friend accept)
+    r = await app_client.get("/v1/conversations", headers=_auth(a_tok))
+    assert r.status_code == 200, r.text
+    conv_id = r.json()["conversations"][0]["id"]
+    alice_sess, eph_pub, conv_dh_pub = derive_session_key_as_initiator(
         my_identity_kp=alice_id_kp, my_dh_kp=alice_dh_kp,
         peer_identity_pub_bytes=bob_id_pub, peer_dh_pub_bytes=bob_dh_pub,
         my_user_id=alice_id, peer_user_id=bob_id, conversation_id=conv_id,
@@ -136,6 +138,7 @@ async def test_offline_queue_store_and_forward(app_client):
         ttl_seconds=None, sent_at=int(time.time()),
     )
     env.eph_pub_b64 = base64.b64encode(eph_pub).decode()
+    env.conv_dh_pub_b64 = base64.b64encode(conv_dh_pub).decode()
 
     # Alice sends — Bob offline, should be queued (delivered_at = None)
     r = await app_client.post("/v1/messages",
@@ -159,6 +162,7 @@ async def test_offline_queue_store_and_forward(app_client):
         peer_identity_pub_bytes=base64.b64decode(r.json()["identity_pub_b64"]),
         peer_dh_pub_bytes=base64.b64decode(r.json()["dh_pub_b64"]),
         eph_pub_bytes=base64.b64decode(msgs[0]["eph_pub_b64"]),
+        conv_dh_pub_bytes=base64.b64decode(msgs[0]["conv_dh_pub_b64"]),
         my_user_id=bob_id, peer_user_id=alice_id, conversation_id=conv_id,
     )
     from shared.protocol import MessageEnvelope
@@ -195,8 +199,11 @@ async def test_offline_queue_replay_rejected(app_client):
     await app_client.put(f"/v1/friends/request/{req_id}",
         json={"action": "accept"}, headers=_auth(b_tok))
 
-    conv_id = make_conversation_id(alice_id, bob_id)
-    alice_sess, eph_pub = derive_session_key_as_initiator(
+    # Get conversation ID from server
+    r = await app_client.get("/v1/conversations", headers=_auth(a_tok))
+    assert r.status_code == 200, r.text
+    conv_id = r.json()["conversations"][0]["id"]
+    alice_sess, eph_pub, conv_dh_pub = derive_session_key_as_initiator(
         my_identity_kp=alice_id_kp, my_dh_kp=alice_dh_kp,
         peer_identity_pub_bytes=bob_id_pub, peer_dh_pub_bytes=bob_dh_pub,
         my_user_id=alice_id, peer_user_id=bob_id, conversation_id=conv_id,
@@ -208,6 +215,7 @@ async def test_offline_queue_replay_rejected(app_client):
         ttl_seconds=None, sent_at=int(time.time()),
     )
     env.eph_pub_b64 = base64.b64encode(eph_pub).decode()
+    env.conv_dh_pub_b64 = base64.b64encode(conv_dh_pub).decode()
 
     # First send — OK
     r = await app_client.post("/v1/messages",

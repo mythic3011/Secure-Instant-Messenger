@@ -11,6 +11,8 @@ import os
 import time
 import pytest
 
+import secrets
+
 from client.crypto.session import (
     IdentityKeypair,
     DHKeypair,
@@ -23,7 +25,11 @@ from client.crypto.session import (
     ReplayError,
 )
 from cryptography.exceptions import InvalidTag
-from shared.protocol import make_conversation_id
+
+
+def _random_conv_id() -> str:
+    """Generate a random conversation ID for tests."""
+    return secrets.token_hex(16)
 
 
 # ── Fixtures ──────────────────────────────────────────────────────────────────
@@ -40,9 +46,9 @@ def bob_keys():
 def session_keys(alice_keys, bob_keys):
     alice_id_kp, alice_dh_kp = alice_keys
     bob_id_kp,   bob_dh_kp   = bob_keys
-    conv_id = make_conversation_id("alice", "bob")
+    conv_id = _random_conv_id()
 
-    alice_session, eph_pub = derive_session_key_as_initiator(
+    alice_session, eph_pub, conv_dh_pub = derive_session_key_as_initiator(
         my_identity_kp        = alice_id_kp,
         my_dh_kp              = alice_dh_kp,
         peer_identity_pub_bytes = bob_id_kp.public_bytes(),
@@ -57,6 +63,7 @@ def session_keys(alice_keys, bob_keys):
         peer_identity_pub_bytes = alice_id_kp.public_bytes(),
         peer_dh_pub_bytes     = alice_dh_kp.public_bytes(),
         eph_pub_bytes         = eph_pub,
+        conv_dh_pub_bytes     = conv_dh_pub,
         my_user_id            = "bob",
         peer_user_id          = "alice",
         conversation_id       = conv_id,
@@ -283,16 +290,16 @@ class TestSessionKeyDerivation:
         alice_id_kp, alice_dh_kp = alice_keys
         bob_id_kp,   bob_dh_kp   = bob_keys
 
-        conv1 = make_conversation_id("alice", "bob")
-        conv2 = make_conversation_id("alice", "charlie")
+        conv1 = _random_conv_id()
+        conv2 = _random_conv_id()
 
-        sess1, _ = derive_session_key_as_initiator(
+        sess1, _, _ = derive_session_key_as_initiator(
             my_identity_kp=alice_id_kp, my_dh_kp=alice_dh_kp,
             peer_identity_pub_bytes=bob_id_kp.public_bytes(),
             peer_dh_pub_bytes=bob_dh_kp.public_bytes(),
             my_user_id="alice", peer_user_id="bob", conversation_id=conv1,
         )
-        sess2, _ = derive_session_key_as_initiator(
+        sess2, _, _ = derive_session_key_as_initiator(
             my_identity_kp=alice_id_kp, my_dh_kp=alice_dh_kp,
             peer_identity_pub_bytes=bob_id_kp.public_bytes(),
             peer_dh_pub_bytes=bob_dh_kp.public_bytes(),

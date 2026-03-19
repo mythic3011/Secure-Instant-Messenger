@@ -23,7 +23,6 @@ from shared.protocol import (
     MessageType,
     SendMessageRequest,
     SendMessageResponse,
-    make_conversation_id,
 )
 
 router = APIRouter(prefix="/v1/messages", tags=["messages"])
@@ -52,6 +51,13 @@ def _validate_envelope(env: MessageEnvelope) -> None:
                 raise ValueError
         except Exception:
             raise HTTPException(status_code=422, detail="eph_pub_b64 must decode to exactly 32 bytes")
+    if env.conv_dh_pub_b64 is not None:
+        try:
+            cdh = base64.b64decode(env.conv_dh_pub_b64, validate=True)
+            if len(cdh) != 32:
+                raise ValueError
+        except Exception:
+            raise HTTPException(status_code=422, detail="conv_dh_pub_b64 must decode to exactly 32 bytes")
     if env.ttl_seconds is not None and not (1 <= env.ttl_seconds <= 604800):
         raise HTTPException(status_code=422, detail="ttl_seconds must be 1–604800")
     if env.counter < 0:
@@ -100,16 +106,17 @@ async def send_message(
             log.warning("send_message_rejected", reason="recipient_not_found", sender=env.sender_id, recipient=env.recipient_id)
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Recipient not found")
 
-    # Ensure conversation row exists
-    conv_id = make_conversation_id(env.sender_id, env.recipient_id)
+    # Ensure conversation row exists — look up by participants
+    a, b = sorted([env.sender_id, env.recipient_id])
+    async with db.execute(
+        "SELECT id FROM conversations WHERE user_a_id = ? AND user_b_id = ?", (a, b)
+    ) as cur:
+        conv_row = await cur.fetchone()
+    if conv_row is None:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="No conversation exists (add friend first)")
+    conv_id = conv_row["id"]
     if conv_id != env.conversation_id:
         raise HTTPException(status_code=422, detail="conversation_id mismatch")
-
-    ca, cb = sorted([env.sender_id, env.recipient_id])
-    await db.execute(
-        "INSERT OR IGNORE INTO conversations (id, user_a_id, user_b_id) VALUES (?, ?, ?)",
-        (conv_id, ca, cb),
-    )
 
     # Server-side replay prevention: the UNIQUE(conversation_id, sender_id, counter)
     # constraint rejects duplicate counters at the DB level. This is the second
@@ -135,7 +142,7 @@ async def send_message(
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Duplicate message (replay rejected)")
 
     # Update conversation metadata
-    is_a = env.recipient_id == cb
+    is_a = env.recipient_id == a
     unread_col = "unread_count_a" if is_a else "unread_count_b"
     await db.execute(
         f"UPDATE conversations SET last_message_at = ?, {unread_col} = {unread_col} + 1 WHERE id = ?",

@@ -133,7 +133,7 @@ CREATE INDEX IF NOT EXISTS idx_msg_expires
 -- -----------------------------------------------------------------------
 
 CREATE TABLE IF NOT EXISTS conversations (
-    id                  TEXT PRIMARY KEY,       -- make_conversation_id(a, b)
+    id                  TEXT PRIMARY KEY,       -- server-assigned random ID (secrets.token_hex(16))
     user_a_id           TEXT NOT NULL REFERENCES users(id),
     user_b_id           TEXT NOT NULL REFERENCES users(id),
     last_message_at     INTEGER,

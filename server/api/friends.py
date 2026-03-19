@@ -5,6 +5,8 @@ Covers: R13, R14, R15, R16
 
 from __future__ import annotations
 
+import secrets
+
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, status
 
@@ -167,6 +169,12 @@ async def handle_request(
         a, b = sorted([req["sender_id"], req["recipient_id"]])
         await db.execute(
             "INSERT OR IGNORE INTO friendships (user_a_id, user_b_id) VALUES (?, ?)", (a, b)
+        )
+        # Create conversation with random ID
+        conv_id = secrets.token_hex(16)
+        await db.execute(
+            "INSERT OR IGNORE INTO conversations (id, user_a_id, user_b_id) VALUES (?, ?, ?)",
+            (conv_id, a, b),
         )
 
     await db.commit()

@@ -26,7 +26,6 @@ from client.crypto.session import (
     derive_session_key_as_responder,
     make_key_signature,
 )
-from shared.protocol import make_conversation_id
 
 pytestmark = pytest.mark.asyncio
 
@@ -157,10 +156,15 @@ async def test_full_e2e_message_flow(app_client: AsyncClient):
     resp = await client.get("/v1/keys/alice_e2e", headers=_auth(alice_token))
     alice_user_id = resp.json()["user_id"]
 
-    conv_id = make_conversation_id(alice_user_id, bob_user_id)
+    # 5b. Get conversation ID from server (created on friend accept)
+    resp = await client.get("/v1/conversations", headers=_auth(alice_token))
+    assert resp.status_code == 200, resp.text
+    convs = resp.json()["conversations"]
+    assert len(convs) >= 1, "Expected at least 1 conversation after friend accept"
+    conv_id = convs[0]["id"]
 
     # 6. Alice derives session key as initiator
-    alice_sk, eph_pub_bytes = derive_session_key_as_initiator(
+    alice_sk, eph_pub_bytes, conv_dh_pub_bytes = derive_session_key_as_initiator(
         my_identity_kp=alice_id_kp,
         my_dh_kp=alice_dh_kp,
         peer_identity_pub_bytes=base64.b64decode(bob_bundle["identity_pub_b64"]),
@@ -183,6 +187,7 @@ async def test_full_e2e_message_flow(app_client: AsyncClient):
         sent_at=int(time.time()),
     )
     envelope.eph_pub_b64 = base64.b64encode(eph_pub_bytes).decode()
+    envelope.conv_dh_pub_b64 = base64.b64encode(conv_dh_pub_bytes).decode()
 
     # 8. Alice POSTs the message
     resp = await client.post("/v1/messages",
@@ -212,6 +217,7 @@ async def test_full_e2e_message_flow(app_client: AsyncClient):
         peer_identity_pub_bytes=base64.b64decode(alice_bundle["identity_pub_b64"]),
         peer_dh_pub_bytes=base64.b64decode(alice_bundle["dh_pub_b64"]),
         eph_pub_bytes=base64.b64decode(received["eph_pub_b64"]),
+        conv_dh_pub_bytes=base64.b64decode(received["conv_dh_pub_b64"]),
         my_user_id=bob_user_id,
         peer_user_id=alice_user_id,
         conversation_id=conv_id,
@@ -266,9 +272,12 @@ async def test_replay_rejection(app_client: AsyncClient):
     bob_user_id   = bob_resp.json()["user_id"]
     bob_bundle    = bob_resp.json()
 
-    conv_id = make_conversation_id(alice_user_id, bob_user_id)
+    # Get conversation ID from server
+    conv_resp = await client.get("/v1/conversations", headers=_auth(alice_token))
+    assert conv_resp.status_code == 200, conv_resp.text
+    conv_id = conv_resp.json()["conversations"][0]["id"]
 
-    alice_sk, eph_pub_bytes = derive_session_key_as_initiator(
+    alice_sk, eph_pub_bytes, conv_dh_pub_bytes = derive_session_key_as_initiator(
         my_identity_kp=alice_id_kp,
         my_dh_kp=alice_dh_kp,
         peer_identity_pub_bytes=base64.b64decode(bob_bundle["identity_pub_b64"]),
@@ -289,6 +298,7 @@ async def test_replay_rejection(app_client: AsyncClient):
         sent_at=int(time.time()),
     )
     envelope.eph_pub_b64 = base64.b64encode(eph_pub_bytes).decode()
+    envelope.conv_dh_pub_b64 = base64.b64encode(conv_dh_pub_bytes).decode()
 
     # First POST — must succeed
     resp1 = await client.post("/v1/messages",

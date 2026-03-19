@@ -121,11 +121,12 @@ class MessageEnvelope(BaseModel):
     type:            MessageType = MessageType.MESSAGE
     sender_id:       str
     recipient_id:    str
-    conversation_id: str          # SHA256(sorted(sender_id, recipient_id))[:16]
+    conversation_id: str          # server-assigned random ID
     counter:         int = Field(ge=0)
     nonce_b64:       str          # base64(12 random bytes) — never reuse per key
     ciphertext_b64:  str          # base64(AES-256-GCM output)
     eph_pub_b64:     str | None = None   # X25519 ephemeral pub, first message only
+    conv_dh_pub_b64: str | None = None   # X25519 per-conversation DH pub, first message only
     ttl_seconds:     int | None = None   # None = no expiry
     sent_at:         int          # unix timestamp (client clock)
     delivery_status: DeliveryStatus = DeliveryStatus.SENT
@@ -245,15 +246,3 @@ class ConversationListResponse(BaseModel):
     conversations: list[ConversationOut]
 
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-def make_conversation_id(user_a: str, user_b: str) -> str:
-    """
-    Stable, symmetric conversation ID.
-    SHA256(sorted(user_a, user_b))[:16] hex string.
-    """
-    import hashlib
-    pair = "|".join(sorted([user_a, user_b])).encode()
-    return hashlib.sha256(pair).hexdigest()[:16]

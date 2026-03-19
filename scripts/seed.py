@@ -326,12 +326,6 @@ async def setup_friendships(
                     warn(f"  Friendship {uname!r}↔{friend!r} skipped: {exc}")
 
 
-def _make_conversation_id(user_a: str, user_b: str) -> str:
-    import hashlib
-    pair = "|".join(sorted([user_a, user_b])).encode()
-    return hashlib.sha256(pair).hexdigest()[:16]
-
-
 def _encrypt_seed_message(text: str) -> tuple[str, str]:
     """
     Encrypt seed message text with AES-256-GCM using a random key.
@@ -358,6 +352,17 @@ async def send_mock_messages(
     """
     import uuid
 
+    # Build a lookup of (user_a_id, user_b_id) → conv_id from server
+    conv_id_cache: dict[tuple[str, str], str] = {}
+    for uname, sess in sessions.items():
+        try:
+            resp = await api(client, "GET", "/v1/conversations", token=sess.token)
+            for conv in resp.get("conversations", []):
+                a, b = sorted([sess.user_id, conv["peer_id"]])
+                conv_id_cache[(a, b)] = conv["id"]
+        except Exception:
+            pass
+
     # Per-pair counters so replay protection doesn't reject sequential messages
     counters: dict[tuple[str, str], int] = {}
 
@@ -373,7 +378,12 @@ async def send_mock_messages(
                 warn(f"  Recipient {recipient!r} not in seed list — skipping")
                 continue
 
-            conv_id = _make_conversation_id(sess.user_id, rsess.user_id)
+            a, b = sorted([sess.user_id, rsess.user_id])
+            conv_id = conv_id_cache.get((a, b))
+            if conv_id is None:
+                warn(f"  No conversation for {uname!r}↔{recipient!r} — skipping")
+                continue
+
             pair_key = (sess.user_id, rsess.user_id)
             counter = counters.get(pair_key, 0)
             counters[pair_key] = counter + 1

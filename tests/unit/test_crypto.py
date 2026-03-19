@@ -11,6 +11,8 @@ import pytest
 
 from cryptography.exceptions import InvalidTag
 
+import secrets
+
 from client.crypto.session import (
     DHKeypair,
     IdentityKeyCache,
@@ -29,7 +31,12 @@ from client.crypto.session import (
     verify_key_bundle,
     build_and_encrypt,
 )
-from shared.protocol import MessageEnvelope, make_conversation_id
+from shared.protocol import MessageEnvelope
+
+
+def _random_conv_id() -> str:
+    """Generate a random conversation ID for tests."""
+    return secrets.token_hex(16)
 
 
 # ---------------------------------------------------------------------------
@@ -104,9 +111,9 @@ def _make_session(alice_id="alice", bob_id="bob"):
     alice_dh_kp = DHKeypair.generate()
     bob_id_kp   = IdentityKeypair.generate()
     bob_dh_kp   = DHKeypair.generate()
-    conv_id     = make_conversation_id(alice_id, bob_id)
+    conv_id     = _random_conv_id()
 
-    alice_sk, eph_pub = derive_session_key_as_initiator(
+    alice_sk, eph_pub, conv_dh_pub = derive_session_key_as_initiator(
         my_identity_kp=alice_id_kp,
         my_dh_kp=alice_dh_kp,
         peer_identity_pub_bytes=bob_id_kp.public_bytes(),
@@ -122,6 +129,7 @@ def _make_session(alice_id="alice", bob_id="bob"):
         peer_identity_pub_bytes=alice_id_kp.public_bytes(),
         peer_dh_pub_bytes=alice_dh_kp.public_bytes(),
         eph_pub_bytes=eph_pub,
+        conv_dh_pub_bytes=conv_dh_pub,
         my_user_id=bob_id,
         peer_user_id=alice_id,
         conversation_id=conv_id,

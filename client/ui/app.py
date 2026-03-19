@@ -317,9 +317,11 @@ class IMApp(App):
             sent_at=sent_at,
         )
 
-        # Include eph_pub on the first message so Bob can derive the session key
+        # Include eph_pub and conv_dh_pub on the first message so Bob can derive the session key
         if counter == 0 and hasattr(session_state, "_eph_pub_b64"):
             envelope.eph_pub_b64 = session_state._eph_pub_b64  # type: ignore[attr-defined]
+        if counter == 0 and hasattr(session_state, "_conv_dh_pub_b64"):
+            envelope.conv_dh_pub_b64 = session_state._conv_dh_pub_b64  # type: ignore[attr-defined]
 
         try:
             await self._client.send_message(envelope)
@@ -468,7 +470,7 @@ class IMApp(App):
         # Derive session if we don't have one yet (first message from this peer)
         state = self._sessions.get(conv_id)
         if state is None:
-            if envelope.eph_pub_b64 is None or self._local_keys is None:
+            if envelope.eph_pub_b64 is None or envelope.conv_dh_pub_b64 is None or self._local_keys is None:
                 return
 
             # Look up peer keys by username if we have it, else by user_id
@@ -488,6 +490,7 @@ class IMApp(App):
             peer_identity_pub = base64.b64decode(peer_bundle.identity_pub_b64)
             peer_dh_pub       = base64.b64decode(peer_bundle.dh_pub_b64)
             eph_pub           = base64.b64decode(envelope.eph_pub_b64)
+            conv_dh_pub       = base64.b64decode(envelope.conv_dh_pub_b64)
 
             session_key = derive_session_key_as_responder(
                 my_identity_kp=self._local_keys.identity_kp,
@@ -495,6 +498,7 @@ class IMApp(App):
                 peer_identity_pub_bytes=peer_identity_pub,
                 peer_dh_pub_bytes=peer_dh_pub,
                 eph_pub_bytes=eph_pub,
+                conv_dh_pub_bytes=conv_dh_pub,
                 my_user_id=my_id,
                 peer_user_id=peer_id,
                 conversation_id=conv_id,
@@ -615,7 +619,7 @@ class IMApp(App):
         peer_identity_pub = base64.b64decode(peer_bundle.identity_pub_b64)
         peer_dh_pub       = base64.b64decode(peer_bundle.dh_pub_b64)
 
-        session_key, eph_pub_bytes = derive_session_key_as_initiator(
+        session_key, eph_pub_bytes, conv_dh_pub_bytes = derive_session_key_as_initiator(
             my_identity_kp=self._local_keys.identity_kp,
             my_dh_kp=self._local_keys.dh_kp,
             peer_identity_pub_bytes=peer_identity_pub,
@@ -634,6 +638,7 @@ class IMApp(App):
             identity_key_cache=cache,
         )
         state._eph_pub_b64 = base64.b64encode(eph_pub_bytes).decode()  # type: ignore[attr-defined]
+        state._conv_dh_pub_b64 = base64.b64encode(conv_dh_pub_bytes).decode()  # type: ignore[attr-defined]
 
         self._sessions[conv_id] = state
         return state

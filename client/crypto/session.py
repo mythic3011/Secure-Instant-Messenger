@@ -201,18 +201,19 @@ def derive_session_key_as_initiator(
     my_user_id: str,
     peer_user_id: str,
     conversation_id: str,
-) -> tuple[SessionKey, bytes]:
+) -> tuple[SessionKey, bytes, bytes]:
     """
     Derive a session key as the initiating party (Alice).
 
-    Returns: (SessionKey, ephemeral_pub_bytes)
-    The ephemeral_pub_bytes MUST be sent in the first message envelope
-    so the peer can recompute the same session key.
+    Returns: (SessionKey, eph_pub_bytes, conv_dh_pub_bytes)
+    Both eph_pub_bytes and conv_dh_pub_bytes MUST be sent in the first message
+    envelope so the peer can recompute the same session key.
 
     Protocol:
-        eph_priv, eph_pub = X25519.generate()
-        DH1 = X25519(my_dh_priv,  peer_dh_pub)     # static-static
-        DH2 = X25519(eph_priv,    peer_dh_pub)      # ephemeral-static
+        eph_priv, eph_pub     = X25519.generate()   # ephemeral key
+        conv_dh_priv, conv_dh_pub = X25519.generate()  # per-conversation DH key
+        DH1 = X25519(conv_dh_priv, peer_dh_pub)    # per-conv-static
+        DH2 = X25519(eph_priv,     peer_dh_pub)    # ephemeral-static
         ikm = DH1 || DH2
         session_key = HKDF-SHA256(ikm, salt=KDF_SALT, info=INFO, length=32)
     """
@@ -220,8 +221,10 @@ def derive_session_key_as_initiator(
 
     # Ephemeral keypair — used once, generated with OS CSPRNG
     eph_kp = DHKeypair.generate()
+    # Per-conversation DH keypair — fresh for each conversation (fixes Issue #2)
+    conv_dh_kp = DHKeypair.generate()
 
-    dh1 = my_dh_kp.private_key.exchange(peer_dh_pub)
+    dh1 = conv_dh_kp.private_key.exchange(peer_dh_pub)
     dh2 = eph_kp.private_key.exchange(peer_dh_pub)
     ikm = dh1 + dh2
 
@@ -230,6 +233,7 @@ def derive_session_key_as_initiator(
     return (
         SessionKey(raw=raw_key, conversation_id=conversation_id, peer_id=peer_user_id),
         eph_kp.public_bytes(),
+        conv_dh_kp.public_bytes(),
     )
 
 
@@ -239,7 +243,8 @@ def derive_session_key_as_responder(
     my_dh_kp: DHKeypair,
     peer_identity_pub_bytes: bytes,
     peer_dh_pub_bytes: bytes,
-    eph_pub_bytes: bytes,       # received in first message envelope
+    eph_pub_bytes: bytes,           # received in first message envelope
+    conv_dh_pub_bytes: bytes,       # received in first message envelope (per-conv DH pub)
     my_user_id: str,
     peer_user_id: str,
     conversation_id: str,
@@ -247,16 +252,16 @@ def derive_session_key_as_responder(
     """
     Derive a session key as the responding party (Bob).
 
-    Protocol mirrors initiator, using the received ephemeral public key:
-        DH1 = X25519(my_dh_priv, peer_dh_pub)      # static-static
-        DH2 = X25519(my_dh_priv, eph_pub)           # static-ephemeral
+    Protocol mirrors initiator, using the received per-conversation DH and ephemeral keys:
+        DH1 = X25519(my_dh_priv, conv_dh_pub)   # static-per-conv
+        DH2 = X25519(my_dh_priv, eph_pub)        # static-ephemeral
         ikm = DH1 || DH2
         session_key = HKDF-SHA256(...)
     """
-    peer_dh_pub = X25519PublicKey.from_public_bytes(peer_dh_pub_bytes)
+    conv_dh_pub = X25519PublicKey.from_public_bytes(conv_dh_pub_bytes)
     eph_pub     = X25519PublicKey.from_public_bytes(eph_pub_bytes)
 
-    dh1 = my_dh_kp.private_key.exchange(peer_dh_pub)
+    dh1 = my_dh_kp.private_key.exchange(conv_dh_pub)
     dh2 = my_dh_kp.private_key.exchange(eph_pub)
     ikm = dh1 + dh2
 
