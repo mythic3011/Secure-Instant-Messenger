@@ -218,7 +218,7 @@ async def fetch_messages(
                ORDER BY sent_at DESC LIMIT ?""",
             (conversation_id, cursor_ts, limit + 1),
         ) as cur:
-            rows = await cur.fetchall()
+            rows = list(await cur.fetchall())
     else:
         async with db.execute(
             """SELECT id, sender_id, recipient_id, counter, nonce_b64, ciphertext_b64,
@@ -228,7 +228,7 @@ async def fetch_messages(
                ORDER BY sent_at DESC LIMIT ?""",
             (conversation_id, limit + 1),
         ) as cur:
-            rows = await cur.fetchall()
+            rows = list(await cur.fetchall())
 
     has_more = len(rows) > limit
     rows = rows[:limit]

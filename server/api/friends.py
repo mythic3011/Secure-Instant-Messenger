@@ -111,7 +111,7 @@ async def list_pending(session: dict = Depends(require_auth)) -> list[FriendRequ
            ORDER BY fr.created_at DESC""",
         (session["user_id"],),
     ) as cur:
-        rows = await cur.fetchall()
+        rows = list(await cur.fetchall())
 
     log.debug("list_pending_requests", user_id=session["user_id"], count=len(rows))
     return [

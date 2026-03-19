@@ -42,7 +42,7 @@ async def list_conversations(
            ORDER BY c.last_message_at DESC NULLS LAST""",
         (user_id, user_id, user_id, user_id, user_id),
     ) as cur:
-        rows = await cur.fetchall()
+        rows = list(await cur.fetchall())
 
     log.debug("list_conversations", user_id=user_id, count=len(rows))
     return ConversationListResponse(
