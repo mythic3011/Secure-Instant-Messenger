@@ -394,20 +394,17 @@ class IMApp(App):
             pass
 
     async def on_friends_screen_send_request(self, msg: Any) -> None:
-        from client.ui.screens.friends import FriendsScreen
         if self._client is None:
             return
         try:
+            friends = self.screen
+        except Exception:
+            return
+        try:
             await self._client.send_friend_request(msg.username)
-            try:
-                self.query_one(FriendsScreen).show_status(f"Request sent to {msg.username}.")
-            except Exception:
-                pass
+            friends.show_status(f"Request sent to {msg.username}.")
         except IMClientError as e:
-            try:
-                self.query_one(FriendsScreen).show_error(f"Failed: {e.detail}")
-            except Exception:
-                pass
+            friends.show_error(f"Failed: {e.detail}")
 
     async def on_friends_screen_accept_request(self, msg: Any) -> None:
         if self._client is None:
