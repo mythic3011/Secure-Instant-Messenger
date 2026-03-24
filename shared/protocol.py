@@ -74,7 +74,7 @@ MAX_SESSION_MESSAGES = 500  # force re-key after this many messages per session
 class DeliveryStatus(str, enum.Enum):
     SENT      = "sent"       # server acknowledged receipt
     DELIVERED = "delivered"  # recipient client acknowledged
-    READ      = "read"       # optional, for future
+    READ      = "read"       # reserved for future UX/protocol extension, not currently implemented
 
 
 class FriendRequestStatus(str, enum.Enum):
@@ -101,6 +101,20 @@ class RegisterRequest(BaseModel):
     dh_pub_b64: str        # X25519 public key, base64
     key_sig_b64: str       # Ed25519 sig over (identity_pub || dh_pub), base64
     totp_uri: str | None = None  # returned by server after provisioning
+
+    @field_validator("password")
+    @classmethod
+    def validate_password_complexity(cls, v: str) -> str:
+        """Enforce password complexity: at least one uppercase, lowercase, digit, and special char."""
+        if not any(c.isupper() for c in v):
+            raise ValueError("Password must contain at least one uppercase letter")
+        if not any(c.islower() for c in v):
+            raise ValueError("Password must contain at least one lowercase letter")
+        if not any(c.isdigit() for c in v):
+            raise ValueError("Password must contain at least one digit")
+        if not any(c in "!@#$%^&*()_+-=[]{}|;:,.<>?" for c in v):
+            raise ValueError("Password must contain at least one special character (!@#$%^&*()_+-=[]{}|;:,.<>?)")
+        return v
 
 
 class RegisterResponse(BaseModel):
@@ -242,7 +256,7 @@ class DeliveryAck(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# WebSocket push messages (server → client)
+# WebSocket push messages (server -> client)
 # ---------------------------------------------------------------------------
 
 class WsPush(BaseModel):

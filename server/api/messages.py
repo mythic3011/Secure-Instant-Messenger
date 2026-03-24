@@ -8,12 +8,16 @@ from __future__ import annotations
 import base64
 import re
 import time
+from datetime import datetime
 
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from sqlalchemy import select, update
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from server.api.auth import require_auth
 from server.core.database import get_db
+from server.models import Conversation, Friendship, Message, User
 from server.ws.handler import push_to_user
 from shared.protocol import (
     DeliveryAck,
@@ -72,6 +76,7 @@ def _validate_envelope(env: MessageEnvelope) -> None:
 async def send_message(
     body: SendMessageRequest,
     session: dict = Depends(require_auth),
+    db: AsyncSession = Depends(get_db),
 ) -> SendMessageResponse:
     """
     Accept an encrypted message envelope from the sender.
@@ -87,34 +92,37 @@ async def send_message(
         log.warning("send_message_rejected", reason="sender_id_mismatch", claimed_sender=env.sender_id, actual_user=session["user_id"])
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="sender_id mismatch")
 
-    db = await get_db()
-
     # R16 — verify friendship before accepting message
+    # Race condition fix: Use SELECT...FOR UPDATE to lock the friendship row
+    # and prevent concurrent modifications (e.g., unfriending) during message insertion
     a, b = sorted([env.sender_id, env.recipient_id])
-    async with db.execute(
-        "SELECT 1 FROM friendships WHERE user_a_id = ? AND user_b_id = ?", (a, b)
-    ) as cur:
-        if not await cur.fetchone():
-            log.warning("send_message_rejected", reason="not_friends", sender=env.sender_id, recipient=env.recipient_id)
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not friends")
+    stmt = select(Friendship).where(
+        Friendship.user_a_id == a,
+        Friendship.user_b_id == b,
+    ).with_for_update()
+    result = await db.execute(stmt)
+    if result.scalar_one_or_none() is None:
+        log.warning("send_message_rejected", reason="not_friends", sender=env.sender_id, recipient=env.recipient_id)
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not friends")
 
     # Verify recipient exists
-    async with db.execute(
-        "SELECT id FROM users WHERE id = ? AND deleted_at IS NULL", (env.recipient_id,)
-    ) as cur:
-        if not await cur.fetchone():
-            log.warning("send_message_rejected", reason="recipient_not_found", sender=env.sender_id, recipient=env.recipient_id)
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Recipient not found")
+    stmt = select(User).where(User.id == env.recipient_id, User.deleted_at.is_(None))
+    result = await db.execute(stmt)
+    if result.scalar_one_or_none() is None:
+        log.warning("send_message_rejected", reason="recipient_not_found", sender=env.sender_id, recipient=env.recipient_id)
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Recipient not found")
 
     # Ensure conversation row exists — look up by participants
     a, b = sorted([env.sender_id, env.recipient_id])
-    async with db.execute(
-        "SELECT id FROM conversations WHERE user_a_id = ? AND user_b_id = ?", (a, b)
-    ) as cur:
-        conv_row = await cur.fetchone()
-    if conv_row is None:
+    stmt = select(Conversation).where(
+        Conversation.user_a_id == a,
+        Conversation.user_b_id == b,
+    )
+    result = await db.execute(stmt)
+    conv = result.scalar_one_or_none()
+    if conv is None:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="No conversation exists (add friend first)")
-    conv_id = conv_row["id"]
+    conv_id = conv.id
     if conv_id != env.conversation_id:
         raise HTTPException(status_code=422, detail="conversation_id mismatch")
 
@@ -124,32 +132,42 @@ async def send_message(
     # both layers means a compromised client cannot replay messages to other
     # clients through the server, and a compromised server cannot replay
     # messages to clients (client-side check catches it).
+    #
+    # Metadata exposure: The server stores and can see sender_id, recipient_id,
+    # conversation_id, counter, ttl_seconds, sent_at, and delivery_status.
+    # This is inherent to server-assisted messaging — the server needs this
+    # metadata to route messages and track delivery. Plaintext content remains
+    # encrypted and invisible to the server.
+    sent_at_dt = datetime.fromtimestamp(env.sent_at)
     try:
-        await db.execute(
-            """INSERT INTO messages
-               (id, conversation_id, sender_id, recipient_id, counter,
-                nonce_b64, ciphertext_b64, eph_pub_b64, conv_dh_pub_b64, chain_index,
-                ttl_seconds, sent_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (
-                env.id, conv_id, env.sender_id, env.recipient_id, env.counter,
-                env.nonce_b64, env.ciphertext_b64, env.eph_pub_b64,
-                env.conv_dh_pub_b64, env.chain_index,
-                env.ttl_seconds, env.sent_at,
-            ),
+        message = Message(
+            id=env.id,
+            conversation_id=conv_id,
+            sender_id=env.sender_id,
+            recipient_id=env.recipient_id,
+            counter=env.counter,
+            nonce_b64=env.nonce_b64,
+            ciphertext_b64=env.ciphertext_b64,
+            eph_pub_b64=env.eph_pub_b64,
+            conv_dh_pub_b64=env.conv_dh_pub_b64,
+            chain_index=env.chain_index,
+            ttl_seconds=env.ttl_seconds,
+            sent_at=sent_at_dt,
         )
-    except Exception:
+        db.add(message)
+        await db.flush()
+    except Exception as exc:
         # UNIQUE constraint violation = replay attempt
-        log.warning("replay_rejected", msg_id=env.id, sender=env.sender_id, counter=env.counter)
+        log.warning("replay_rejected", msg_id=env.id, sender=env.sender_id, counter=env.counter, error=str(exc), error_type=type(exc).__name__)
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Duplicate message (replay rejected)")
 
     # Update conversation metadata
     is_a = env.recipient_id == a
-    unread_col = "unread_count_a" if is_a else "unread_count_b"
-    await db.execute(
-        f"UPDATE conversations SET last_message_at = ?, {unread_col} = {unread_col} + 1 WHERE id = ?",
-        (env.sent_at, conv_id),
-    )
+    if is_a:
+        conv.unread_count_a += 1
+    else:
+        conv.unread_count_b += 1
+    conv.last_message_at = sent_at_dt
     await db.commit()
 
     stored_at = int(time.time())
@@ -159,9 +177,8 @@ async def send_message(
     pushed = await push_to_user(env.recipient_id, {"type": "message", "payload": env.model_dump()})
     if pushed:
         delivered_at = stored_at
-        await db.execute(
-            "UPDATE messages SET delivered_at = ? WHERE id = ?", (delivered_at, env.id)
-        )
+        stmt = update(Message).where(Message.id == env.id).values(delivered_at=delivered_at)
+        await db.execute(stmt)
         await db.commit()
 
     log.info(
@@ -185,78 +202,83 @@ async def fetch_messages(
     before_id: str | None = Query(default=None),
     limit: int = Query(default=50, le=100),
     session: dict = Depends(require_auth),
+    db: AsyncSession = Depends(get_db),
 ) -> FetchMessagesResponse:
     """
     Fetch messages for a conversation (cursor-based pagination).
     Only returns messages where the caller is sender or recipient.
     """
-    db = await get_db()
     user_id = session["user_id"]
 
     # Verify caller is part of this conversation
-    async with db.execute(
-        "SELECT 1 FROM conversations WHERE id = ? AND (user_a_id = ? OR user_b_id = ?)",
-        (conversation_id, user_id, user_id),
-    ) as cur:
-        if not await cur.fetchone():
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not part of this conversation")
+    stmt = select(Conversation).where(
+        Conversation.id == conversation_id,
+        (Conversation.user_a_id == user_id) | (Conversation.user_b_id == user_id),
+    )
+    result = await db.execute(stmt)
+    if result.scalar_one_or_none() is None:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not part of this conversation")
 
     if before_id:
-        async with db.execute(
-            "SELECT sent_at FROM messages WHERE id = ?", (before_id,)
-        ) as cur:
-            cursor_row = await cur.fetchone()
+        stmt = select(Message.sent_at).where(Message.id == before_id)
+        result = await db.execute(stmt)
+        cursor_row = result.scalar_one_or_none()
         if cursor_row is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Cursor message not found")
-        cursor_ts = cursor_row["sent_at"]
+        cursor_ts = cursor_row
 
-        async with db.execute(
-            """SELECT id, sender_id, recipient_id, counter, nonce_b64, ciphertext_b64,
-                      eph_pub_b64, conv_dh_pub_b64, chain_index, ttl_seconds, sent_at, delivered_at
-               FROM messages
-               WHERE conversation_id = ? AND sent_at < ?
-               ORDER BY sent_at DESC LIMIT ?""",
-            (conversation_id, cursor_ts, limit + 1),
-        ) as cur:
-            rows = list(await cur.fetchall())
+        stmt = (
+            select(Message)
+            .where(
+                Message.conversation_id == conversation_id,
+                Message.sent_at < cursor_ts,
+            )
+            .order_by(Message.sent_at.desc())
+            .limit(limit + 1)
+        )
     else:
-        async with db.execute(
-            """SELECT id, sender_id, recipient_id, counter, nonce_b64, ciphertext_b64,
-                      eph_pub_b64, conv_dh_pub_b64, chain_index, ttl_seconds, sent_at, delivered_at
-               FROM messages
-               WHERE conversation_id = ?
-               ORDER BY sent_at DESC LIMIT ?""",
-            (conversation_id, limit + 1),
-        ) as cur:
-            rows = list(await cur.fetchall())
+        stmt = (
+            select(Message)
+            .where(Message.conversation_id == conversation_id)
+            .order_by(Message.sent_at.desc())
+            .limit(limit + 1)
+        )
+
+    result = await db.execute(stmt)
+    rows = list(result.scalars().all())
 
     has_more = len(rows) > limit
     rows = rows[:limit]
 
+    # Metadata exposure: When fetching messages, the server reveals metadata
+    # including sender_id, recipient_id, conversation_id, counter, sent_at,
+    # delivered_at, and delivery_status. This allows clients to display
+    # conversation history and delivery indicators, but plaintext remains
+    # encrypted. The server cannot read message content.
     messages = [
         MessageEnvelope(
-            id=r["id"],
+            id=msg.id,
             type=MessageType.MESSAGE,
-            sender_id=r["sender_id"],
-            recipient_id=r["recipient_id"],
+            sender_id=msg.sender_id,
+            recipient_id=msg.recipient_id,
             conversation_id=conversation_id,
-            counter=r["counter"],
-            nonce_b64=r["nonce_b64"],
-            ciphertext_b64=r["ciphertext_b64"],
-            eph_pub_b64=r["eph_pub_b64"],
-            conv_dh_pub_b64=r["conv_dh_pub_b64"],
-            chain_index=r["chain_index"] if r["chain_index"] is not None else 0,
-            ttl_seconds=r["ttl_seconds"],
-            sent_at=r["sent_at"],
-            delivery_status=DeliveryStatus.DELIVERED if r["delivered_at"] else DeliveryStatus.SENT,
+            counter=msg.counter,
+            nonce_b64=msg.nonce_b64,
+            ciphertext_b64=msg.ciphertext_b64,
+            eph_pub_b64=msg.eph_pub_b64,
+            conv_dh_pub_b64=msg.conv_dh_pub_b64,
+            chain_index=msg.chain_index if msg.chain_index is not None else 0,
+            ttl_seconds=msg.ttl_seconds,
+            sent_at=int(msg.sent_at.timestamp()) if isinstance(msg.sent_at, datetime) else msg.sent_at,
+            delivery_status=DeliveryStatus.DELIVERED if msg.delivered_at else DeliveryStatus.SENT,
         )
-        for r in rows
+        for msg in rows
     ]
 
     result = FetchMessagesResponse(
         messages=messages,
         has_more=has_more,
-        next_cursor=rows[-1]["id"] if has_more and rows else None,
+        next_cursor=rows[-1].id if has_more and rows else None,
     )
     log.debug(
         "fetch_messages",
@@ -276,38 +298,34 @@ async def fetch_messages(
 async def delivery_ack(
     body: DeliveryAck,
     session: dict = Depends(require_auth),
+    db: AsyncSession = Depends(get_db),
 ) -> None:
     """
     Recipient sends this after successfully decrypting a message.
     Updates delivered_at on the message and notifies the sender.
     """
-    db = await get_db()
     user_id = session["user_id"]
 
-    async with db.execute(
-        "SELECT sender_id, recipient_id, delivered_at FROM messages WHERE id = ?",
-        (body.message_id,),
-    ) as cur:
-        msg = await cur.fetchone()
+    stmt = select(Message).where(Message.id == body.message_id)
+    result = await db.execute(stmt)
+    msg = result.scalar_one_or_none()
 
     if msg is None:
         log.debug("delivery_ack_ignored", message_id=body.message_id, reason="not_found")
         return  # silently ignore unknown message IDs
 
-    if msg["recipient_id"] != user_id:
+    if msg.recipient_id != user_id:
         log.warning("delivery_ack_rejected", message_id=body.message_id, user_id=user_id, reason="not_recipient")
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not your message")
 
-    if msg["delivered_at"] is None:
-        now = int(time.time())
-        await db.execute(
-            "UPDATE messages SET delivered_at = ? WHERE id = ?", (now, body.message_id)
-        )
+    if msg.delivered_at is None:
+        now = datetime.fromtimestamp(int(time.time()))
+        msg.delivered_at = now
         await db.commit()
 
         # Notify sender of delivery
         await push_to_user(
-            msg["sender_id"],
+            msg.sender_id,
             {"type": "ack", "payload": {"message_id": body.message_id, "delivered_at": now}},
         )
-        log.info("delivery_ack_processed", message_id=body.message_id, recipient=user_id, sender=msg["sender_id"])
+        log.info("delivery_ack_processed", message_id=body.message_id, recipient=user_id, sender=msg.sender_id)

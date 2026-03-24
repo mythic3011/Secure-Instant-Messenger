@@ -8,19 +8,22 @@ from __future__ import annotations
 import base64
 
 import structlog
-from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 from cryptography.exceptions import InvalidSignature
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from server.api.auth import require_auth
 from server.core.database import get_db
+from server.models import PublicKey, User
 from shared.protocol import PublicKeyBundle
 
 router = APIRouter(prefix="/v1/keys", tags=["keys"])
 log = structlog.get_logger()
 
 _ED25519_PUB_LEN = 32
-_X25519_PUB_LEN  = 32
+_X25519_PUB_LEN = 32
 
 
 def _verify_key_bundle(identity_pub_b64: str, dh_pub_b64: str, key_sig_b64: str) -> None:
@@ -30,8 +33,8 @@ def _verify_key_bundle(identity_pub_b64: str, dh_pub_b64: str, key_sig_b64: str)
     """
     try:
         identity_pub_bytes = base64.b64decode(identity_pub_b64, validate=True)
-        dh_pub_bytes       = base64.b64decode(dh_pub_b64, validate=True)
-        sig_bytes          = base64.b64decode(key_sig_b64, validate=True)
+        dh_pub_bytes = base64.b64decode(dh_pub_b64, validate=True)
+        sig_bytes = base64.b64decode(key_sig_b64, validate=True)
     except Exception:
         log.warning("key_bundle_rejected", reason="invalid_base64")
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid base64 in key bundle")
@@ -58,6 +61,7 @@ def _verify_key_bundle(identity_pub_b64: str, dh_pub_b64: str, key_sig_b64: str)
 async def upload_keys(
     body: PublicKeyBundle,
     session: dict = Depends(require_auth),
+    db: AsyncSession = Depends(get_db),
 ) -> None:
     """
     Upload or replace the caller's public key bundle.
@@ -65,49 +69,61 @@ async def upload_keys(
     """
     _verify_key_bundle(body.identity_pub_b64, body.dh_pub_b64, body.key_sig_b64)
 
-    db = await get_db()
-    await db.execute(
-        """INSERT INTO public_keys (user_id, identity_pub, dh_pub, key_sig)
-           VALUES (?, ?, ?, ?)
-           ON CONFLICT(user_id) DO UPDATE SET
-             identity_pub = excluded.identity_pub,
-             dh_pub       = excluded.dh_pub,
-             key_sig      = excluded.key_sig,
-             uploaded_at  = unixepoch()""",
-        (session["user_id"], body.identity_pub_b64, body.dh_pub_b64, body.key_sig_b64),
-    )
+    user_id = session["user_id"]
+
+    # Check if key bundle already exists
+    stmt = select(PublicKey).where(PublicKey.user_id == user_id)
+    result = await db.execute(stmt)
+    existing_key = result.scalar_one_or_none()
+
+    if existing_key is not None:
+        # Update existing key bundle
+        existing_key.identity_pub = body.identity_pub_b64
+        existing_key.dh_pub = body.dh_pub_b64
+        existing_key.key_sig = body.key_sig_b64
+    else:
+        # Create new key bundle
+        public_key = PublicKey(
+            user_id=user_id,
+            identity_pub=body.identity_pub_b64,
+            dh_pub=body.dh_pub_b64,
+            key_sig=body.key_sig_b64,
+        )
+        db.add(public_key)
+
     await db.commit()
-    log.info("keys_uploaded", user_id=session["user_id"])
+    log.info("keys_uploaded", user_id=user_id)
 
 
 @router.get("/{username}", response_model=PublicKeyBundle)
 async def get_keys(
     username: str,
     session: dict = Depends(require_auth),
+    db: AsyncSession = Depends(get_db),
 ) -> PublicKeyBundle:
     """
     Fetch the public key bundle for a user by username.
     Used by the initiating client to set up a session.
     """
-    db = await get_db()
-    async with db.execute(
-        """SELECT u.id, u.username, pk.identity_pub, pk.dh_pub, pk.key_sig, pk.uploaded_at
-           FROM users u JOIN public_keys pk ON pk.user_id = u.id
-           WHERE u.username = ? AND u.deleted_at IS NULL""",
-        (username,),
-    ) as cur:
-        row = await cur.fetchone()
+    stmt = (
+        select(User, PublicKey)
+        .join(PublicKey, PublicKey.user_id == User.id)
+        .where(User.username == username, User.deleted_at.is_(None))
+    )
+    result = await db.execute(stmt)
+    row = result.first()
 
     if row is None:
         log.warning("get_keys_not_found", requested_username=username, requester=session["user_id"])
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User or keys not found")
 
+    user, public_key = row
     log.info("keys_fetched", requested_username=username, requester=session["user_id"])
     return PublicKeyBundle(
-        user_id=row["id"],
-        username=row["username"],
-        identity_pub_b64=row["identity_pub"],
-        dh_pub_b64=row["dh_pub"],
-        key_sig_b64=row["key_sig"],
-        uploaded_at=row["uploaded_at"],
+        user_id=user.id,
+        username=user.username,
+        identity_pub_b64=public_key.identity_pub,
+        dh_pub_b64=public_key.dh_pub,
+        key_sig_b64=public_key.key_sig,
+        uploaded_at=int(public_key.uploaded_at.timestamp()),
     )

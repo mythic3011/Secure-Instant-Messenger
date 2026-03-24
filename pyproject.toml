@@ -11,6 +11,10 @@ dependencies = [
     "websockets>=13.0",
     "aiosqlite>=0.20.0",
     "scalar-fastapi>=1.0.0",
+    # Database ORM
+    "sqlalchemy[asyncio]>=2.0.0",
+    "alembic>=1.13.0",
+    "asyncpg>=0.29.0",  # PostgreSQL driver
     # Crypto — well-reviewed libraries per project spec §4.1
     "cryptography>=43.0.0",     # PyCA: Ed25519, X25519, AES-GCM, HKDF
     "argon2-cffi>=23.1.0",      # Argon2id password hashing

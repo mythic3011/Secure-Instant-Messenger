@@ -7,26 +7,23 @@ whether your design can resist attacks."
 """
 
 import base64
-import os
-import time
-import pytest
-
 import secrets
+import time
+
+import pytest
+from cryptography.exceptions import InvalidTag
 
 from client.crypto.session import (
-    IdentityKeypair,
     DHKeypair,
-    SessionKey,
-    RatchetChain,
+    IdentityKeypair,
+    ReplayError,
+    ReplayProtector,
+    build_and_encrypt,
+    decrypt_envelope,
     derive_ratchet_chains,
     derive_session_key_as_initiator,
     derive_session_key_as_responder,
-    build_and_encrypt,
-    decrypt_envelope,
-    ReplayProtector,
-    ReplayError,
 )
-from cryptography.exceptions import InvalidTag
 
 
 def _random_conv_id() -> str:

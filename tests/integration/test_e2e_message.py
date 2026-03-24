@@ -1,7 +1,7 @@
 """
 tests/integration/test_e2e_message.py — End-to-end message flow test.
 
-Tests the full path: register → login → friend request → send message → decrypt.
+Tests the full path: register -> login -> friend request -> send message -> decrypt.
 Uses httpx AsyncClient with the FastAPI app directly (no real server needed).
 """
 
@@ -51,6 +51,12 @@ async def app_client():
     os.environ["DATABASE_URL"]        = "sqlite+aiosqlite:////tmp/test_e2e.db"
     os.environ["RATE_LIMIT_REGISTER_MAX"] = "1000"
     os.environ["RATE_LIMIT_LOGIN_MAX"]    = "1000"
+
+    # Clean up any leftover DB from previous runs to avoid UNIQUE constraint violations
+    try:
+        os.unlink("/tmp/test_e2e.db")
+    except FileNotFoundError:
+        pass
 
     from server.main import app
     await db_mod.init_db()

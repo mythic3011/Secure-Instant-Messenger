@@ -5,11 +5,11 @@ Shows conversation list ordered by last activity (R23) with unread counters (R24
 
 from __future__ import annotations
 
-from textual.message import Message
 from textual.app import ComposeResult
 from textual.containers import Horizontal
+from textual.message import Message
 from textual.screen import Screen
-from textual.widgets import Button, Footer, Header, ListItem, ListView, Static
+from textual.widgets import Button, ListItem, ListView, Static
 
 
 class ConversationItem(ListItem):

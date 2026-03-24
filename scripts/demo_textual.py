@@ -1,5 +1,6 @@
 from textual.app import App, ComposeResult
-from textual.widgets import Header, Footer, Button, Static
+from textual.widgets import Button, Footer, Header, Static
+
 
 class TestApp(App):
     CSS = """

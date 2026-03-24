@@ -371,7 +371,7 @@ class RatchetChain:
     """
     chain_key:    bytes
     index:        int = 0
-    skipped_keys: dict = field(default_factory=dict)  # index → msg_key
+    skipped_keys: dict = field(default_factory=dict)  # index -> msg_key
 
     def clear(self) -> None:
         """

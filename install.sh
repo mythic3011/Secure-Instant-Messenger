@@ -61,7 +61,7 @@ if [ ! -f "$BOOTSTRAP" ]; then
   error "$BOOTSTRAP not found — is this the project root?"
 fi
 chmod +x "$BOOTSTRAP"
-"$BOOTSTRAP"   # exits non-zero and prints message if .env.local already exists → caught by set -e
+"$BOOTSTRAP"   # exits non-zero and prints message if .env.local already exists -> caught by set -e
 # bootstrap-env.sh already prints "Wrote secrets to .env.local" on success
 
 # ── Step 3: TLS certificate ───────────────────────────────────────────────────

@@ -5,11 +5,11 @@ client/ui/screens/register.py — Registration screen.
 from __future__ import annotations
 
 import io
-from urllib.parse import urlparse, parse_qs
+from urllib.parse import parse_qs, urlparse
 
-from textual.message import Message
 from textual.app import ComposeResult
 from textual.containers import Center, Vertical
+from textual.message import Message
 from textual.screen import Screen
 from textual.widgets import Button, Input, Label, Static
 

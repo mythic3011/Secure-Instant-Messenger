@@ -11,12 +11,14 @@ import time
 
 import structlog
 from fastapi import WebSocket, WebSocketDisconnect
+from sqlalchemy import select, update
 
-from server.core.database import get_db
+from server.core.database import get_session
+from server.models.message import Message
 
 log = structlog.get_logger()
 
-# Map user_id → active WebSocket connection
+# Map user_id -> active WebSocket connection
 _connections: dict[str, WebSocket] = {}
 _lock = asyncio.Lock()
 
@@ -64,7 +66,7 @@ async def websocket_endpoint(websocket: WebSocket, user_id: str) -> None:
             try:
                 raw = await asyncio.wait_for(websocket.receive_text(), timeout=60.0)
                 await _handle_client_message(user_id, raw)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 # Send ping to keep connection alive
                 await websocket.send_text(json.dumps({"type": "ping"}))
 
@@ -80,54 +82,50 @@ async def websocket_endpoint(websocket: WebSocket, user_id: str) -> None:
 
 async def _flush_offline_queue(websocket: WebSocket, user_id: str) -> None:
     """Deliver all undelivered messages to a newly connected user."""
-    db = await get_db()
-    now = int(time.time())
+    async with get_session() as db:
+        now = int(time.time())
 
-    async with db.execute(
-        """SELECT id, conversation_id, sender_id, recipient_id, counter,
-                  nonce_b64, ciphertext_b64, eph_pub_b64, ttl_seconds, sent_at
-           FROM messages
-           WHERE recipient_id = ? AND delivered_at IS NULL
-             AND (expires_at IS NULL OR expires_at > ?)
-           ORDER BY sent_at ASC""",
-        (user_id, now),
-    ) as cur:
-        rows = await cur.fetchall()
+        # Race condition fix: Use SELECT...FOR UPDATE to lock rows being processed
+        # This prevents concurrent delivery attempts from multiple connections
+        stmt = select(Message).where(
+            Message.recipient_id == user_id,
+            Message.delivered_at.is_(None),
+            (Message.expires_at.is_(None) | (Message.expires_at > now)),
+        ).order_by(Message.sent_at.asc()).with_for_update()
+        result = await db.execute(stmt)
+        messages = result.scalars().all()
 
-    delivered_ids = []
-    for row in rows:
-        payload = {
-            "type": "message",
-            "payload": {
-                "id":              row["id"],
-                "type":            "message",
-                "sender_id":       row["sender_id"],
-                "recipient_id":    row["recipient_id"],
-                "conversation_id": row["conversation_id"],
-                "counter":         row["counter"],
-                "nonce_b64":       row["nonce_b64"],
-                "ciphertext_b64":  row["ciphertext_b64"],
-                "eph_pub_b64":     row["eph_pub_b64"],
-                "ttl_seconds":     row["ttl_seconds"],
-                "sent_at":         row["sent_at"],
-                "delivery_status": "delivered",
-            },
-        }
-        try:
-            await websocket.send_text(json.dumps(payload))
-            delivered_ids.append(row["id"])
-        except Exception as exc:
-            log.warning("offline_queue_send_failed", user_id=user_id, msg_id=row["id"], error=str(exc))
-            break  # connection dropped mid-flush
+        delivered_ids = []
+        for msg in messages:
+            payload = {
+                "type": "message",
+                "payload": {
+                    "id":              msg.id,
+                    "type":            "message",
+                    "sender_id":       msg.sender_id,
+                    "recipient_id":    msg.recipient_id,
+                    "conversation_id": msg.conversation_id,
+                    "counter":         msg.counter,
+                    "nonce_b64":       msg.nonce_b64,
+                    "ciphertext_b64":  msg.ciphertext_b64,
+                    "eph_pub_b64":     msg.eph_pub_b64,
+                    "ttl_seconds":     msg.ttl_seconds,
+                    "sent_at":         msg.sent_at,
+                    "delivery_status": "delivered",
+                },
+            }
+            try:
+                await websocket.send_text(json.dumps(payload))
+                delivered_ids.append(msg.id)
+            except Exception as exc:
+                log.warning("offline_queue_send_failed", user_id=user_id, msg_id=msg.id, error=str(exc))
+                break  # connection dropped mid-flush
 
-    if delivered_ids:
-        placeholders = ",".join("?" * len(delivered_ids))
-        await db.execute(
-            f"UPDATE messages SET delivered_at = ? WHERE id IN ({placeholders})",
-            [now, *delivered_ids],
-        )
-        await db.commit()
-        log.info("offline_queue_flushed", user_id=user_id, count=len(delivered_ids))
+        if delivered_ids:
+            stmt = update(Message).where(Message.id.in_(delivered_ids)).values(delivered_at=now)
+            await db.execute(stmt)
+            await db.commit()
+            log.info("offline_queue_flushed", user_id=user_id, count=len(delivered_ids))
 
 
 async def _handle_client_message(user_id: str, raw: str) -> None:
@@ -148,23 +146,25 @@ async def _handle_client_message(user_id: str, raw: str) -> None:
         if not message_id:
             log.warning("ws_ack_missing_message_id", user_id=user_id)
             return
-        db = await get_db()
-        now = int(time.time())
-        async with db.execute(
-            "SELECT sender_id, delivered_at FROM messages WHERE id = ? AND recipient_id = ?",
-            (message_id, user_id),
-        ) as cur:
-            row = await cur.fetchone()
-        if row and row["delivered_at"] is None:
-            await db.execute(
-                "UPDATE messages SET delivered_at = ? WHERE id = ?", (now, message_id)
-            )
-            await db.commit()
-            # Notify sender
-            await push_to_user(
-                row["sender_id"],
-                {"type": "ack", "payload": {"message_id": message_id, "delivered_at": now}},
-            )
-            log.info("ws_ack_processed", message_id=message_id, recipient=user_id, sender=row["sender_id"])
+        async with get_session() as db:
+            now = int(time.time())
+            # Race condition fix: Use SELECT...FOR UPDATE to lock the message row
+            # This prevents concurrent ACK processing from multiple connections
+            stmt = select(Message.sender_id, Message.delivered_at).where(
+                Message.id == message_id,
+                Message.recipient_id == user_id,
+            ).with_for_update()
+            result = await db.execute(stmt)
+            row = result.first()
+            if row and row.delivered_at is None:
+                stmt = update(Message).where(Message.id == message_id).values(delivered_at=now)
+                await db.execute(stmt)
+                await db.commit()
+                # Notify sender
+                await push_to_user(
+                    row.sender_id,
+                    {"type": "ack", "payload": {"message_id": message_id, "delivered_at": now}},
+                )
+                log.info("ws_ack_processed", message_id=message_id, recipient=user_id, sender=row.sender_id)
     else:
         log.debug("ws_unknown_message_type", user_id=user_id, msg_type=msg.get("type"))

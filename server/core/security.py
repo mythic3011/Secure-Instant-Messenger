@@ -10,11 +10,12 @@ import os
 import secrets
 import time
 
-import argon2.low_level as argon2_ll
 import pyotp
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.hashes import SHA256
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
+from sqlalchemy import and_, case, select
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
 from server.core.config import get_settings
 
@@ -105,6 +106,7 @@ def _totp_enc_key(user_id: str) -> bytes:
     Uses HKDF-SHA256 with the server's TOTP_ENCRYPTION_KEY as IKM.
     """
     settings = get_settings()
+    assert settings.totp_encryption_key is not None, "TOTP_ENCRYPTION_KEY must be set"
     ikm = bytes.fromhex(settings.totp_encryption_key)
     return HKDF(
         algorithm=SHA256(),
@@ -173,48 +175,56 @@ async def check_rate_limit(key: str, max_attempts: int, window_seconds: int) -> 
       the limit. The upsert makes the read-check-write a single SQL
       statement, which SQLite executes under its internal write lock.
     """
-    from server.core.database import get_db
-    db = await get_db()
-    now = int(time.time())
+    from server.core.database import get_session
+    from server.models.rate_limit import RateLimit
 
-    # Fast path: if currently locked out, reject without writing
-    async with db.execute(
-        "SELECT locked_until FROM rate_limits WHERE key = ?", (key,),
-    ) as cur:
-        row = await cur.fetchone()
-    if row and row["locked_until"] and now < row["locked_until"]:
-        return False
+    async with get_session() as db:
+        now = int(time.time())
 
-    # Atomic upsert — increment or reset window in one statement.
-    # SQLite's ON CONFLICT executes atomically under the write lock.
-    await db.execute(
-        """INSERT INTO rate_limits (key, attempts, window_start, locked_until)
-           VALUES (?1, 1, ?2, NULL)
-           ON CONFLICT(key) DO UPDATE SET
-               attempts = CASE
-                   WHEN ?2 - rate_limits.window_start > ?3 THEN 1
-                   ELSE rate_limits.attempts + 1
-               END,
-               window_start = CASE
-                   WHEN ?2 - rate_limits.window_start > ?3 THEN ?2
-                   ELSE rate_limits.window_start
-               END,
-               locked_until = CASE
-                   WHEN ?2 - rate_limits.window_start <= ?3
-                        AND rate_limits.attempts + 1 > ?4
-                   THEN ?2 + ?3
-                   ELSE NULL
-               END""",
-        (key, now, window_seconds, max_attempts),
-    )
-    await db.commit()
+        # Fast path: if currently locked out, reject without writing
+        stmt = select(RateLimit.locked_until).where(RateLimit.key == key)
+        result = await db.execute(stmt)
+        locked_until = result.scalar_one_or_none()
+        if locked_until and now < locked_until:
+            return False
 
-    # Read back to determine if this request was allowed
-    async with db.execute(
-        "SELECT attempts, locked_until FROM rate_limits WHERE key = ?", (key,),
-    ) as cur:
-        row = await cur.fetchone()
+        # Atomic upsert — increment or reset window in one statement.
+        # SQLite's ON CONFLICT executes atomically under the write lock.
+        stmt = sqlite_insert(RateLimit).values(
+            key=key,
+            attempts=1,
+            window_start=now,
+            locked_until=None,
+        ).on_conflict_do_update(
+            index_elements=["key"],
+            set_={
+                "attempts": case(
+                    (now - RateLimit.window_start > window_seconds, 1),
+                    else_=RateLimit.attempts + 1,
+                ),
+                "window_start": case(
+                    (now - RateLimit.window_start > window_seconds, now),
+                    else_=RateLimit.window_start,
+                ),
+                "locked_until": case(
+                    (
+                        and_(
+                            now - RateLimit.window_start <= window_seconds,
+                            RateLimit.attempts + 1 > max_attempts,
+                        ),
+                        now + window_seconds,
+                    ),
+                    else_=None,
+                ),
+            },
+        )
+        await db.execute(stmt)
 
-    if row and row["locked_until"] and now < row["locked_until"]:
-        return False
-    return row["attempts"] <= max_attempts if row else True
+        # Read back to determine if this request was allowed
+        stmt = select(RateLimit.attempts, RateLimit.locked_until).where(RateLimit.key == key)
+        result = await db.execute(stmt)
+        row = result.first()
+
+        if row and row.locked_until and now < row.locked_until:
+            return False
+        return row.attempts <= max_attempts if row else True

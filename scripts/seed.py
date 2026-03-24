@@ -136,7 +136,7 @@ async def api(
     headers = {"Authorization": f"Bearer {token}"} if token else {}
     resp = await client.request(method, path, headers=headers, **kwargs)
     if resp.status_code >= 400:
-        raise RuntimeError(f"{method} {path} → HTTP {resp.status_code}: {resp.text[:300]}")
+        raise RuntimeError(f"{method} {path} -> HTTP {resp.status_code}: {resp.text[:300]}")
     return resp.json()
 
 
@@ -187,10 +187,11 @@ def _gen_key_bundle() -> dict:
     Returns dict with identity_pub_b64, dh_pub_b64, key_sig_b64.
     Uses the same crypto as client/crypto/session.py.
     """
+    import base64
+
     from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
     from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey
     from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
-    import base64
 
     ik = Ed25519PrivateKey.generate()
     dh = X25519PrivateKey.generate()
@@ -238,7 +239,7 @@ async def register_user(
         totp_secret = qs.get("secret", [""])[0]
         totp_secrets[username] = totp_secret
         totp_file = save_totp_md(username, totp_secret)
-        info(f"  Registered {username!r} | TOTP → {totp_file}")
+        info(f"  Registered {username!r} | TOTP -> {totp_file}")
     except RuntimeError as exc:
         if "409" in str(exc) or "already" in str(exc).lower():
             warn(f"  {username!r} already exists — skipping register")
@@ -268,7 +269,7 @@ async def register_user(
     # Fetch user_id from keys endpoint (server doesn't return it on login)
     keys_resp = await api(client, "GET", f"/v1/keys/{username}", token=token)
     user_id = keys_resp.get("user_id", "")
-    info(f"  Resolved   {username!r} → user_id={user_id[:8]}…")
+    info(f"  Resolved   {username!r} -> user_id={user_id[:8]}…")
 
     return Session(
         username=username,
@@ -310,7 +311,7 @@ async def setup_friendships(
                     json={"recipient_username": friend},
                 )
                 req_id = resp.get("id", "")
-                info(f"  Friend request {uname!r} → {friend!r} (id={req_id[:8]}…)")
+                info(f"  Friend request {uname!r} -> {friend!r} (id={req_id[:8]}…)")
 
                 # Auto-accept from the other side
                 await api(
@@ -332,8 +333,10 @@ def _encrypt_seed_message(text: str) -> tuple[str, str]:
     Returns (nonce_b64, ciphertext_b64).
     This is real encryption but with a throwaway key — seed data only.
     """
+    import base64
+    import os as _os
+
     from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-    import base64, os as _os
 
     key   = _os.urandom(32)
     nonce = _os.urandom(12)
@@ -352,7 +355,7 @@ async def send_mock_messages(
     """
     import uuid
 
-    # Build a lookup of (user_a_id, user_b_id) → conv_id from server
+    # Build a lookup of (user_a_id, user_b_id) -> conv_id from server
     conv_id_cache: dict[tuple[str, str], str] = {}
     for uname, sess in sessions.items():
         try:
@@ -411,9 +414,9 @@ async def send_mock_messages(
                     token=sess.token,
                     json={"envelope": envelope},
                 )
-                info(f"  Message {uname!r} → {recipient!r}: {text[:40]!r}")
+                info(f"  Message {uname!r} -> {recipient!r}: {text[:40]!r}")
             except RuntimeError as exc:
-                warn(f"  Message failed {uname!r}→{recipient!r}: {exc}")
+                warn(f"  Message failed {uname!r}->{recipient!r}: {exc}")
 
 
 def save_credentials(users: list[dict], sessions: dict[str, Session]) -> Path:
@@ -488,18 +491,18 @@ async def main() -> None:
 
         header("Saving credentials")
         cred_path = save_credentials(SEED_USERS, sessions)
-        info(f"Credentials → {cred_path}")
+        info(f"Credentials -> {cred_path}")
         for u in SEED_USERS:
             totp_path = TMP_DIR / f"comp3334_totp_{u['username']}.md"
             if totp_path.exists():
-                info(f"TOTP QR     → {totp_path}")
+                info(f"TOTP QR     -> {totp_path}")
 
     print(f"\n{GREEN}{BOLD}Seed complete!{NC}")
-    print(f"\nLogin with any seed user:")
+    print("\nLogin with any seed user:")
     for u in SEED_USERS:
         print(f"  {u['username']:<12} / {u['password']}")
     print(f"\nCredentials: {CRED_FILE}")
-    print(f"TOTP files:  /tmp/comp3334_totp_<username>.md\n")
+    print("TOTP files:  /tmp/comp3334_totp_<username>.md\n")
 
 
 if __name__ == "__main__":
