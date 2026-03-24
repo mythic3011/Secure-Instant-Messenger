@@ -42,23 +42,26 @@ End-to-end encrypted instant messaging application built for COMP3334. Demonstra
 
 ## Getting started
 
-1. **Copy the environment file** and fill in secrets:
-
-   ```bash
-   cp .env.example .env.local
-   # Generate a secret: python -c "import secrets; print(secrets.token_hex(32))"
-   ```
-
-2. **Install dependencies** (requires [uv](https://docs.astral.sh/uv/)):
+1. **Install dependencies** (requires [uv](https://docs.astral.sh/uv/)):
 
    ```bash
    uv sync
    ```
 
-3. **Start the server:**
+2. **Start the server:**
 
    ```bash
-   uv run uvicorn server.main:app --host 0.0.0.0 --port 8443
+   uv run python -m server.main
+   ```
+
+   The server auto-detects the environment and creates `./data/` automatically.
+   In development mode, secrets are auto-generated (logged as warnings).
+   TLS certs are optional locally — the server falls back to HTTP if missing.
+
+3. **(Optional) Generate TLS certs and customise config:**
+
+   ```bash
+   bash scripts/bootstrap-env.sh dev
    ```
 
 4. **Launch the client** (in a separate terminal):
@@ -67,7 +70,7 @@ End-to-end encrypted instant messaging application built for COMP3334. Demonstra
    uv run python -m client.main --server https://localhost:8443
    ```
 
-   The client stores identity keys and session state in an encrypted local file at `~/.comp3334im/<username>/`.
+   The client stores identity keys in `~/.comp3334im/<username>/`.
 
 ## Testing
 
@@ -98,6 +101,21 @@ See `docs/ARCHITECTURE.md` for the full design: session state machine, 2-DH key 
 ## Deployment
 
 See `docs/DEPLOY.md` for step-by-step instructions for Windows 11 and Ubuntu.
+
+## Troubleshooting
+
+| Problem | Fix |
+|---|---|
+| `PermissionError: '/app/data'` | Stale `.env.local` with container path. Delete it or remove the `DATABASE_URL` line and restart. |
+| TLS cert not found | Run `bash scripts/bootstrap-env.sh dev`, or ignore — server falls back to HTTP in dev mode. |
+
+**Data directory contract:**
+
+| Environment | DB path | How it's set |
+|---|---|---|
+| Local dev (zero config) | `./data/im.db` | Auto-detected via `shared/env.py` (no `/.dockerenv`) |
+| Local dev (with bootstrap) | `./data/im.db` | `bootstrap-env.sh` → `.env.local` |
+| Docker / Compose | `/app/data/im.db` | Auto-detected via `shared/env.py` (`/.dockerenv` exists) |
 
 ## License
 

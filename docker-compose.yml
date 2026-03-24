@@ -8,7 +8,9 @@ services:
       context: .
       dockerfile: Dockerfile.server
       target: runtime
-    env_file: .env.local
+    env_file:
+      - path: .env.local
+        required: false
     labels:
       - dev.orbstack.https-port=8443 # L4 passthrough — prevents OrbStack double-TLS (alert 46)
     ports:

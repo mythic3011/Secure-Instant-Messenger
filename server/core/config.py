@@ -5,12 +5,15 @@ Uses pydantic-settings for type-safe env loading.
 
 from __future__ import annotations
 
+import os
 from functools import lru_cache
 from typing import Optional
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from pydantic import field_validator
 import structlog
+
+from shared.env import default_database_url, default_tls_cert, default_tls_key
 
 
 class ConfigError(RuntimeError):
@@ -26,14 +29,13 @@ log = structlog.get_logger()
 
 class Settings(BaseSettings):
     _env_path = None
-    if "ENV_FILE" in __import__("os").environ:
-        _env_path = __import__("os").environ["ENV_FILE"]
+    if "ENV_FILE" in os.environ:
+        _env_path = os.environ["ENV_FILE"]
     else:
         # prefer .env.local when available
-        import os as _os
-        if _os.path.exists(".env.local"):
+        if os.path.exists(".env.local"):
             _env_path = ".env.local"
-        elif _os.path.exists(".env"):
+        elif os.path.exists(".env"):
             _env_path = ".env"
     model_config = SettingsConfigDict(
         env_file=_env_path,
@@ -47,8 +49,8 @@ class Settings(BaseSettings):
     port: int = 8443
     log_level: str = "info"
 
-    # Database
-    database_url: str = "sqlite+aiosqlite:////app/data/im.db"
+    # Database — auto-detects container vs local via shared.env
+    database_url: str = default_database_url()
 
     # Auth tokens — opaque bearer tokens, SHA256-hashed in DB
     # these are optional during development; validators supply temporary
@@ -59,9 +61,9 @@ class Settings(BaseSettings):
     # TOTP secret encryption (server-side AES-GCM)
     totp_encryption_key: Optional[str] = None  # hex-encoded 32 bytes
 
-    # TLS
-    tls_cert_file: str = "/app/certs/server.crt"
-    tls_key_file: str = "/app/certs/server.key"
+    # TLS — auto-detects container vs local via shared.env
+    tls_cert_file: str = default_tls_cert()
+    tls_key_file: str = default_tls_key()
 
     # Rate limiting
     rate_limit_login_max: int = 5

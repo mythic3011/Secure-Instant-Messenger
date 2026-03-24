@@ -17,6 +17,9 @@ KEY_FILE="${TLS_KEY_FILE:-/app/certs/server.key}"
 CN="${TLS_CN:-localhost}"
 CERT_DIR="$(dirname "$CERT_FILE")"
 
+# ── Ensure data directory exists ────────────────────────────────────────────
+mkdir -p /app/data
+
 # ── Generate cert if missing ────────────────────────────────────────────────
 if [ ! -f "$CERT_FILE" ] || [ ! -f "$KEY_FILE" ]; then
     echo "[entrypoint] Generating self-signed TLS certificate (CN=$CN)..."
