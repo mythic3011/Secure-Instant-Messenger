@@ -11,6 +11,7 @@ import json
 import os
 import time
 from contextlib import asynccontextmanager
+from datetime import datetime, timedelta, timezone
 
 import structlog
 import uvicorn
@@ -202,17 +203,17 @@ async def _ttl_cleanup_loop() -> None:
         tick = time.monotonic()
         try:
             async with get_session() as db:
-                now = int(time.time())
-                max_age_cutoff = now - (settings.max_message_age_days * 86400)
+                now_dt = datetime.now(timezone.utc)
+                cutoff_dt = now_dt - timedelta(days=settings.max_message_age_days)
 
                 stmt = delete(Message).where(
                     Message.expires_at.is_not(None),
-                    Message.expires_at <= now,
+                    Message.expires_at <= now_dt,
                 )
                 result = await db.execute(stmt)
                 ttl_deleted = result.rowcount
 
-                stmt = delete(Message).where(Message.stored_at < max_age_cutoff)
+                stmt = delete(Message).where(Message.stored_at < cutoff_dt)
                 result = await db.execute(stmt)
                 age_deleted = result.rowcount
 

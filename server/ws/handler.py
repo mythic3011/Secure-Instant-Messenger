@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-import time
+from datetime import datetime, timezone
 
 import structlog
 from fastapi import WebSocket, WebSocketDisconnect
@@ -83,7 +83,7 @@ async def websocket_endpoint(websocket: WebSocket, user_id: str) -> None:
 async def _flush_offline_queue(websocket: WebSocket, user_id: str) -> None:
     """Deliver all undelivered messages to a newly connected user."""
     async with get_session() as db:
-        now = int(time.time())
+        now = datetime.now(timezone.utc)
 
         # Race condition fix: Use SELECT...FOR UPDATE to lock rows being processed
         # This prevents concurrent delivery attempts from multiple connections
@@ -147,7 +147,7 @@ async def _handle_client_message(user_id: str, raw: str) -> None:
             log.warning("ws_ack_missing_message_id", user_id=user_id)
             return
         async with get_session() as db:
-            now = int(time.time())
+            now_dt = datetime.now(timezone.utc)
             # Race condition fix: Use SELECT...FOR UPDATE to lock the message row
             # This prevents concurrent ACK processing from multiple connections
             stmt = select(Message.sender_id, Message.delivered_at).where(
@@ -157,13 +157,14 @@ async def _handle_client_message(user_id: str, raw: str) -> None:
             result = await db.execute(stmt)
             row = result.first()
             if row and row.delivered_at is None:
-                stmt = update(Message).where(Message.id == message_id).values(delivered_at=now)
+                stmt = update(Message).where(Message.id == message_id).values(delivered_at=now_dt)
                 await db.execute(stmt)
                 await db.commit()
-                # Notify sender
+                # Notify sender (unix timestamp at API boundary)
+                delivered_at_ts = int(now_dt.timestamp())
                 await push_to_user(
                     row.sender_id,
-                    {"type": "ack", "payload": {"message_id": message_id, "delivered_at": now}},
+                    {"type": "ack", "payload": {"message_id": message_id, "delivered_at": delivered_at_ts}},
                 )
                 log.info("ws_ack_processed", message_id=message_id, recipient=user_id, sender=row.sender_id)
     else:
