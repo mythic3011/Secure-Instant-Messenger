@@ -9,23 +9,26 @@ from __future__ import annotations
 import asyncio
 import json
 import os
-import signal
 import time
 from contextlib import asynccontextmanager
+from datetime import datetime, timedelta, timezone
 
 import structlog
 import uvicorn
 from fastapi import FastAPI, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
 from scalar_fastapi import get_scalar_api_reference
+from sqlalchemy import delete, select, text
 
-from server.api.auth import require_auth, router as auth_router
+from server.api.auth import router as auth_router
 from server.api.conversations import router as conv_router
 from server.api.friends import router as friends_router
 from server.api.keys import router as keys_router
 from server.api.messages import router as msg_router
 from server.core.config import get_settings
-from server.core.database import close_db, get_db, init_db
+from server.core.database import close_db, get_db, get_session, init_db
+from server.models.message import Message
+from server.models.session import Session
 from server.ws.handler import websocket_endpoint
 
 structlog.configure(
@@ -113,16 +116,15 @@ async def ready():
     to hold traffic until the server is truly ready).
     """
     try:
-        db = await get_db()
-        async with db.execute("SELECT 1") as cur:
-            await cur.fetchone()
-        return {"status": "ready", "timestamp": int(time.time())}
+        async with get_session() as db:
+            await db.execute(text("SELECT 1"))
+            return {"status": "ready", "timestamp": int(time.time())}
     except Exception as exc:
         log.warning("readiness_check_failed", error=str(exc))
         from fastapi.responses import JSONResponse
         return JSONResponse(
             status_code=503,
-            content={"status": "not_ready", "error": str(exc)},
+            content={"status": "not_ready", "error": "Service unavailable"},
         )
 
 
@@ -151,7 +153,7 @@ async def ws_endpoint(websocket: WebSocket) -> None:
     # Wait for auth frame (5-second timeout to prevent idle connections)
     try:
         raw = await asyncio.wait_for(websocket.receive_text(), timeout=5.0)
-    except (asyncio.TimeoutError, Exception):
+    except (TimeoutError, Exception):
         await websocket.close(code=4001)
         return
 
@@ -169,19 +171,20 @@ async def ws_endpoint(websocket: WebSocket) -> None:
 
     token_hash = hash_token(auth_msg["token"])
     now = int(time.time())
-    db = await get_db()
-    async with db.execute(
-        "SELECT s.user_id FROM sessions s "
-        "WHERE s.token_hash = ? AND s.revoked = 0 AND s.expires_at > ?",
-        (token_hash, now),
-    ) as cur:
-        row = await cur.fetchone()
+    async with get_session() as db:
+        stmt = select(Session.user_id).where(
+            Session.token_hash == token_hash,
+            Session.revoked == 0,
+            Session.expires_at > now,
+        )
+        result = await db.execute(stmt)
+        user_id = result.scalar_one_or_none()
 
-    if row is None:
+    if user_id is None:
         await websocket.close(code=4001)
         return
 
-    await websocket_endpoint(websocket, row["user_id"])
+    await websocket_endpoint(websocket, user_id)
 
 
 # ── TTL cleanup background task (R12) ─────────────────────────────────────────
@@ -199,23 +202,22 @@ async def _ttl_cleanup_loop() -> None:
     while True:
         tick = time.monotonic()
         try:
-            db = await get_db()
-            now = int(time.time())
-            max_age_cutoff = now - (settings.max_message_age_days * 86400)
+            async with get_session() as db:
+                now_dt = datetime.now(timezone.utc)
+                cutoff_dt = now_dt - timedelta(days=settings.max_message_age_days)
 
-            result = await db.execute(
-                "DELETE FROM messages WHERE expires_at IS NOT NULL AND expires_at <= ?",
-                (now,),
-            )
-            ttl_deleted = result.rowcount
+                stmt = delete(Message).where(
+                    Message.expires_at.is_not(None),
+                    Message.expires_at <= now_dt,
+                )
+                result = await db.execute(stmt)
+                ttl_deleted = result.rowcount
 
-            result = await db.execute(
-                "DELETE FROM messages WHERE stored_at < ?",
-                (max_age_cutoff,),
-            )
-            age_deleted = result.rowcount
+                stmt = delete(Message).where(Message.stored_at < cutoff_dt)
+                result = await db.execute(stmt)
+                age_deleted = result.rowcount
 
-            await db.commit()
+                await db.commit()
 
             if ttl_deleted or age_deleted:
                 log.info("ttl_cleanup", ttl_deleted=ttl_deleted, age_deleted=age_deleted)

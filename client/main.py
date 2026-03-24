@@ -92,8 +92,8 @@ def main() -> None:
     ca_cert = args.ca_cert
     if verify_tls and not ca_cert and "localhost" in server:
         # Check if the server cert is self-signed (untrusted) before connecting
-        import ssl
         import socket
+        import ssl
         from urllib.parse import urlparse
         parsed = urlparse(server)
         host = parsed.hostname or "localhost"
@@ -112,7 +112,7 @@ def main() -> None:
                 server,
             )
             verify_tls = False
-        except (OSError, socket.timeout):
+        except (TimeoutError, OSError):
             pass  # server not reachable yet, let the app handle it
 
     log = logging.getLogger(__name__)

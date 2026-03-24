@@ -22,6 +22,7 @@ def test_default_database_url_is_relative():
     with patch.dict(os.environ, {}, clear=True), \
          patch("shared.env.Path.exists", return_value=False):
         from importlib import reload
+
         import shared.env
         reload(shared.env)
         s = _make_settings()
@@ -34,6 +35,7 @@ def test_container_database_url_is_absolute():
     with patch.dict(os.environ, {}, clear=True), \
          patch("shared.env.Path.exists", return_value=True):
         from importlib import reload
+
         import shared.env
         reload(shared.env)
         from shared.env import default_database_url
@@ -54,6 +56,7 @@ def test_default_tls_paths_are_relative_on_host():
     with patch.dict(os.environ, {}, clear=True), \
          patch("shared.env.Path.exists", return_value=False):
         from importlib import reload
+
         import shared.env
         reload(shared.env)
         from shared.env import default_tls_cert, default_tls_key
@@ -67,6 +70,7 @@ def test_in_container_tls_paths_are_absolute():
     """In container, TLS paths use /app/certs."""
     with patch("shared.env.Path.exists", return_value=True):
         from importlib import reload
+
         import shared.env
         reload(shared.env)
         from shared.env import default_tls_cert, default_tls_key

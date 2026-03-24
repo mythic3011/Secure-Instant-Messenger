@@ -230,24 +230,24 @@ uv run --extra dev pytest tests/security/ -v
 uv run --extra dev pytest -v
 ```
 
-Expected output: **45 tests passed**.
+Expected output: **53 tests passed**.
 
 ---
 
 ## 10. Troubleshooting
 
-| Problem                               | Solution                                                                                                                 |
-| ------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
-| Port 8443 already in use              | Change `PORT=8443` in `.env.local` to another port, e.g. `8444`                                                          |
-| TLS certificate errors in client      | Expected for self-signed certs — client uses `verify=False` in dev mode                                                  |
-| TOTP code rejected                    | Ensure your system clock is accurate. Ubuntu: `timedatectl set-ntp true`. Windows: Settings → Time & Language → Sync now |
-| Docker permission denied (Linux)      | Run `sudo usermod -aG docker $USER` then log out and back in                                                             |
-| `uv: command not found`               | Restart terminal after installing `uv`, or use `pip install -e .` instead                                                |
-| `ModuleNotFoundError`                 | Run `uv sync` (add `--extra dev` for tests) from the project root                                                        |
-| Database locked error                 | Stop any other running server instance before starting a new one                                                         |
-| Keystore not found on login           | You must register on this device first — keys are stored locally in `~/.comp3334im/<username>/`                          |
-| `.env.local` already exists           | Delete it first: `rm .env.local`, then re-run `./scripts/bootstrap-env.sh`                                               |
-| `bootstrap-env.sh: Permission denied` | Run `chmod +x scripts/bootstrap-env.sh` first                                                                            |
+| Problem                               | Solution                                                                                                                   |
+| ------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| Port 8443 already in use              | Change `PORT=8443` in `.env.local` to another port, e.g. `8444`                                                            |
+| TLS certificate errors in client      | Expected for self-signed certs — client uses `verify=False` in dev mode                                                    |
+| TOTP code rejected                    | Ensure your system clock is accurate. Ubuntu: `timedatectl set-ntp true`. Windows: Settings -> Time & Language -> Sync now |
+| Docker permission denied (Linux)      | Run `sudo usermod -aG docker $USER` then log out and back in                                                               |
+| `uv: command not found`               | Restart terminal after installing `uv`, or use `pip install -e .` instead                                                  |
+| `ModuleNotFoundError`                 | Run `uv sync` (add `--extra dev` for tests) from the project root                                                          |
+| Database locked error                 | Stop any other running server instance before starting a new one                                                           |
+| Keystore not found on login           | You must register on this device first — keys are stored locally in `~/.comp3334im/<username>/`                            |
+| `.env.local` already exists           | Delete it first: `rm .env.local`, then re-run `./scripts/bootstrap-env.sh`                                                 |
+| `bootstrap-env.sh: Permission denied` | Run `chmod +x scripts/bootstrap-env.sh` first                                                                              |
 
 ---
 

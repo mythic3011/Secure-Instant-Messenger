@@ -5,9 +5,9 @@ Covers: R5 (fingerprint / safety number), R10 (TTL setting)
 
 from __future__ import annotations
 
-from textual.message import Message
 from textual.app import ComposeResult
 from textual.containers import Vertical
+from textual.message import Message
 from textual.screen import Screen
 from textual.widgets import Button, Input, Static
 

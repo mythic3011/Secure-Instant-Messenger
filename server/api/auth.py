@@ -6,9 +6,12 @@ Covers: R1, R2, R3
 from __future__ import annotations
 
 import time
+import uuid
 
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Request, status
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from server.core.config import get_settings
 from server.core.database import get_db
@@ -24,6 +27,7 @@ from server.core.security import (
     verify_password,
     verify_totp,
 )
+from server.models import PublicKey, Session, User
 from shared.protocol import (
     LoginRequest,
     LoginResponse,
@@ -39,7 +43,7 @@ log = structlog.get_logger()
 # Dependency — extract and validate bearer token
 # ---------------------------------------------------------------------------
 
-async def require_auth(request: Request) -> dict:
+async def require_auth(request: Request, db: AsyncSession = Depends(get_db)) -> dict:
     """
     FastAPI dependency. Validates the Authorization: Bearer <token> header.
     Returns the session row on success; raises 401 on failure.
@@ -49,24 +53,30 @@ async def require_auth(request: Request) -> dict:
         log.warning("auth_rejected", reason="missing_bearer_token", path=request.url.path)
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing token")
 
-    raw_token  = auth_header.removeprefix("Bearer ").strip()
+    raw_token = auth_header.removeprefix("Bearer ").strip()
     token_hash = hash_token(raw_token)
-    now        = int(time.time())
+    now = int(time.time())
 
-    db = await get_db()
-    async with db.execute(
-        "SELECT s.id, s.user_id, u.username FROM sessions s "
-        "JOIN users u ON u.id = s.user_id "
-        "WHERE s.token_hash = ? AND s.revoked = 0 AND s.expires_at > ? AND u.deleted_at IS NULL",
-        (token_hash, now),
-    ) as cur:
-        row = await cur.fetchone()
+    # Query session with user join using ORM
+    stmt = (
+        select(Session, User)
+        .join(User, User.id == Session.user_id)
+        .where(
+            Session.token_hash == token_hash,
+            Session.revoked == 0,
+            Session.expires_at > now,
+            User.deleted_at.is_(None),
+        )
+    )
+    result = await db.execute(stmt)
+    row = result.first()
 
     if row is None:
         log.warning("auth_rejected", reason="invalid_or_expired_token", path=request.url.path)
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or expired token")
 
-    return {"session_id": row["id"], "user_id": row["user_id"], "username": row["username"]}
+    session, user = row
+    return {"session_id": session.id, "user_id": user.id, "username": user.username}
 
 
 # ---------------------------------------------------------------------------
@@ -74,7 +84,9 @@ async def require_auth(request: Request) -> dict:
 # ---------------------------------------------------------------------------
 
 @router.post("/register", response_model=RegisterResponse, status_code=status.HTTP_201_CREATED)
-async def register(body: RegisterRequest, request: Request) -> RegisterResponse:
+async def register(
+    body: RegisterRequest, request: Request, db: AsyncSession = Depends(get_db)
+) -> RegisterResponse:
     """
     Register a new user.
     - Validates username uniqueness
@@ -95,15 +107,12 @@ async def register(body: RegisterRequest, request: Request) -> RegisterResponse:
         log.warning("rate_limit_exceeded", endpoint="register", client_ip=client_ip)
         raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail="Rate limit exceeded")
 
-    db = await get_db()
-
     # Check username uniqueness (case-insensitive via COLLATE NOCASE in schema)
-    async with db.execute(
-        "SELECT id FROM users WHERE username = ?", (body.username,)
-    ) as cur:
-        if await cur.fetchone():
-            log.info("register_conflict", username=body.username, client_ip=client_ip)
-            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Username already taken")
+    stmt = select(User).where(User.username == body.username)
+    result = await db.execute(stmt)
+    if result.scalar_one_or_none() is not None:
+        log.info("register_conflict", username=body.username, client_ip=client_ip)
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Username already taken")
 
     # Hash password
     pw_hash = hash_password(body.password)
@@ -111,28 +120,29 @@ async def register(body: RegisterRequest, request: Request) -> RegisterResponse:
     # Generate and encrypt TOTP secret
     totp_secret = generate_totp_secret()
 
-    # Insert user (get ID first so we can use it for TOTP encryption)
-    async with db.execute(
-        "INSERT INTO users (username, pw_hash, totp_secret) VALUES (?, ?, '') RETURNING id",
-        (body.username, pw_hash),
-    ) as cur:
-        row = await cur.fetchone()
-        log.info("user_created", username=body.username, client_ip=client_ip)
-    if row is None:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to create user")
-    user_id = row["id"]
+    # Create user with empty TOTP secret first
+    user_id = uuid.uuid4().hex
+    user = User(
+        id=user_id,
+        username=body.username,
+        pw_hash=pw_hash,
+        totp_secret="",  # Will be updated after encryption
+    )
+    db.add(user)
+    await db.flush()  # Get the ID
 
     # Encrypt TOTP secret with user_id as AD
     encrypted_totp = encrypt_totp_secret(user_id, totp_secret)
-    await db.execute(
-        "UPDATE users SET totp_secret = ? WHERE id = ?", (encrypted_totp, user_id)
-    )
+    user.totp_secret = encrypted_totp
 
     # Store public key bundle
-    await db.execute(
-        "INSERT INTO public_keys (user_id, identity_pub, dh_pub, key_sig) VALUES (?, ?, ?, ?)",
-        (user_id, body.identity_pub_b64, body.dh_pub_b64, body.key_sig_b64),
+    public_key = PublicKey(
+        user_id=user_id,
+        identity_pub=body.identity_pub_b64,
+        dh_pub=body.dh_pub_b64,
+        key_sig=body.key_sig_b64,
     )
+    db.add(public_key)
     await db.commit()
 
     totp_uri = make_totp_provisioning_uri(body.username, totp_secret)
@@ -146,7 +156,9 @@ async def register(body: RegisterRequest, request: Request) -> RegisterResponse:
 # ---------------------------------------------------------------------------
 
 @router.post("/login", response_model=LoginResponse)
-async def login(body: LoginRequest, request: Request) -> LoginResponse:
+async def login(
+    body: LoginRequest, request: Request, db: AsyncSession = Depends(get_db)
+) -> LoginResponse:
     """
     Authenticate with password + TOTP. Returns an opaque bearer token.
     """
@@ -163,39 +175,39 @@ async def login(body: LoginRequest, request: Request) -> LoginResponse:
         log.warning("rate_limit_exceeded", endpoint="login", client_ip=client_ip)
         raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail="Rate limit exceeded")
 
-    db = await get_db()
-
-    async with db.execute(
-        "SELECT id, pw_hash, totp_secret FROM users WHERE username = ? AND deleted_at IS NULL",
-        (body.username,),
-    ) as cur:
-        user = await cur.fetchone()
+    # Query user using ORM
+    stmt = select(User).where(User.username == body.username, User.deleted_at.is_(None))
+    result = await db.execute(stmt)
+    user = result.scalar_one_or_none()
 
     # Constant-time: always verify password even if user not found (dummy hash)
     _DUMMY_HASH = "$argon2id$v=19$m=65536,t=3,p=1$AAAAAAAAAAAAAAAAAAAAAA$AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
-    pw_hash = user["pw_hash"] if user else _DUMMY_HASH
+    pw_hash = user.pw_hash if user else _DUMMY_HASH
 
     if not verify_password(body.password, pw_hash) or user is None:
         log.info("login_failed", username=body.username, reason="bad_password")
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
 
     # Verify TOTP
-    totp_secret = decrypt_totp_secret(user["id"], user["totp_secret"])
+    totp_secret = decrypt_totp_secret(user.id, user.totp_secret)
     if not verify_totp(totp_secret, body.totp_code):
-        log.info("login_failed", user_id=user["id"], reason="bad_totp")
+        log.info("login_failed", user_id=user.id, reason="bad_totp")
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
 
     # Issue token
     raw_token, token_hash = generate_token()
     expires_at = int(time.time()) + settings.token_expiry_seconds
 
-    await db.execute(
-        "INSERT INTO sessions (user_id, token_hash, expires_at) VALUES (?, ?, ?)",
-        (user["id"], token_hash, expires_at),
+    session = Session(
+        id=uuid.uuid4().hex,
+        user_id=user.id,
+        token_hash=token_hash,
+        expires_at=expires_at,
     )
+    db.add(session)
     await db.commit()
 
-    log.info("login_success", user_id=user["id"], client_ip=client_ip)
+    log.info("login_success", user_id=user.id, client_ip=client_ip)
     return LoginResponse(access_token=raw_token, expires_at=expires_at)
 
 
@@ -204,11 +216,16 @@ async def login(body: LoginRequest, request: Request) -> LoginResponse:
 # ---------------------------------------------------------------------------
 
 @router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)
-async def logout(session: dict = Depends(require_auth)) -> None:
+async def logout(
+    session: dict = Depends(require_auth), db: AsyncSession = Depends(get_db)
+) -> None:
     """Revoke the current session token immediately."""
-    db = await get_db()
-    await db.execute(
-        "UPDATE sessions SET revoked = 1 WHERE id = ?", (session["session_id"],)
-    )
-    await db.commit()
+    stmt = select(Session).where(Session.id == session["session_id"])
+    result = await db.execute(stmt)
+    session_obj = result.scalar_one_or_none()
+
+    if session_obj:
+        session_obj.revoked = True
+        await db.commit()
+
     log.info("logout", user_id=session["user_id"])

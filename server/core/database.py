@@ -1,80 +1,128 @@
 """
-server/core/database.py — aiosqlite setup, connection pool, and migrations.
+server/core/database.py — SQLAlchemy async setup with auto-detection for database dialects.
 """
 
 from __future__ import annotations
 
-import asyncio
 import logging
-from pathlib import Path
+from contextlib import asynccontextmanager
+from typing import Any
 
-import aiosqlite
+from sqlalchemy import event
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.orm import DeclarativeBase
 
 from server.core.config import get_settings
+from server.models.base import Base
 
 logger = logging.getLogger(__name__)
 
-_db: aiosqlite.Connection | None = None
-_lock = asyncio.Lock()
+_engine = None
+_session_factory = None
 
 
-async def get_db() -> aiosqlite.Connection:
-    """Return the shared DB connection. Call init_db() at startup first."""
-    if _db is None:
-        raise RuntimeError("Database not initialised. Call init_db() at startup.")
-    return _db
+def get_database_url() -> str:
+    """Get database URL from settings with auto-detection of dialect."""
+    settings = get_settings()
+    url = settings.database_url
+
+    # Auto-detect and convert to async URL if needed
+    if url.startswith("sqlite:///"):
+        # Convert sqlite:/// to sqlite+aiosqlite:///
+        url = url.replace("sqlite:///", "sqlite+aiosqlite:///", 1)
+    elif url.startswith("postgresql://"):
+        # Convert postgresql:// to postgresql+asyncpg://
+        url = url.replace("postgresql://", "postgresql+asyncpg://", 1)
+    elif url.startswith("mysql://"):
+        # Convert mysql:// to mysql+aiomysql://
+        url = url.replace("mysql://", "mysql+aiomysql://", 1)
+
+    return url
+
+
+def get_engine_kwargs() -> dict[str, Any]:
+    """Get engine kwargs based on database dialect."""
+    url = get_database_url()
+    kwargs: dict[str, Any] = {"echo": False, "future": True}
+
+    if "sqlite" in url:
+        # SQLite-specific settings
+        kwargs["connect_args"] = {"check_same_thread": False}
+    elif "postgresql" in url:
+        # PostgreSQL-specific settings
+        kwargs["pool_size"] = 20
+        kwargs["max_overflow"] = 10
+        kwargs["pool_pre_ping"] = True
+    elif "mysql" in url:
+        # MySQL-specific settings
+        kwargs["pool_size"] = 20
+        kwargs["max_overflow"] = 10
+        kwargs["pool_pre_ping"] = True
+
+    return kwargs
 
 
 async def init_db() -> None:
-    """Open the SQLite connection and run migrations."""
-    global _db
-    settings = get_settings()
+    """Initialize the database engine and session factory."""
+    global _engine, _session_factory
 
-    # Extract file path from URL: sqlite+aiosqlite:////app/data/im.db → /app/data/im.db
-    db_path = settings.database_url.split("///")[-1]
-    Path(db_path).parent.mkdir(parents=True, exist_ok=True)
+    url = get_database_url()
+    kwargs = get_engine_kwargs()
 
-    _db = await aiosqlite.connect(db_path)
-    _db.row_factory = aiosqlite.Row
+    _engine = create_async_engine(url, **kwargs)
+    _session_factory = async_sessionmaker(_engine, class_=AsyncSession, expire_on_commit=False)
 
-    # Enable WAL mode and foreign keys on every connection
-    await _db.execute("PRAGMA journal_mode = WAL")
-    await _db.execute("PRAGMA foreign_keys = ON")
-    await _db.execute("PRAGMA secure_delete = ON")
+    # Enable WAL mode and foreign keys for SQLite
+    if "sqlite" in url:
 
-    await _run_migrations(_db)
-    logger.info("Database initialised: %s", db_path)
+        @event.listens_for(_engine.sync_engine, "connect")
+        def set_sqlite_pragma(dbapi_connection, connection_record):
+            cursor = dbapi_connection.cursor()
+            cursor.execute("PRAGMA journal_mode=WAL")
+            cursor.execute("PRAGMA foreign_keys=ON")
+            cursor.execute("PRAGMA secure_delete=ON")
+            cursor.close()
+
+    # Create all tables
+    async with _engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+    logger.info("Database initialised: %s", url)
 
 
 async def close_db() -> None:
-    global _db
-    if _db:
-        await _db.close()
-        _db = None
+    """Close the database engine."""
+    global _engine, _session_factory
+    if _engine:
+        await _engine.dispose()
+        _engine = None
+        _session_factory = None
 
 
-async def _run_migrations(db: aiosqlite.Connection) -> None:
-    """Apply SQL migration files in order."""
-    migrations_dir = Path(__file__).parent.parent / "migrations"
-    migration_files = sorted(migrations_dir.glob("*.sql"))
+@asynccontextmanager
+async def get_session():
+    """Get an async database session."""
+    if _session_factory is None:
+        raise RuntimeError("Database not initialised. Call init_db() at startup.")
 
-    await db.execute(
-        "CREATE TABLE IF NOT EXISTS _migrations "
-        "(filename TEXT PRIMARY KEY, applied_at INTEGER NOT NULL DEFAULT (unixepoch()))"
-    )
-    await db.commit()
+    async with _session_factory() as session:
+        try:
+            yield session
+            await session.commit()
+        except Exception:
+            await session.rollback()
+            raise
 
-    for mf in migration_files:
-        async with db.execute(
-            "SELECT 1 FROM _migrations WHERE filename = ?", (mf.name,)
-        ) as cur:
-            if await cur.fetchone():
-                continue  # already applied
 
-        logger.info("Applying migration: %s", mf.name)
-        sql = mf.read_text()
-        await db.executescript(sql)
-        await db.execute(
-            "INSERT INTO _migrations (filename) VALUES (?)", (mf.name,)
-        )
-        await db.commit()
+async def get_db():
+    """Get a database session for dependency injection."""
+    if _session_factory is None:
+        raise RuntimeError("Database not initialised. Call init_db() at startup.")
+
+    async with _session_factory() as session:
+        try:
+            yield session
+            await session.commit()
+        except Exception:
+            await session.rollback()
+            raise

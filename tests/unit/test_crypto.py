@@ -5,13 +5,11 @@ Uses the same cryptography library as Tutorial1.ipynb (PyCA cryptography).
 
 from __future__ import annotations
 
-import base64
 import os
-import pytest
-
-from cryptography.exceptions import InvalidTag
-
 import secrets
+
+import pytest
+from cryptography.exceptions import InvalidTag
 
 from client.crypto.session import (
     DHKeypair,
@@ -22,6 +20,7 @@ from client.crypto.session import (
     ReplayError,
     ReplayProtector,
     SessionKey,
+    build_and_encrypt,
     compute_fingerprint,
     decrypt_envelope,
     decrypt_message,
@@ -31,9 +30,7 @@ from client.crypto.session import (
     encrypt_message,
     make_key_signature,
     verify_key_bundle,
-    build_and_encrypt,
 )
-from shared.protocol import MessageEnvelope
 
 
 def _random_conv_id() -> str:
@@ -301,7 +298,7 @@ def test_ratchet_each_message_different_key():
         )
         envs.append(env)
 
-    # All nonces differ (different keys → different ciphertexts)
+    # All nonces differ (different keys -> different ciphertexts)
     nonces = [e.nonce_b64 for e in envs]
     assert len(set(nonces)) == 3, "Each message must use a unique nonce"
 

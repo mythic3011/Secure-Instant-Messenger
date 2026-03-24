@@ -7,11 +7,10 @@ from __future__ import annotations
 
 import os
 from functools import lru_cache
-from typing import Optional
 
-from pydantic_settings import BaseSettings, SettingsConfigDict
-from pydantic import field_validator
 import structlog
+from pydantic import field_validator
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from shared.env import default_database_url, default_tls_cert, default_tls_key
 
@@ -55,11 +54,11 @@ class Settings(BaseSettings):
     # Auth tokens — opaque bearer tokens, SHA256-hashed in DB
     # these are optional during development; validators supply temporary
     # keys, but must be provided in production environments.
-    token_secret_key: Optional[str] = None  # used as HKDF ikm for token generation
+    token_secret_key: str | None = None  # used as HKDF ikm for token generation
     token_expiry_seconds: int = 900  # 15 minutes
 
     # TOTP secret encryption (server-side AES-GCM)
-    totp_encryption_key: Optional[str] = None  # hex-encoded 32 bytes
+    totp_encryption_key: str | None = None  # hex-encoded 32 bytes
 
     # TLS — auto-detects container vs local via shared.env
     tls_cert_file: str = default_tls_cert()

@@ -11,18 +11,17 @@ import base64
 import time
 from typing import Any
 
+import httpx
 import structlog
 from textual.app import App, ComposeResult
 from textual.widgets import Static
 
 from client.api.client import IMClient, IMClientError
-import httpx
 from client.crypto.session import (
     DHKeypair,
     IdentityKeyCache,
     IdentityKeypair,
     KeyChangeWarning,
-    RatchetChain,
     ReplayProtector,
     build_and_encrypt,
     compute_fingerprint,
@@ -35,6 +34,7 @@ from client.crypto.session import (
 from client.crypto.storage import (
     LocalKeys,
     SessionState,
+    _derive_storage_key,
     keystore_exists,
     load_keystore,
     load_sessions,
@@ -47,9 +47,10 @@ from client.state.store import (
     init_store,
     reset_unread,
     save_message,
+    set_storage_key,
     sweep_expired,
-    upsert_conversation,
     update_delivery_status,
+    upsert_conversation,
 )
 from client.ui.screens.conversations import ConversationListScreen
 from client.ui.screens.login import LoginScreen
@@ -91,13 +92,13 @@ class IMApp(App):
         self._local_keys: LocalKeys | None = None
         self._password: str | None = None
         self._user_id: str | None = None
-        # Per-conversation state: conv_id → SessionState
+        # Per-conversation state: conv_id -> SessionState
         self._sessions: dict[str, SessionState] = {}
         # Per-conversation TTL setting
         self._ttl_settings: dict[str, int | None] = {}
         # Per-conversation send counter
         self._counters: dict[str, int] = {}
-        # peer_id → username cache (for get_keys lookups)
+        # peer_id -> username cache (for get_keys lookups)
         self._peer_usernames: dict[str, str] = {}
 
     def compose(self) -> ComposeResult:
@@ -157,6 +158,15 @@ class IMApp(App):
 
         try:
             self._local_keys = load_keystore(username, password)
+            # Derive and set storage key for encrypting local messages
+            import base64
+            import json
+            from pathlib import Path
+            keystore_path = Path.home() / ".comp3334im" / username / "keystore.json"
+            keystore_data = json.loads(keystore_path.read_text())
+            salt = base64.b64decode(keystore_data["argon2_salt_b64"])
+            storage_key = _derive_storage_key(password, salt)
+            set_storage_key(storage_key)
         except ValueError:
             login_screen.query_one("#error", Static).update("Wrong password or corrupted keystore.")
             return
@@ -384,7 +394,6 @@ class IMApp(App):
             pass
 
     async def on_friends_screen_send_request(self, msg: Any) -> None:
-        from client.ui.screens.friends import FriendsScreen
         if self._client is None:
             return
         try:

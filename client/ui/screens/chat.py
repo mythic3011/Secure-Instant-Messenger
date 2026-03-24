@@ -10,10 +10,10 @@ import time
 from typing import TYPE_CHECKING
 
 from textual.app import ComposeResult
-from textual.containers import Horizontal, Vertical
+from textual.containers import Horizontal
 from textual.message import Message
 from textual.screen import Screen
-from textual.widgets import Button, Footer, Header, Input, Label, ListItem, ListView, Static
+from textual.widgets import Button, Input, ListItem, ListView, Static
 
 if TYPE_CHECKING:
     pass
@@ -47,6 +47,8 @@ class MessageItem(ListItem):
     def compose(self) -> ComposeResult:
         import datetime
         ts = datetime.datetime.fromtimestamp(self._sent_at).strftime("%H:%M")
+        # READ status is reserved for future UX/protocol extension and not currently implemented.
+        # For now, treat "read" identically to "delivered" in the UI.
         status_icon = {"sent": "✓", "delivered": "✓✓", "read": "✓✓"}.get(self._status, "")
 
         # Show live countdown instead of raw TTL seconds (R10)

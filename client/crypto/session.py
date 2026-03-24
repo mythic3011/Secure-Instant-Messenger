@@ -21,11 +21,10 @@ from __future__ import annotations
 import base64
 import hashlib
 import os
-import struct
 from collections import deque
 from dataclasses import dataclass, field
-from typing import Optional
 
+from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives.asymmetric.ed25519 import (
     Ed25519PrivateKey,
     Ed25519PublicKey,
@@ -39,21 +38,20 @@ from cryptography.hazmat.primitives.hashes import SHA256
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from cryptography.hazmat.primitives.serialization import (
     Encoding,
-    PublicFormat,
-    PrivateFormat,
     NoEncryption,
+    PrivateFormat,
+    PublicFormat,
 )
-from cryptography.exceptions import InvalidSignature, InvalidTag
 
 from shared.protocol import (
     KDF_INFO_PREFIX,
     KEY_BYTES,
+    MAX_SESSION_MESSAGES,
     MAX_SKIP,
     NONCE_BYTES,
     REPLAY_WINDOW,
     MessageEnvelope,
 )
-
 
 # ---------------------------------------------------------------------------
 # Identity keypair
@@ -70,13 +68,13 @@ class IdentityKeypair:
     public_key:  Ed25519PublicKey
 
     @classmethod
-    def generate(cls) -> "IdentityKeypair":
+    def generate(cls) -> IdentityKeypair:
         """Generate a new identity keypair using OS CSPRNG."""
         priv = Ed25519PrivateKey.generate()
         return cls(private_key=priv, public_key=priv.public_key())
 
     @classmethod
-    def from_private_bytes(cls, raw: bytes) -> "IdentityKeypair":
+    def from_private_bytes(cls, raw: bytes) -> IdentityKeypair:
         priv = Ed25519PrivateKey.from_private_bytes(raw)
         return cls(private_key=priv, public_key=priv.public_key())
 
@@ -106,12 +104,12 @@ class DHKeypair:
     public_key:  X25519PublicKey
 
     @classmethod
-    def generate(cls) -> "DHKeypair":
+    def generate(cls) -> DHKeypair:
         priv = X25519PrivateKey.generate()
         return cls(private_key=priv, public_key=priv.public_key())
 
     @classmethod
-    def from_private_bytes(cls, raw: bytes) -> "DHKeypair":
+    def from_private_bytes(cls, raw: bytes) -> DHKeypair:
         priv = X25519PrivateKey.from_private_bytes(raw)
         return cls(private_key=priv, public_key=priv.public_key())
 
@@ -180,6 +178,15 @@ def compute_fingerprint(my_pub: bytes, their_pub: bytes) -> str:
 #   Trade-off: simpler implementation at the cost of no per-message forward
 #   secrecy. If the session key leaks, all messages in that conversation are
 #   exposed. This is documented in ARCHITECTURE.md §14.
+#
+# SECURITY TRADE-OFF (session key reuse):
+#   The session key is derived once and reused for all messages. To compensate:
+#   1. A symmetric ratchet chain provides per-message key derivation from the
+#      session key, so compromising one message key doesn't reveal others.
+#   2. MAX_SESSION_MESSAGES forces periodic re-keying to bound exposure.
+#   3. The ephemeral key component ensures forward secrecy for the initial
+#      exchange — an attacker who later compromises the static DH key cannot
+#      derive session keys from past ephemeral exchanges.
 # ---------------------------------------------------------------------------
 
 @dataclass
@@ -187,10 +194,33 @@ class SessionKey:
     """
     Derived AES-256 session key for a specific conversation.
     Stored locally after first derivation.
+
+    SECURITY NOTE (key lifecycle):
+      This key is the single point of compromise for the entire conversation.
+      Unlike Double Ratchet, our 2-DH protocol does NOT derive new keys per
+      message. If this key leaks, all messages (past and future until re-key)
+      are exposed. See MAX_SESSION_MESSAGES for the forced re-key bound.
     """
     raw: bytes   # 32 bytes
     conversation_id: str
     peer_id: str
+
+    def clear(self) -> None:
+        """
+        Overwrite key material in memory before deallocation.
+
+        SECURITY NOTE (key cleanup):
+          Python's GC makes guaranteed zeroing difficult — the bytes object
+          may be copied or interned. We overwrite self.raw as a best-effort
+          measure. For higher assurance, use a language with manual memory
+          management or a secure allocator (e.g., sodium_mlock).
+        """
+        if isinstance(self.raw, bytearray):
+            for i in range(len(self.raw)):
+                self.raw[i] = 0
+        else:
+            # Replace with zeroed bytes — original may linger in GC
+            self.raw = b"\x00" * len(self.raw)
 
 
 def derive_session_key_as_initiator(
@@ -280,6 +310,12 @@ def _hkdf_derive(
     """
     HKDF-SHA256 derivation.
     Salt and info are protocol constants — never empty.
+
+    SECURITY NOTE (domain separation):
+      The info string includes both user IDs and the conversation ID. This
+      ensures that even if the same two users have multiple conversations,
+      or if DH outputs accidentally collide, the derived keys will differ.
+      This is critical for preventing cross-conversation key reuse attacks.
     """
     # Salt is a fixed protocol constant — not secret, but ensures domain
     # separation from other HKDF uses. Using a non-empty salt is recommended
@@ -324,13 +360,44 @@ class RatchetChain:
 
     chain_key advances after each message; old values are not retained.
     skipped_keys caches keys for out-of-order messages (up to MAX_SKIP).
+
+    SECURITY NOTE (forward secrecy scope):
+      Each advance() overwrites chain_key with a derived value, providing
+      per-message forward secrecy WITHIN the ratchet chain. However, the
+      root session key (SessionKey.raw) is NOT rotated. This means:
+      - Compromising chain_key at step N reveals only message N's key
+      - Compromising the root session key reveals ALL chain keys
+      This is the core trade-off of our simplified 2-DH protocol.
     """
     chain_key:    bytes
     index:        int = 0
-    skipped_keys: dict = field(default_factory=dict)  # index → msg_key
+    skipped_keys: dict = field(default_factory=dict)  # index -> msg_key
+
+    def clear(self) -> None:
+        """
+        Overwrite chain key and all cached skipped keys.
+
+        SECURITY NOTE (key cleanup):
+          Best-effort memory zeroing. See SessionKey.clear() for limitations.
+          Call this when the session is being torn down or re-keyed.
+        """
+        self.chain_key = b"\x00" * len(self.chain_key)
+        for k in list(self.skipped_keys.keys()):
+            self.skipped_keys[k] = b"\x00" * len(self.skipped_keys[k])
+        self.skipped_keys.clear()
 
     def advance(self) -> bytes:
-        """Derive message_key, advance chain_key. Returns message_key."""
+        """
+        Derive message_key, advance chain_key. Returns message_key.
+
+        SECURITY NOTE (forward secrecy):
+          After deriving msg_key, the old chain_key is overwritten with
+          next_chain. This ensures that even if the current state is
+          compromised later, previously used message keys cannot be
+          recovered from chain_key alone. The HKDF derivation is
+          one-way (preimage resistant), so msg_key cannot be reversed
+          to recover the old chain_key.
+        """
         msg_key    = _hkdf_simple(self.chain_key, b"COMP3334-msg-key")
         next_chain = _hkdf_simple(self.chain_key, b"COMP3334-chain-advance")
         # Overwrite old chain_key — forward secrecy
@@ -354,7 +421,7 @@ class RatchetChain:
             self.skipped_keys[self.index - 1] = skipped_key
         return self.advance()
 
-    def try_skipped(self, index: int) -> Optional[bytes]:
+    def try_skipped(self, index: int) -> bytes | None:
         """Pop and return a previously cached skipped key, or None."""
         return self.skipped_keys.pop(index, None)
 
@@ -366,7 +433,7 @@ class RatchetChain:
         }
 
     @classmethod
-    def from_dict(cls, d: dict) -> "RatchetChain":
+    def from_dict(cls, d: dict) -> RatchetChain:
         return cls(
             chain_key=bytes.fromhex(d["chain_key_hex"]),
             index=d["index"],
@@ -374,7 +441,7 @@ class RatchetChain:
         )
 
 
-def derive_ratchet_chains(root_key: bytes, initiator: bool) -> tuple["RatchetChain", "RatchetChain"]:
+def derive_ratchet_chains(root_key: bytes, initiator: bool) -> tuple[RatchetChain, RatchetChain]:
     """
     Derive send and receive ratchet chains from the root session key.
 
@@ -408,6 +475,15 @@ def encrypt_message(
     IMPORTANT: nonce must be included in the message envelope and must
                NEVER be reused with the same session_key.
                AES-GCM is catastrophically broken under nonce reuse.
+
+    SECURITY NOTE (nonce generation):
+      We use random nonces (96-bit) from the OS CSPRNG. With a 96-bit random
+      nonce, the birthday bound gives a collision probability of ~2^-32 after
+      2^32 encryptions under the same key. Since we re-key after
+      MAX_SESSION_MESSAGES (500), the actual collision probability is
+      negligible (~2^-82). An alternative is a counter-based nonce, but
+      that requires persistent state and risks catastrophic failure if the
+      counter is ever reset (e.g., after a restore from backup).
     """
     nonce = os.urandom(NONCE_BYTES)   # 96-bit random nonce, OS CSPRNG
     aes_gcm = AESGCM(session_key.raw)
@@ -428,6 +504,20 @@ def decrypt_message(
         InvalidTag: if ciphertext or AD has been tampered with,
                     or if the wrong session key is used.
                     Caller MUST discard the message on this exception.
+
+    SECURITY NOTE (authentication):
+      AES-GCM provides both confidentiality and authenticity in a single
+      pass. The authentication tag covers BOTH the ciphertext AND the
+      associated data (AD). This means tampering with any AD field
+      (sender_id, recipient_id, conversation_id, counter, ttl, sent_at)
+      will cause decryption to fail. This prevents an attacker from
+      relaying a valid ciphertext with modified metadata.
+
+    READ BEHAVIOR (metadata visible to server):
+      The AD fields (sender_id, recipient_id, conversation_id, counter,
+      ttl_seconds, sent_at) are visible to the server in plaintext.
+      Only the message content is encrypted. See protocol.py for the
+      full metadata exposure annotation.
     """
     aes_gcm = AESGCM(session_key.raw)
     # Raises cryptography.exceptions.InvalidTag on failure
@@ -569,13 +659,36 @@ class ReplayError(Exception):
     pass
 
 
+class SessionLimitExceeded(Exception):
+    """
+    Raised when a session has reached MAX_SESSION_MESSAGES.
+
+    SECURITY NOTE (session message limit):
+      The caller MUST re-key the session (new ephemeral DH exchange) before
+      sending or accepting more messages. This bounds the exposure window
+      of a compromised session key to at most MAX_SESSION_MESSAGES messages.
+
+      The caller should:
+      1. Clear existing chain keys via RatchetChain.clear()
+      2. Derive a fresh session key via derive_session_key_as_initiator/responder
+      3. Derive new ratchet chains via derive_ratchet_chains()
+    """
+    def __init__(self, current_index: int, limit: int):
+        self.current_index = current_index
+        self.limit = limit
+        super().__init__(
+            f"Session message limit reached: {current_index}/{limit}. "
+            f"Re-key required before sending more messages."
+        )
+
+
 # ---------------------------------------------------------------------------
 # High-level message helpers
 # ---------------------------------------------------------------------------
 
 def build_and_encrypt(
     *,
-    send_chain: "RatchetChain",
+    send_chain: RatchetChain,
     plaintext: str,
     sender_id: str,
     recipient_id: str,
@@ -587,8 +700,18 @@ def build_and_encrypt(
     """
     Convenience wrapper: build a MessageEnvelope from plaintext using the ratchet chain.
     Advances the send chain and sets chain_index on the envelope.
+
+    Raises:
+        SessionLimitExceeded: if send_chain.index >= MAX_SESSION_MESSAGES
+        ValueError: if plaintext exceeds MAX_MESSAGE_BYTES
     """
     from shared.protocol import MessageEnvelope
+
+    # SECURITY NOTE (session message limit):
+    #   Check BEFORE advancing. If we've already sent MAX_SESSION_MESSAGES,
+    #   refuse to encrypt more and force the caller to re-key.
+    if send_chain.index >= MAX_SESSION_MESSAGES:
+        raise SessionLimitExceeded(send_chain.index, MAX_SESSION_MESSAGES)
 
     # Advance ratchet to get a per-message key
     msg_key = send_chain.advance()
@@ -618,7 +741,7 @@ def build_and_encrypt(
 
 def decrypt_envelope(
     *,
-    recv_chain: "RatchetChain",
+    recv_chain: RatchetChain,
     envelope: MessageEnvelope,
     replay_protector: ReplayProtector,
 ) -> str:
@@ -630,7 +753,15 @@ def decrypt_envelope(
         ReplayError:  duplicate or replayed message
         InvalidTag:   ciphertext or AD tampered with
         ValueError:   malformed fields (bad base64, etc.)
+        SessionLimitExceeded: if envelope.chain_index >= MAX_SESSION_MESSAGES
     """
+    # SECURITY NOTE (session message limit on receive):
+    #   Reject messages whose chain_index exceeds the limit. This prevents
+    #   an attacker from sending crafted messages with arbitrarily high
+    #   chain indices to force the receiver past the re-key threshold.
+    if envelope.chain_index >= MAX_SESSION_MESSAGES:
+        raise SessionLimitExceeded(envelope.chain_index, MAX_SESSION_MESSAGES)
+
     # Step 1: replay check (before touching crypto)
     replay_protector.check(envelope.id, envelope.counter)
 

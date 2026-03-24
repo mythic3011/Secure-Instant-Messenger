@@ -7,13 +7,12 @@ DO NOT add business logic here. This file defines data shapes only.
 
 from __future__ import annotations
 
+import base64
 import enum
+import uuid
 from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator
-import base64
-import uuid
-
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -27,6 +26,46 @@ MAX_MESSAGE_BYTES = 64_000  # ~64 KB plaintext limit
 REPLAY_WINDOW    = 50     # accept counters within last 50 of max seen
 MAX_SKIP         = 50     # max skipped messages in ratchet chain
 
+# ---------------------------------------------------------------------------
+# Session lifecycle limits
+#
+# SECURITY TRADE-OFF: Session message limit
+#   Our 2-DH protocol reuses the session key for all messages in a conversation
+#   (unlike Double Ratchet which derives new keys per message). This means if
+#   the session key is compromised, ALL messages in that session are exposed.
+#
+#   To mitigate this, we enforce a hard message limit per session. When reached,
+#   the client MUST re-derive a fresh session key (new ephemeral DH exchange).
+#   This bounds the blast radius of a key compromise to MAX_SESSION_MESSAGES.
+#
+#   Value rationale:
+#   - Too low: frequent re-keying adds latency and UX friction
+#   - Too high: larger exposure window if key leaks
+#   - 500 messages ≈ a moderately active conversation for several days
+#   - Signal's ratchet advances per-message; our limit compensates for the
+#     lack of per-message forward secrecy by forcing periodic re-keying.
+# ---------------------------------------------------------------------------
+MAX_SESSION_MESSAGES = 500  # force re-key after this many messages per session
+
+# ---------------------------------------------------------------------------
+# Metadata exposure annotations (READ behavior)
+#
+# The following metadata is visible to the server in plaintext:
+#   - sender_id, recipient_id: who is talking to whom
+#   - conversation_id: which conversation a message belongs to
+#   - message timing (sent_at, delivered_at): when messages are sent
+#   - delivery_status: whether a message was delivered/read
+#   - message size (ciphertext length): approximate plaintext length
+#
+# The server CANNOT see:
+#   - message plaintext (encrypted with AES-256-GCM)
+#   - session keys (never leave the client)
+#   - private keys (encrypted at rest with Argon2id-derived key)
+#
+# This metadata exposure is inherent to any server-mediated messaging system.
+# Hiding it would require a mixnet or onion routing, which is out of scope.
+# ---------------------------------------------------------------------------
+
 
 # ---------------------------------------------------------------------------
 # Enums
@@ -35,7 +74,7 @@ MAX_SKIP         = 50     # max skipped messages in ratchet chain
 class DeliveryStatus(str, enum.Enum):
     SENT      = "sent"       # server acknowledged receipt
     DELIVERED = "delivered"  # recipient client acknowledged
-    READ      = "read"       # optional, for future
+    READ      = "read"       # reserved for future UX/protocol extension, not currently implemented
 
 
 class FriendRequestStatus(str, enum.Enum):
@@ -62,6 +101,20 @@ class RegisterRequest(BaseModel):
     dh_pub_b64: str        # X25519 public key, base64
     key_sig_b64: str       # Ed25519 sig over (identity_pub || dh_pub), base64
     totp_uri: str | None = None  # returned by server after provisioning
+
+    @field_validator("password")
+    @classmethod
+    def validate_password_complexity(cls, v: str) -> str:
+        """Enforce password complexity: at least one uppercase, lowercase, digit, and special char."""
+        if not any(c.isupper() for c in v):
+            raise ValueError("Password must contain at least one uppercase letter")
+        if not any(c.islower() for c in v):
+            raise ValueError("Password must contain at least one lowercase letter")
+        if not any(c.isdigit() for c in v):
+            raise ValueError("Password must contain at least one digit")
+        if not any(c in "!@#$%^&*()_+-=[]{}|;:,.<>?" for c in v):
+            raise ValueError("Password must contain at least one special character (!@#$%^&*()_+-=[]{}|;:,.<>?)")
+        return v
 
 
 class RegisterResponse(BaseModel):
@@ -203,7 +256,7 @@ class DeliveryAck(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# WebSocket push messages (server → client)
+# WebSocket push messages (server -> client)
 # ---------------------------------------------------------------------------
 
 class WsPush(BaseModel):

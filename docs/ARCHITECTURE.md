@@ -1,12 +1,11 @@
 # COMP3334 Secure IM — Architecture & Protocol Design
 
 > Stack: Python (FastAPI + Textual + SQLite). Implemented and tested.
-> 5-person team | Deadline: 2 April 2026 | Tests: 45/45 passing
+> 5-person team | Deadline: 2 April 2026 | Tests: 53/53 passing
 
 ---
 
 ## Table of Contents
-
 
 1. [System Overview](#1-system-overview)
 2. [Trust Boundaries & Data Flow](#2-trust-boundaries--data-flow)
@@ -66,16 +65,17 @@
 
 ### 2.1 What the Server Stores
 
-| Data | Stored | Server sees plaintext |
-|------|--------|-----------------------|
-| User identity | username, argon2id hash, TOTP secret (AES-GCM encrypted) | username only |
-| Identity key | Ed25519 public key | yes (by design) |
-| Ephemeral key | X25519 public key (first message only) | yes (by design) |
-| Messages | AES-256-GCM ciphertext + nonce + counter | ciphertext blob only |
-| Associated data | sender_id, recipient_id, counter, ttl, timestamp | yes — metadata exposed |
-| Friend graph | user_id pairs | yes — contact graph exposed |
+| Data            | Stored                                                   | Server sees plaintext       |
+| --------------- | -------------------------------------------------------- | --------------------------- |
+| User identity   | username, argon2id hash, TOTP secret (AES-GCM encrypted) | username only               |
+| Identity key    | Ed25519 public key                                       | yes (by design)             |
+| Ephemeral key   | X25519 public key (first message only)                   | yes (by design)             |
+| Messages        | AES-256-GCM ciphertext + nonce + counter                 | ciphertext blob only        |
+| Associated data | sender_id, recipient_id, counter, ttl, timestamp         | yes — metadata exposed      |
+| Friend graph    | user_id pairs                                            | yes — contact graph exposed |
 
 **Metadata the HbC server learns (report §8):**
+
 - Who talks to whom (contact graph)
 - When messages are sent/received (timing)
 - Approximate message sizes
@@ -109,7 +109,7 @@ Alice                          Server                         Bob
   │                               │  7. Bob derives session_key │
   │                               │  DH1=X25519(bob_dh_priv, alice_dh_pub)
   │                               │  DH2=X25519(bob_dh_priv, alice_eph_pub)
-  │                               │  → decrypt locally          │
+  │                               │  -> decrypt locally          │
 ```
 
 ---
@@ -118,19 +118,20 @@ Alice                          Server                         Bob
 
 ### 3.1 Primitive Choices
 
-| Purpose | Primitive | Library | Why |
-|---------|-----------|---------|-----|
-| Identity keypair | Ed25519 | `cryptography` (PyCA) | Fast, small keys, standard |
-| Session key agreement | X25519 ECDH | `cryptography` (PyCA) | DH over Curve25519, no small-subgroup attacks |
-| Key derivation | HKDF-SHA256 | `cryptography` (PyCA) | RFC 5869 standard |
-| Message encryption | AES-256-GCM | `cryptography` (PyCA) | AEAD, hardware-accelerated |
-| Password hashing | Argon2id | `argon2-cffi` | PHC winner, memory-hard |
-| OTP | TOTP RFC 6238 | `pyotp` | Standard TOTP, ±1 window |
-| Random | OS CSPRNG | `os.urandom` / `secrets` | Never `random` module |
+| Purpose               | Primitive     | Library                  | Why                                           |
+| --------------------- | ------------- | ------------------------ | --------------------------------------------- |
+| Identity keypair      | Ed25519       | `cryptography` (PyCA)    | Fast, small keys, standard                    |
+| Session key agreement | X25519 ECDH   | `cryptography` (PyCA)    | DH over Curve25519, no small-subgroup attacks |
+| Key derivation        | HKDF-SHA256   | `cryptography` (PyCA)    | RFC 5869 standard                             |
+| Message encryption    | AES-256-GCM   | `cryptography` (PyCA)    | AEAD, hardware-accelerated                    |
+| Password hashing      | Argon2id      | `argon2-cffi`            | PHC winner, memory-hard                       |
+| OTP                   | TOTP RFC 6238 | `pyotp`                  | Standard TOTP, ±1 window                      |
+| Random                | OS CSPRNG     | `os.urandom` / `secrets` | Never `random` module                         |
 
 ### 3.2 Session Establishment (2-DH)
 
 **Registration — one-time key upload:**
+
 ```
 1. Client generates:
    identity_keypair = Ed25519.generate()   # long-term, stored locally encrypted
@@ -140,10 +141,11 @@ Alice                          Server                         Bob
    identity_pub  (Ed25519 public key)
    dh_pub        (X25519 public key)
    key_sig       = Ed25519.sign(identity_priv, identity_pub || dh_pub)
-   → proves ownership; server cannot swap keys silently
+   -> proves ownership; server cannot swap keys silently
 ```
 
-**Session initiation (Alice → Bob, first message):**
+**Session initiation (Alice -> Bob, first message):**
+
 ```
 1. Alice fetches bob_identity_pub + bob_dh_pub from server
 2. Alice generates ephemeral keypair: alice_eph_priv, alice_eph_pub
@@ -161,11 +163,12 @@ Alice                          Server                         Bob
 ```
 
 **Bob receives and decrypts:**
+
 ```
 DH1 = X25519(bob_dh_priv, alice_dh_pub)
 DH2 = X25519(bob_dh_priv, alice_eph_pub)   # from envelope
 session_key = HKDF-SHA256(same params)
-→ decrypt; cache session_key locally
+-> decrypt; cache session_key locally
 ```
 
 **Subsequent messages:** reuse cached session_key, counter increments, new random nonce per message.
@@ -189,6 +192,7 @@ session_key = HKDF-SHA256(same params)
 ```
 
 States:
+
 - `NO_SESSION` — no shared secret; key exchange required before messaging
 - `INITIATING` — Alice derived session key, first message in flight
 - `ESTABLISHED` — both sides have session key; counter-based messaging active
@@ -197,9 +201,10 @@ States:
 ### 3.4 Key Change Detection (R6)
 
 On every received message with `eph_pub_b64` set (re-keying):
+
 1. Fetch sender's current `identity_pub` from server
 2. Compare with locally cached value in `IdentityKeyCache`
-3. If different → raise `KeyChangeWarning` → show `⚠ key changed` banner
+3. If different -> raise `KeyChangeWarning` -> show `⚠ key changed` banner
 4. User views fingerprint in ⚙ settings and clicks "Mark as Verified ✓"
 
 ### 3.5 Fingerprint / Safety Number (R5)
@@ -222,16 +227,16 @@ def compute_fingerprint(my_pub: bytes, their_pub: bytes) -> str:
 
 ```json
 {
-  "id":              "uuid-v4",
-  "sender_id":       "alice_user_id",
-  "recipient_id":    "bob_user_id",
+  "id": "uuid-v4",
+  "sender_id": "alice_user_id",
+  "recipient_id": "bob_user_id",
   "conversation_id": "sha256(sorted(alice_id, bob_id))[:16]",
-  "counter":         42,
-  "nonce_b64":       "base64(12 random bytes)",
-  "ciphertext_b64":  "base64(AES-256-GCM output)",
-  "eph_pub_b64":     "base64(X25519 pub) — first message only, else null",
-  "ttl_seconds":     300,
-  "sent_at":         1711900000,
+  "counter": 42,
+  "nonce_b64": "base64(12 random bytes)",
+  "ciphertext_b64": "base64(AES-256-GCM output)",
+  "eph_pub_b64": "base64(X25519 pub) — first message only, else null",
+  "ttl_seconds": 300,
+  "sent_at": 1711900000,
   "delivery_status": "sent"
 }
 ```
@@ -250,7 +255,7 @@ AD = sender_id || "|" || recipient_id || "|" || conversation_id
 ### 4.3 Timed Self-Destruct (R10–R12)
 
 ```
-- ttl_seconds is in AD → cannot be altered without breaking MAC
+- ttl_seconds is in AD -> cannot be altered without breaking MAC
 - Client: sweep expired messages from local SQLite on startup + every 30s in chat
 - Server: TTL cleanup loop runs every 300s (configurable)
   DELETE FROM messages WHERE expires_at IS NOT NULL AND expires_at <= unixepoch()
@@ -272,10 +277,10 @@ Per-conversation state (persisted in sessions.json):
   seen_ids: Set[uuid]       # message IDs in sliding window
 
 On receiving a message:
-  1. Check message.id NOT in seen_ids → reject if duplicate
-  2. Check message.counter > (last_counter - window) → reject if outside window
-  3. Verify AES-GCM tag (counter is in AD) → reject if tampered
-  4. Accept → update last_counter, add id to seen_ids
+  1. Check message.id NOT in seen_ids -> reject if duplicate
+  2. Check message.counter > (last_counter - window) -> reject if outside window
+  3. Verify AES-GCM tag (counter is in AD) -> reject if tampered
+  4. Accept -> update last_counter, add id to seen_ids
 ```
 
 Out-of-order tolerance: window of 50 counters. Anything below `last_counter - 50` is rejected.
@@ -292,33 +297,33 @@ The DB rejects any duplicate `(conversation_id, sender_id, counter)` tuple befor
 
 ## 6. Security Requirements Mapping
 
-| Req | Description | Implementation |
-|-----|-------------|----------------|
-| R1 | Registration | `POST /v1/auth/register` — Argon2id hash, unique username, rate-limited |
-| R2 | Login + OTP | `POST /v1/auth/login` — Argon2id verify + pyotp TOTP (±1 window) |
-| R3 | Logout | `DELETE /v1/auth/session` — token revoked in DB immediately |
-| R4 | Per-device identity keypair | Ed25519 generated client-side; private key never leaves device |
-| R5 | Fingerprint UI | SHA256(sorted pub keys), 5×8 hex groups in ⚙ settings screen |
-| R6 | Key change detection | `IdentityKeyCache.check_and_update()` on every re-keying message |
-| R7 | Secure session | 2-DH: X25519 static-static + ephemeral-static, HKDF-SHA256 |
-| R8 | Message encryption | AES-256-GCM, AD binds sender/receiver/counter/ttl/timestamp |
-| R9 | Replay protection | Message ID dedup + monotonic counter + DB UNIQUE constraint |
-| R10 | TTL in AD | `ttl_seconds` in AD — tamper-evident; countdown shown in UI |
-| R11 | Client deletion | Sweep on startup + 30s interval timer in chat screen |
-| R12 | Server deletion | TTL cleanup loop every 300s; hard cap at `max_message_age_days` |
-| R13 | Friend request | `POST /v1/friends/request` |
-| R14 | Request lifecycle | accept / decline / cancel endpoints |
-| R15 | Block / remove | `PUT /v1/friends/{id}/block`, `DELETE /v1/friends/{id}` |
-| R16 | Anti-spam | Non-friends cannot send messages (DB friendship check) |
-| R17 | Delivery states | `sent` → `delivered` → `read` |
-| R18 | Delivered semantics | ACK sent by recipient client via `POST /v1/messages/{id}/ack` |
-| R19 | Metadata disclosure | Documented: server sees timing, sizes, contact graph |
-| R20 | Offline queue | Ciphertext stored in `messages` table; flushed on WS reconnect |
-| R21 | Retention | Deleted after delivery OR after `max_message_age_days` |
-| R22 | Replay robustness | Same counter/ID mechanism handles retransmission |
-| R23 | Conversation list | `GET /v1/conversations` ordered by `last_message_at DESC` |
-| R24 | Unread counters | `unread_count_a` / `unread_count_b` columns per conversation |
-| R25 | Pagination | `GET /v1/messages?before={id}&limit=50` (cursor-based) |
+| Req | Description                 | Implementation                                                          |
+| --- | --------------------------- | ----------------------------------------------------------------------- |
+| R1  | Registration                | `POST /v1/auth/register` — Argon2id hash, unique username, rate-limited |
+| R2  | Login + OTP                 | `POST /v1/auth/login` — Argon2id verify + pyotp TOTP (±1 window)        |
+| R3  | Logout                      | `DELETE /v1/auth/session` — token revoked in DB immediately             |
+| R4  | Per-device identity keypair | Ed25519 generated client-side; private key never leaves device          |
+| R5  | Fingerprint UI              | SHA256(sorted pub keys), 5×8 hex groups in ⚙ settings screen            |
+| R6  | Key change detection        | `IdentityKeyCache.check_and_update()` on every re-keying message        |
+| R7  | Secure session              | 2-DH: X25519 static-static + ephemeral-static, HKDF-SHA256              |
+| R8  | Message encryption          | AES-256-GCM, AD binds sender/receiver/counter/ttl/timestamp             |
+| R9  | Replay protection           | Message ID dedup + monotonic counter + DB UNIQUE constraint             |
+| R10 | TTL in AD                   | `ttl_seconds` in AD — tamper-evident; countdown shown in UI             |
+| R11 | Client deletion             | Sweep on startup + 30s interval timer in chat screen                    |
+| R12 | Server deletion             | TTL cleanup loop every 300s; hard cap at `max_message_age_days`         |
+| R13 | Friend request              | `POST /v1/friends/request`                                              |
+| R14 | Request lifecycle           | accept / decline / cancel endpoints                                     |
+| R15 | Block / remove              | `PUT /v1/friends/{id}/block`, `DELETE /v1/friends/{id}`                 |
+| R16 | Anti-spam                   | Non-friends cannot send messages (DB friendship check)                  |
+| R17 | Delivery states             | `sent` -> `delivered` -> `read`                                         |
+| R18 | Delivered semantics         | ACK sent by recipient client via `POST /v1/messages/{id}/ack`           |
+| R19 | Metadata disclosure         | Documented: server sees timing, sizes, contact graph                    |
+| R20 | Offline queue               | Ciphertext stored in `messages` table; flushed on WS reconnect          |
+| R21 | Retention                   | Deleted after delivery OR after `max_message_age_days`                  |
+| R22 | Replay robustness           | Same counter/ID mechanism handles retransmission                        |
+| R23 | Conversation list           | `GET /v1/conversations` ordered by `last_message_at DESC`               |
+| R24 | Unread counters             | `unread_count_a` / `unread_count_b` columns per conversation            |
+| R25 | Pagination                  | `GET /v1/messages?before={id}&limit=50` (cursor-based)                  |
 
 ---
 
@@ -337,8 +342,8 @@ On login:
 On each request:
   1. Compute SHA256(received_token)
   2. SELECT WHERE token_hash = ? AND revoked = 0 AND expires_at > now()
-  3. Found → attach user_id to request context
-  4. Not found → 401 Unauthorized
+  3. Found -> attach user_id to request context
+  4. Not found -> 401 Unauthorized
 
 On logout:
   SET revoked = 1 WHERE token_hash = ?   # immediate invalidation
@@ -410,7 +415,7 @@ On registration:
 On login TOTP verify:
   1. Load encrypted blob from DB
   2. Derive enc_key same way (user_id as info)
-  3. Decrypt → totp_secret
+  3. Decrypt -> totp_secret
   4. pyotp.TOTP(totp_secret).verify(code, valid_window=1)
 
 AD binding to user_id: decrypting with a different user_id fails authentication.
@@ -423,17 +428,17 @@ TOTP_ENCRYPTION_KEY must be stored in env — never in code or DB.
 
 **Validation (enforced by Pydantic before any DB write):**
 
-| Field | Rule |
-|-------|------|
-| username | 3–32 chars, `[a-zA-Z0-9_-]` only |
-| password | 12–128 chars |
-| totp_code | exactly 6 digits |
+| Field          | Rule                                              |
+| -------------- | ------------------------------------------------- |
+| username       | 3–32 chars, `[a-zA-Z0-9_-]` only                  |
+| password       | 12–128 chars                                      |
+| totp_code      | exactly 6 digits                                  |
 | ciphertext_b64 | ≤ 88 KB (64 KB plaintext + GCM overhead + base64) |
-| nonce_b64 | must decode to exactly 12 bytes |
-| eph_pub_b64 | must decode to exactly 32 bytes (when present) |
-| counter | non-negative integer |
-| ttl_seconds | 1–604800 (1s to 7 days) or null |
-| UUID fields | must match UUID v4 format |
+| nonce_b64      | must decode to exactly 12 bytes                   |
+| eph_pub_b64    | must decode to exactly 32 bytes (when present)    |
+| counter        | non-negative integer                              |
+| ttl_seconds    | 1–604800 (1s to 7 days) or null                   |
+| UUID fields    | must match UUID v4 format                         |
 
 **Logging policy (structlog):**
 
@@ -448,10 +453,10 @@ Log level: INFO in production; DEBUG in dev (LOG_LEVEL env var)
 
 **Rate limiting (DB-backed, per IP):**
 
-| Endpoint | Max attempts | Window |
-|----------|-------------|--------|
-| POST /v1/auth/login | 5 | 300s |
-| POST /v1/auth/register | 3 | 3600s |
+| Endpoint               | Max attempts | Window |
+| ---------------------- | ------------ | ------ |
+| POST /v1/auth/login    | 5            | 300s   |
+| POST /v1/auth/register | 3            | 3600s  |
 
 Key is `"login:<ip>"` — not username, to avoid user enumeration.
 Constant-time dummy Argon2id hash on unknown username to prevent timing attacks.
@@ -461,6 +466,7 @@ Constant-time dummy Argon2id hash on unknown username to prevent timing attacks.
 ## 11. Stack & File Structure
 
 **Stack:**
+
 ```
 Server:  FastAPI + aiosqlite (SQLite WAL) + uvicorn
 Client:  Textual TUI + httpx (async HTTP/WS)
@@ -469,6 +475,7 @@ Deploy:  Docker Compose (one command) + uv for local dev
 ```
 
 **File structure:**
+
 ```
 project/
 ├── server/
@@ -512,7 +519,7 @@ project/
 │   │   ├── test_crypto.py         # 22 tests: Ed25519, X25519, AES-GCM, replay, fingerprint
 │   │   └── test_auth.py           # 10 tests: Argon2id, bearer tokens, TOTP encryption
 │   ├── integration/
-│   │   ├── test_e2e_message.py    # 2 tests: register→login→friend→send→decrypt + replay
+│   │   ├── test_e2e_message.py    # 2 tests: register->login->friend->send->decrypt + replay
 │   │   └── test_offline_queue.py  # 2 tests: offline queue store-and-forward + replay
 │   ├── security/
 │   │   └── test_replay_attack.py  # 13 tests: replay, ciphertext tampering, session key
@@ -634,6 +641,7 @@ CREATE TABLE conversations (
 ```
 
 **Key design decisions:**
+
 - `users.id` is `lower(hex(randomblob(16)))` — 128-bit random, not sequential (no enumeration)
 - `PRAGMA secure_delete = ON` — zero-fills deleted pages (relevant for TTL data)
 - `PRAGMA journal_mode = WAL` — concurrent reads while server writes
@@ -648,10 +656,10 @@ CREATE TABLE conversations (
 
 Two jobs run on every push/PR to `main`:
 
-| Job | What it does |
-|-----|-------------|
-| `test` | `uv sync --extra dev` → `pytest -v --tb=short` (45 tests) |
-| `docker-build` | bootstrap env → `docker compose up --build -d` → wait for healthcheck → `curl /health` → teardown |
+| Job            | What it does                                                                                          |
+| -------------- | ----------------------------------------------------------------------------------------------------- |
+| `test`         | `uv sync --extra dev` -> `pytest -v --tb=short` (45 tests)                                            |
+| `docker-build` | bootstrap env -> `docker compose up --build -d` -> wait for healthcheck -> `curl /health` -> teardown |
 
 ### 13.2 Local Deploy Test (`scripts/test-deploy.sh`)
 
@@ -664,16 +672,16 @@ Mirrors CI locally. Checks prerequisites, runs tests, builds Docker image, waits
 
 ### 13.3 Server Config (env vars)
 
-| Variable | Required | Default | Notes |
-|----------|----------|---------|-------|
-| `TOKEN_SECRET_KEY` | prod | auto-generated in dev | 64 hex chars (32 bytes) |
-| `TOTP_ENCRYPTION_KEY` | prod | auto-generated in dev | 64 hex chars (32 bytes) |
-| `APP_ENV` | no | `development` | `production` disables docs, enforces secrets |
-| `PORT` | no | `8443` | |
-| `TOKEN_EXPIRY_SECONDS` | no | `900` | 15 minutes |
-| `MAX_MESSAGE_AGE_DAYS` | no | `30` | Hard retention cap |
-| `TLS_CERT_FILE` | no | `./certs/server.crt` | Auto-generated by bootstrap script |
-| `TLS_KEY_FILE` | no | `./certs/server.key` | Auto-generated by bootstrap script |
+| Variable               | Required | Default               | Notes                                        |
+| ---------------------- | -------- | --------------------- | -------------------------------------------- |
+| `TOKEN_SECRET_KEY`     | prod     | auto-generated in dev | 64 hex chars (32 bytes)                      |
+| `TOTP_ENCRYPTION_KEY`  | prod     | auto-generated in dev | 64 hex chars (32 bytes)                      |
+| `APP_ENV`              | no       | `development`         | `production` disables docs, enforces secrets |
+| `PORT`                 | no       | `8443`                |                                              |
+| `TOKEN_EXPIRY_SECONDS` | no       | `900`                 | 15 minutes                                   |
+| `MAX_MESSAGE_AGE_DAYS` | no       | `30`                  | Hard retention cap                           |
+| `TLS_CERT_FILE`        | no       | `./certs/server.crt`  | Auto-generated by bootstrap script           |
+| `TLS_KEY_FILE`         | no       | `./certs/server.key`  | Auto-generated by bootstrap script           |
 
 ### 13.4 Docker
 
@@ -686,10 +694,10 @@ Mirrors CI locally. Checks prerequisites, runs tests, builds Docker image, waits
 
 ---
 
-*Threat model: HbC server + network attacker + malicious users*
-*Crypto: X25519 + HKDF-SHA256 + AES-256-GCM + Ed25519 + Argon2id + TOTP*
-*All primitives from well-reviewed libraries — no custom crypto*
-*Last updated: 2026-03-13*
+_Threat model: HbC server + network attacker + malicious users_
+_Crypto: X25519 + HKDF-SHA256 + AES-256-GCM + Ed25519 + Argon2id + TOTP_
+_All primitives from well-reviewed libraries — no custom crypto_
+_Last updated: 2026-03-13_
 
 ---
 
@@ -712,6 +720,7 @@ The X25519 DH keypair is long-term and used as the static-static component (DH1)
 ### 14.3 Metadata Exposure to Honest-but-Curious Server
 
 The server learns:
+
 - **Contact graph:** who talks to whom (friendship table + message routing)
 - **Timing:** when messages are sent, delivered, and acknowledged
 - **Message sizes:** approximate plaintext length (ciphertext size minus GCM overhead)
@@ -730,6 +739,7 @@ There is no way to rotate the long-term identity key (Ed25519) or DH key (X25519
 ### 14.5 Self-Destruct Limitations
 
 The TTL-based self-destruct (R10–R12) is best-effort:
+
 - Cannot prevent screenshots or screen recording
 - A malicious client can ignore TTL and retain messages indefinitely
 - Server-side deletion runs on a configurable interval (default 300s), so messages may persist briefly past expiry

@@ -4,9 +4,9 @@ tests/integration/test_offline_queue.py — Offline messaging (R20, R21, R22).
 Scenario:
   1. Alice + Bob register and become friends.
   2. Bob is offline (no WebSocket).
-  3. Alice sends encrypted message → server stores in offline queue.
-  4. Bob fetches via GET /v1/messages → decrypts → plaintext matches.
-  5. Replaying same ciphertext → server rejects (R22).
+  3. Alice sends encrypted message -> server stores in offline queue.
+  4. Bob fetches via GET /v1/messages -> decrypts -> plaintext matches.
+  5. Replaying same ciphertext -> server rejects (R22).
 """
 
 from __future__ import annotations
@@ -47,6 +47,13 @@ async def app_client():
     os.environ["DATABASE_URL"]            = "sqlite+aiosqlite:////tmp/test_offline.db"
     os.environ["RATE_LIMIT_REGISTER_MAX"] = "1000"
     os.environ["RATE_LIMIT_LOGIN_MAX"]    = "1000"
+
+    # Clean up any leftover DB from previous runs to avoid UNIQUE constraint violations
+    try:
+        os.unlink("/tmp/test_offline.db")
+    except FileNotFoundError:
+        pass
+
     from server.main import app
     await db_mod.init_db()
     transport = ASGITransport(app=app)

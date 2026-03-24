@@ -11,7 +11,8 @@ import json
 import logging
 import ssl
 import warnings
-from typing import Callable, Awaitable, Literal
+from collections.abc import Awaitable, Callable
+from typing import Literal
 
 import httpx
 import websockets
@@ -42,14 +43,18 @@ MessageCallback = Callable[[dict], Awaitable[None]]
 def _make_ssl_ctx(
     verify: bool = True,
     ca_cert: str | None = None,
+    pin_sha256: str | None = None,
 ) -> ssl.SSLContext:
     """
     Return an SSL context for WebSocket connections.
 
     Priority:
-      1. ca_cert provided → load it as trusted CA (for self-signed certs)
-      2. verify=False     → disable verification with deprecation warning
-      3. default          → system CA bundle
+      1. ca_cert provided -> load it as trusted CA (for self-signed certs)
+      2. verify=False     -> disable verification with deprecation warning
+      3. default          -> system CA bundle
+
+    If pin_sha256 is provided, a verify callback is added to check the certificate
+    fingerprint against the expected SHA256 hash.
     """
     ctx = ssl.create_default_context()
     if ca_cert:
@@ -61,6 +66,33 @@ def _make_ssl_ctx(
         )
         ctx.check_hostname = False
         ctx.verify_mode = ssl.CERT_NONE
+
+    # Add certificate pinning callback if pin_sha256 is provided
+    if pin_sha256:
+        expected_pin = pin_sha256.lower()
+
+        def _verify_pin_callback(
+            conn: ssl.SSLObject,
+            cert: bytes,
+            errno: int,
+            depth: int,
+            preverify_ok: int,
+        ) -> int:
+            """Verify certificate pin during TLS handshake."""
+            if depth == 0 and preverify_ok:
+                cert_hash = hashlib.sha256(cert).hexdigest()
+                if cert_hash != expected_pin:
+                    log.warning(
+                        "Certificate pin mismatch: expected %s, got %s",
+                        expected_pin,
+                        cert_hash,
+                    )
+                    return 0
+            return preverify_ok
+
+        # Use setattr to avoid Pylance type errors (verify_callback exists at runtime)
+        setattr(ctx, "verify_callback", _verify_pin_callback)
+
     return ctx
 
 
@@ -81,13 +113,23 @@ class IMClient:
         self._ca_cert = ca_cert
         self._pin_sha256 = pin_sha256.lower() if pin_sha256 else None
 
-    async def __aenter__(self) -> "IMClient":
+    async def __aenter__(self) -> IMClient:
         # httpx: use ca_cert path if provided, else fall back to verify_tls bool
         verify: bool | str = self._ca_cert if self._ca_cert else self._verify_tls
+
+        # Create SSL context with certificate pinning if pin_sha256 is provided
+        ssl_ctx = None
+        if self._pin_sha256 and self._verify_tls:
+            ssl_ctx = _make_ssl_ctx(
+                verify=self._verify_tls,
+                ca_cert=self._ca_cert,
+                pin_sha256=self._pin_sha256,
+            )
+
         self._http = httpx.AsyncClient(
             base_url=self._base_url,
             timeout=10.0,
-            verify=verify,
+            verify=ssl_ctx if ssl_ctx else verify,
             trust_env=False,
         )
         return self
@@ -104,11 +146,11 @@ class IMClient:
 
     async def _request(self, method: str, path: str, **kwargs) -> httpx.Response:
         assert self._http is not None, "Use IMClient as async context manager"
-        log.debug("→ %s %s", method.upper(), path)
+        log.debug("-> %s %s", method.upper(), path)
         resp = await self._http.request(method, path, headers=self._headers(), **kwargs)
         log.debug("← %s %s %d (%d bytes)", method.upper(), path, resp.status_code, len(resp.content))
         if resp.status_code >= 400:
-            log.warning("Request failed: %s %s → HTTP %d: %s", method.upper(), path, resp.status_code, resp.text[:200])
+            log.warning("Request failed: %s %s -> HTTP %d: %s", method.upper(), path, resp.status_code, resp.text[:200])
             raise IMClientError(resp.status_code, resp.text)
         return resp
 
@@ -218,7 +260,11 @@ class IMClient:
         ws_url = self._base_url.replace("https://", "wss://").replace("http://", "ws://")
         ws_url = f"{ws_url}/v1/ws"
         use_tls = ws_url.startswith("wss://")
-        ssl_ctx = _make_ssl_ctx(verify=self._verify_tls, ca_cert=self._ca_cert) if use_tls else None
+        ssl_ctx = _make_ssl_ctx(
+            verify=self._verify_tls,
+            ca_cert=self._ca_cert,
+            pin_sha256=self._pin_sha256,
+        ) if use_tls else None
 
         retry_count = 0
         while True:

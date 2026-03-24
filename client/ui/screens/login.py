@@ -4,9 +4,9 @@ client/ui/screens/login.py — Login and registration screens.
 
 from __future__ import annotations
 
-from textual.message import Message
 from textual.app import ComposeResult
 from textual.containers import Center, Vertical
+from textual.message import Message
 from textual.screen import Screen
 from textual.widgets import Button, Input, Label, Static
 

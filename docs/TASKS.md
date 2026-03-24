@@ -1,6 +1,7 @@
 # COMP3334 Project — Task Breakdown
 
-## Status: In Progress — 45/45 tests passing ✅
+## Status: In Progress — 53/53 tests passing ✅
+
 **Team:** 5 people (P1–P5)
 **Deadline:** April 2, 2026 16:59
 
@@ -9,11 +10,13 @@
 ## Completed ✅
 
 ### Foundation (Done)
+
 - `shared/protocol.py` — Pydantic wire models, `make_conversation_id()`, all enums
 - `shared/__init__.py`
-- `001_init.sql` → `server/migrations/001_init.sql` — full DB schema
+- `001_init.sql` -> `server/migrations/001_init.sql` — full DB schema
 
 ### Server (Done)
+
 - `server/main.py` — FastAPI app, routers, WebSocket endpoint, TTL cleanup loop
 - `server/core/config.py` — pydantic-settings env config
 - `server/core/database.py` — aiosqlite, migration runner
@@ -26,10 +29,12 @@
 - `server/ws/handler.py` — WebSocket connection manager, offline queue flush
 
 ### Client Crypto (Done)
+
 - `client/crypto/session.py` — Ed25519, X25519 2-DH, HKDF-SHA256, AES-256-GCM, replay protection, key change detection
 - `client/crypto/storage.py` — Argon2id-derived storage key, AES-GCM encrypted keystore + session cache
 
 ### Client App (Done)
+
 - `client/api/client.py` — httpx async HTTP client + WebSocket listener with auto-reconnect
 - `client/state/store.py` — local SQLite message store, TTL sweep
 - `client/main.py` — CLI entrypoint
@@ -42,14 +47,16 @@
 - `client/ui/screens/settings.py` — fingerprint display (R5), TTL config (R10)
 
 ### Tests (Done)
+
 - `tests/security/test_replay_attack.py` — replay resistance, ciphertext tampering, session key derivation (13 tests)
 - `tests/unit/test_crypto.py` — Ed25519, X25519, AES-GCM, replay protector, fingerprint, envelope (22 tests)
 - `tests/unit/test_auth.py` — Argon2id, bearer tokens, TOTP encryption (10 tests)
-- `tests/integration/test_e2e_message.py` — full E2E: register→login→friend→send→decrypt + replay rejection (2 tests)
+- `tests/integration/test_e2e_message.py` — full E2E: register->login->friend->send->decrypt + replay rejection (2 tests)
 - `tests/integration/test_offline_queue.py` — offline queue store-and-forward + replay rejection (2 tests)
 - `tests/ui/test_textual.py` — Textual TUI smoke test
 
 ### Docs (Done)
+
 - `ARCHITECTURE.md` — full design doc with session state machine, secure storage design, TOTP encryption scheme, input validation policy, logging policy, auth token design
 - `DEPLOY.md` — step-by-step deploy guide for Windows 11 + Ubuntu
 
@@ -59,37 +66,37 @@
 
 ### Week 2 (Mar 17–23) — ✅ Done
 
-| # | Task | Owner | Req | Status |
-|---|------|-------|-----|--------|
-| 1 | **Wire up `client/ui/app.py` event handlers** — login→conversation→chat flow | P4 | All | ✅ Done |
-| 2 | **`MessageItem` widget** — implemented inline in `client/ui/screens/chat.py` | P4 | R23 | ✅ Done |
-| 3 | **P5 task assignment** — assign P5 to deploy testing + report §10 | All | — | ✅ Done |
+| #   | Task                                                                           | Owner | Req | Status  |
+| --- | ------------------------------------------------------------------------------ | ----- | --- | ------- |
+| 1   | **Wire up `client/ui/app.py` event handlers** — login->conversation->chat flow | P4    | All | ✅ Done |
+| 2   | **`MessageItem` widget** — implemented inline in `client/ui/screens/chat.py`   | P4    | R23 | ✅ Done |
+| 3   | **P5 task assignment** — assign P5 to deploy testing + report §10              | All   | —   | ✅ Done |
 
 ### Week 3 Priority (Mar 24–Apr 1)
 
-| # | Task | Owner | Req |
-|---|------|-------|-----|
-| 4 | **End-to-end manual test** — two terminals, Alice+Bob full conversation | All | All |
-| 5 | **Windows 11 deploy test** — follow DEPLOY.md on clean Windows VM | P5 | §9 |
-| 6 | **Ubuntu deploy test** — follow DEPLOY.md on clean Ubuntu VM | P5 | §9 |
-| 7 | **Report writing** — split by section (see below), merge Apr 1 | All | §8 |
-| 8 | **Presentation video** — 10 min, record by Apr 1 | All | §10 |
+| #   | Task                                                                    | Owner | Req |
+| --- | ----------------------------------------------------------------------- | ----- | --- |
+| 4   | **End-to-end manual test** — two terminals, Alice+Bob full conversation | All   | All |
+| 5   | **Windows 11 deploy test** — follow DEPLOY.md on clean Windows VM       | P5    | §9  |
+| 6   | **Ubuntu deploy test** — follow DEPLOY.md on clean Ubuntu VM            | P5    | §9  |
+| 7   | **Report writing** — split by section (see below), merge Apr 1          | All   | §8  |
+| 8   | **Presentation video** — 10 min, record by Apr 1                        | All   | §10 |
 
 ---
 
 ## Report Section Assignments
 
-| Section | Content | Owner |
-|---------|---------|-------|
-| 1–3 | Abstract, Introduction, Team info | All |
-| 4 | Threat Model & Assumptions | P1 |
-| 5 | Architecture (trust boundaries, data flow) | P2 |
-| 6 | Protocol Design (session state machine, message format, replay) | P3 |
-| 7 | Cryptographic Choices & Rationale | P3 |
-| 8 | Security Analysis (server can't decrypt, metadata exposure, limitations) | P1 |
-| 9 | Testing & Evaluation (demo + 2 security test cases) | P2 |
-| 10 | Deployment & Setup Guide | P5 |
-| 11–12 | Future Works, References | All |
+| Section | Content                                                                  | Owner |
+| ------- | ------------------------------------------------------------------------ | ----- |
+| 1–3     | Abstract, Introduction, Team info                                        | All   |
+| 4       | Threat Model & Assumptions                                               | P1    |
+| 5       | Architecture (trust boundaries, data flow)                               | P2    |
+| 6       | Protocol Design (session state machine, message format, replay)          | P3    |
+| 7       | Cryptographic Choices & Rationale                                        | P3    |
+| 8       | Security Analysis (server can't decrypt, metadata exposure, limitations) | P1    |
+| 9       | Testing & Evaluation (demo + 2 security test cases)                      | P2    |
+| 10      | Deployment & Setup Guide                                                 | P5    |
+| 11–12   | Future Works, References                                                 | All   |
 
 ---
 
