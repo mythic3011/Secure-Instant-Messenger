@@ -175,6 +175,7 @@ class FriendsScreen(Screen):
             self.app.exit()
         elif btn_id.startswith("accept_"):
             self.post_message(self.AcceptRequest(btn_id.removeprefix("accept_")))
+            
         elif btn_id.startswith("decline_"):
             self.post_message(self.DeclineRequest(btn_id.removeprefix("decline_")))
 

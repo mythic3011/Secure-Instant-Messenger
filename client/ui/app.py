@@ -376,8 +376,8 @@ class IMApp(App):
         try:
             requests = await self._client.list_pending_requests()
             try:
-                screen = self.query_one(FriendsScreen)
-                screen.populate_pending([r.model_dump() for r in requests])
+                friends = self.screen
+                friends.populate_pending([r.model_dump() for r in requests])
             except Exception:
                 pass
         except Exception:
@@ -388,28 +388,40 @@ class IMApp(App):
         if self._client is None:
             return
         try:
-            screen = self.query_one(FriendsScreen)
+            friends = self.screen
         except Exception:
             return
         try:
             await self._client.send_friend_request(msg.username)
-            screen.show_status(f"Request sent to {msg.username}.")
+            friends.show_status(f"Request sent to {msg.username}.")
         except IMClientError as e:
-            screen.show_error(f"Failed: {e.detail}")
+            friends.show_error(f"Failed: {e.detail}")
 
     async def on_friends_screen_accept_request(self, msg: Any) -> None:
+        from client.ui.screens.friends import FriendsScreen
         if self._client is None:
             return
         try:
+            friends = self.screen
+            if friends is None:
+                return
             await self._client.handle_friend_request(msg.request_id, "accept")
+            requests = await self._client.list_pending_requests()
+            friends.populate_pending([r.model_dump() for r in requests])
         except Exception:
             pass
 
     async def on_friends_screen_decline_request(self, msg: Any) -> None:
+        from client.ui.screens.friends import FriendsScreen
         if self._client is None:
             return
         try:
+            friends = self.screen
+            if friends is None:
+                return
             await self._client.handle_friend_request(msg.request_id, "decline")
+            requests = await self._client.list_pending_requests()
+            friends.populate_pending([r.model_dump() for r in requests])
         except Exception:
             pass
 
