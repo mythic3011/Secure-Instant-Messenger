@@ -74,19 +74,57 @@ def main() -> None:
     log_dir = Path(args.log_dir) if args.log_dir else Path("logs")
     _setup_logging(log_dir, verbose=args.verbose)
 
-    server = args.server or os.environ.get("SERVER_URL") or "http://localhost:8443"
+    server = args.server or os.environ.get("SERVER_URL") or "https://localhost:8443"
+
+    # Auto-detect scheme: if user passed bare host or http://, warn and upgrade
+    if server.startswith("http://"):
+        log = logging.getLogger(__name__)
+        log.warning(
+            "Server URL uses http:// — upgrading to https:// "
+            "(the server requires TLS). Use --server https://... to suppress this warning."
+        )
+        server = server.replace("http://", "https://", 1)
+
     username = args.username or os.environ.get("IM_USERNAME") or ""
 
+    # Auto-disable TLS verification for localhost self-signed certs in dev
+    verify_tls = args.verify_tls
+    ca_cert = args.ca_cert
+    if verify_tls and not ca_cert and "localhost" in server:
+        # Check if the server cert is self-signed (untrusted) before connecting
+        import ssl
+        import socket
+        from urllib.parse import urlparse
+        parsed = urlparse(server)
+        host = parsed.hostname or "localhost"
+        port = parsed.port or 8443
+        try:
+            ctx = ssl.create_default_context()
+            with socket.create_connection((host, port), timeout=3) as sock:
+                with ctx.wrap_socket(sock, server_hostname=host):
+                    pass  # cert is trusted, no action needed
+        except ssl.SSLCertVerificationError:
+            log = logging.getLogger(__name__)
+            log.warning(
+                "Server at %s uses a self-signed certificate. "
+                "Auto-disabling TLS verification for dev convenience. "
+                "Use --ca-cert to trust a specific cert instead.",
+                server,
+            )
+            verify_tls = False
+        except (OSError, socket.timeout):
+            pass  # server not reachable yet, let the app handle it
+
     log = logging.getLogger(__name__)
-    log.info("Starting client — server=%s username=%s", server, username or "(none)")
+    log.info("Starting client — server=%s username=%s verify_tls=%s", server, username or "(none)", verify_tls)
 
     from client.ui.app import IMApp
     try:
         IMApp(
             server_url=server,
             username=username,
-            verify_tls=args.verify_tls,
-            ca_cert=args.ca_cert,
+            verify_tls=verify_tls,
+            ca_cert=ca_cert,
             pin_sha256=args.pin_cert,
         ).run()
     except KeyboardInterrupt:

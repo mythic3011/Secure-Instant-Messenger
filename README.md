@@ -91,8 +91,16 @@ uv run --extra dev pytest tests/integration/ -v
 ## Docker
 
 ```bash
+# Start server
 docker compose up --build
+
+# Start client (separate terminal) — use --no-verify-tls since the container auto-generates a self-signed cert
+uv run python -m client.main --server https://localhost:8443 --no-verify-tls
 ```
+
+> **Note:** The client defaults to HTTP in `main.py`. Always pass `--server https://localhost:8443` when connecting to the Docker server. Without `--no-verify-tls`, you'll get a `ConnectionError` because the container's self-signed cert isn't trusted by the host.
+
+![Docker client connection notes](image/README/1774329535318.png)
 
 ## Architecture & Protocol
 
@@ -108,6 +116,7 @@ See `docs/DEPLOY.md` for step-by-step instructions for Windows 11 and Ubuntu.
 |---|---|
 | `PermissionError: '/app/data'` | Stale `.env.local` with container path. Delete it or remove the `DATABASE_URL` line and restart. |
 | TLS cert not found | Run `bash scripts/bootstrap-env.sh dev`, or ignore — server falls back to HTTP in dev mode. |
+| `ConnectionError` / "Cannot reach server" with Docker | The container auto-generates a self-signed cert the host doesn't trust. Use `--no-verify-tls` and make sure you pass `--server https://localhost:8443` (not HTTP). |
 
 **Data directory contract:**
 
