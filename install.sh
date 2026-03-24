@@ -95,6 +95,16 @@ asyncio.run(db.close_db())
 "
 info "Database ready ✓"
 
+# ── Step 5: Install git pre-commit hook ───────────────────────────────────────
+info "Installing git pre-commit hook…"
+if [[ -d .git ]]; then
+    cp scripts/pre-commit .git/hooks/pre-commit
+    chmod +x .git/hooks/pre-commit
+    info "Pre-commit hook installed ✓  (skip with: git commit --no-verify)"
+else
+    warning "Not a git repo — skipping pre-commit hook"
+fi
+
 # ── Done ─────────────────────────────────────────────────────────────────────
 echo ""
 echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
