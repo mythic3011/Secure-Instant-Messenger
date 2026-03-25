@@ -1,0 +1,7 @@
+interface:
+  display_name: "Submission Freeze"
+  short_description: "Freeze, verify, and merge safely"
+  default_prompt: "Use $submission-freeze to audit the real merge set, verify the branch, and prepare a safe fast-forward merge to main."
+
+policy:
+  allow_implicit_invocation: true
