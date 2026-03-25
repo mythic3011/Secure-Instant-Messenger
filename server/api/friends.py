@@ -6,6 +6,7 @@ Covers: R13, R14, R15, R16
 from __future__ import annotations
 
 import secrets
+from typing import Annotated
 
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -27,10 +28,12 @@ log = structlog.get_logger()
 # R13 — Send friend request
 # ---------------------------------------------------------------------------
 
+
 @router.post("/request", response_model=FriendRequestOut, status_code=status.HTTP_201_CREATED)
 async def send_friend_request(
     body: FriendRequestCreate,
-    session: dict = Depends(require_auth),
+    *,
+    session: Annotated[dict, Depends(require_auth)],
 ) -> FriendRequestOut:
     """Send a friend request to another user by username."""
     db = await get_db()
@@ -42,13 +45,20 @@ async def send_friend_request(
         (body.recipient_username,),
     ) as cur:
         recipient = await cur.fetchone()
+
     if recipient is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User not found",
+        )
 
     recipient_id = recipient["id"]
 
     if recipient_id == sender_id:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Cannot add yourself")
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Cannot add yourself",
+        )
 
     # Check if blocked
     async with db.execute(
@@ -56,15 +66,22 @@ async def send_friend_request(
         (recipient_id, sender_id),
     ) as cur:
         if await cur.fetchone():
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Action not allowed")
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Action not allowed",
+            )
 
     # Check if already friends
     a, b = sorted([sender_id, recipient_id])
     async with db.execute(
-        "SELECT 1 FROM friendships WHERE user_a_id = ? AND user_b_id = ?", (a, b)
+        "SELECT 1 FROM friendships WHERE user_a_id = ? AND user_b_id = ?",
+        (a, b),
     ) as cur:
         if await cur.fetchone():
-            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Already friends")
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Already friends",
+            )
 
     # Upsert request (re-send if previously declined/cancelled)
     async with db.execute(
@@ -79,7 +96,10 @@ async def send_friend_request(
         row = await cur.fetchone()
 
     if row is None:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Request already pending or accepted")
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Request already pending or accepted",
+        )
 
     await db.commit()
     log.info("friend_request_sent", sender=sender_id, recipient=recipient_id)
@@ -98,8 +118,12 @@ async def send_friend_request(
 # R14 — List pending requests
 # ---------------------------------------------------------------------------
 
+
 @router.get("/pending", response_model=list[FriendRequestOut])
-async def list_pending(session: dict = Depends(require_auth)) -> list[FriendRequestOut]:
+async def list_pending(
+    *,
+    session: Annotated[dict, Depends(require_auth)],
+) -> list[FriendRequestOut]:
     """List incoming pending friend requests for the current user."""
     db = await get_db()
     async with db.execute(
@@ -131,11 +155,13 @@ async def list_pending(session: dict = Depends(require_auth)) -> list[FriendRequ
 # R14 — Accept / decline / cancel
 # ---------------------------------------------------------------------------
 
+
 @router.put("/request/{request_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def handle_request(
     request_id: str,
     body: FriendRequestAction,
-    session: dict = Depends(require_auth),
+    *,
+    session: Annotated[dict, Depends(require_auth)],
 ) -> None:
     """Accept, decline (recipient), or cancel (sender) a friend request."""
     db = await get_db()
@@ -148,18 +174,34 @@ async def handle_request(
         req = await cur.fetchone()
 
     if req is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Request not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Request not found",
+        )
 
     if req["status"] != "pending":
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Request is not pending")
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Request is not pending",
+        )
 
     action = body.action
     if action == "cancel" and req["sender_id"] != user_id:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only sender can cancel")
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only sender can cancel",
+        )
     if action in ("accept", "decline") and req["recipient_id"] != user_id:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only recipient can accept/decline")
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only recipient can accept/decline",
+        )
 
-    status_map = {"accept": "accepted", "decline": "declined", "cancel": "cancelled"}
+    status_map = {
+        "accept": "accepted",
+        "decline": "declined",
+        "cancel": "cancelled",
+    }
     await db.execute(
         "UPDATE friend_requests SET status = ?, updated_at = unixepoch() WHERE id = ?",
         (status_map[action], request_id),
@@ -168,7 +210,8 @@ async def handle_request(
     if action == "accept":
         a, b = sorted([req["sender_id"], req["recipient_id"]])
         await db.execute(
-            "INSERT OR IGNORE INTO friendships (user_a_id, user_b_id) VALUES (?, ?)", (a, b)
+            "INSERT OR IGNORE INTO friendships (user_a_id, user_b_id) VALUES (?, ?)",
+            (a, b),
         )
         # Create conversation with random ID
         conv_id = secrets.token_hex(16)
@@ -185,10 +228,12 @@ async def handle_request(
 # R15 — Remove friend
 # ---------------------------------------------------------------------------
 
+
 @router.delete("/{peer_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def remove_friend(
     peer_id: str,
-    session: dict = Depends(require_auth),
+    *,
+    session: Annotated[dict, Depends(require_auth)],
 ) -> None:
     """Remove a friend (mutual — removes friendship for both sides)."""
     db = await get_db()
@@ -196,7 +241,8 @@ async def remove_friend(
     a, b = sorted([user_id, peer_id])
 
     await db.execute(
-        "DELETE FROM friendships WHERE user_a_id = ? AND user_b_id = ?", (a, b)
+        "DELETE FROM friendships WHERE user_a_id = ? AND user_b_id = ?",
+        (a, b),
     )
     await db.commit()
     log.info("friend_removed", user_id=user_id, peer_id=peer_id)
@@ -206,17 +252,22 @@ async def remove_friend(
 # R15 — Block user
 # ---------------------------------------------------------------------------
 
+
 @router.post("/{peer_id}/block", status_code=status.HTTP_204_NO_CONTENT)
 async def block_user(
     peer_id: str,
-    session: dict = Depends(require_auth),
+    *,
+    session: Annotated[dict, Depends(require_auth)],
 ) -> None:
     """Block a user. Also removes friendship and cancels pending requests."""
     db = await get_db()
     user_id = session["user_id"]
 
     if peer_id == user_id:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Cannot block yourself")
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Cannot block yourself",
+        )
 
     # Insert block
     await db.execute(
@@ -226,7 +277,10 @@ async def block_user(
 
     # Remove friendship
     a, b = sorted([user_id, peer_id])
-    await db.execute("DELETE FROM friendships WHERE user_a_id = ? AND user_b_id = ?", (a, b))
+    await db.execute(
+        "DELETE FROM friendships WHERE user_a_id = ? AND user_b_id = ?",
+        (a, b),
+    )
 
     # Cancel any pending requests between them
     await db.execute(

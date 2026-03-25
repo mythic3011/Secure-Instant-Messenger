@@ -7,13 +7,12 @@ DO NOT add business logic here. This file defines data shapes only.
 
 from __future__ import annotations
 
-import enum
+import base64
+import uuid
+from enum import StrEnum
 from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator
-import base64
-import uuid
-
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -32,20 +31,20 @@ MAX_SKIP         = 50     # max skipped messages in ratchet chain
 # Enums
 # ---------------------------------------------------------------------------
 
-class DeliveryStatus(str, enum.Enum):
+class DeliveryStatus(StrEnum):
     SENT      = "sent"       # server acknowledged receipt
     DELIVERED = "delivered"  # recipient client acknowledged
     READ      = "read"       # optional, for future
 
 
-class FriendRequestStatus(str, enum.Enum):
+class FriendRequestStatus(StrEnum):
     PENDING   = "pending"
     ACCEPTED  = "accepted"
     DECLINED  = "declined"
     CANCELLED = "cancelled"
 
 
-class MessageType(str, enum.Enum):
+class MessageType(StrEnum):
     MESSAGE = "message"
     ACK     = "ack"        # delivery acknowledgement (E2EE-protected)
     SYSTEM  = "system"     # key change warning, etc.
@@ -138,8 +137,8 @@ class MessageEnvelope(BaseModel):
     def must_be_base64(cls, v: str) -> str:
         try:
             base64.b64decode(v, validate=True)
-        except Exception:
-            raise ValueError("field must be valid base64")
+        except Exception as err:
+            raise ValueError("field must be valid base64") from err
         return v
 
     def compute_ad(self) -> bytes:
