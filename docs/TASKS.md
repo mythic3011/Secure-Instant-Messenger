@@ -151,3 +151,7 @@ docker compose up --build
 ## Final Assurance Story
 
 Before submission, development moved from feature work into hardening mode. The final gate is layered: `ruff`, `bandit`, two custom repository checks, `mypy`, and then the full `pytest` suite. The custom checks enforce two important invariants: silent broad exception swallowing is blocked, and stale security claims in docs or comments are blocked. MyPy is used in a non-strict, boundary-focused way to catch `None` crashes and wrong return shapes across client, storage, and API boundaries. The result is not just “the tests pass”, but that static checks, invariant enforcement, type checks, and runtime tests all support the same reliability and security claims.
+
+### Short Presentation Version
+
+We stopped feature work and moved into hardening mode. Our final assurance gate combines `ruff`, `bandit`, two custom repository checks, `mypy`, and `pytest`. The custom checks block silent exception swallowing and stale security claims, while MyPy catches boundary-level crashes like `None` misuse and wrong return shapes. So our claim is not just that tests pass, but that static checks, invariant enforcement, type checks, and runtime behavior all align.
