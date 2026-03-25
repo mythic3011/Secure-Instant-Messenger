@@ -11,7 +11,8 @@ import json
 import logging
 import ssl
 import warnings
-from typing import Callable, Awaitable, Literal
+from collections.abc import Awaitable, Callable
+from typing import Literal
 
 import httpx
 import websockets
@@ -81,7 +82,7 @@ class IMClient:
         self._ca_cert = ca_cert
         self._pin_sha256 = pin_sha256.lower() if pin_sha256 else None
 
-    async def __aenter__(self) -> "IMClient":
+    async def __aenter__(self) -> IMClient:
         # httpx: use ca_cert path if provided, else fall back to verify_tls bool
         verify: bool | str = self._ca_cert if self._ca_cert else self._verify_tls
         self._http = httpx.AsyncClient(
@@ -106,9 +107,21 @@ class IMClient:
         assert self._http is not None, "Use IMClient as async context manager"
         log.debug("→ %s %s", method.upper(), path)
         resp = await self._http.request(method, path, headers=self._headers(), **kwargs)
-        log.debug("← %s %s %d (%d bytes)", method.upper(), path, resp.status_code, len(resp.content))
+        log.debug(
+            "← %s %s %d (%d bytes)",
+            method.upper(),
+            path,
+            resp.status_code,
+            len(resp.content),
+        )
         if resp.status_code >= 400:
-            log.warning("Request failed: %s %s → HTTP %d: %s", method.upper(), path, resp.status_code, resp.text[:200])
+            log.warning(
+                "Request failed: %s %s → HTTP %d: %s",
+                method.upper(),
+                path,
+                resp.status_code,
+                resp.text[:200],
+            )
             raise IMClientError(resp.status_code, resp.text)
         return resp
 
@@ -159,7 +172,9 @@ class IMClient:
     # Friends
     async def send_friend_request(self, username: str) -> FriendRequestOut:
         body = FriendRequestCreate(recipient_username=username)
-        resp = await self._request("POST", "/v1/friends/request", json=body.model_dump())
+        resp = await self._request(
+            "POST", "/v1/friends/request", json=body.model_dump()
+        )
         return FriendRequestOut.model_validate(resp.json())
 
     async def list_pending_requests(self) -> list[FriendRequestOut]:
@@ -172,7 +187,9 @@ class IMClient:
         action: Literal["accept", "decline", "cancel"],
     ) -> None:
         body = FriendRequestAction(action=action)
-        await self._request("PUT", f"/v1/friends/request/{request_id}", json=body.model_dump())
+        await self._request(
+            "PUT", f"/v1/friends/request/{request_id}", json=body.model_dump()
+        )
 
     async def remove_friend(self, peer_id: str) -> None:
         await self._request("DELETE", f"/v1/friends/{peer_id}")
@@ -215,10 +232,16 @@ class IMClient:
 
     async def _ws_loop(self) -> None:
         """WebSocket listener with automatic reconnect."""
-        ws_url = self._base_url.replace("https://", "wss://").replace("http://", "ws://")
+        ws_url = self._base_url.replace("https://", "wss://").replace(
+            "http://", "ws://"
+        )
         ws_url = f"{ws_url}/v1/ws"
         use_tls = ws_url.startswith("wss://")
-        ssl_ctx = _make_ssl_ctx(verify=self._verify_tls, ca_cert=self._ca_cert) if use_tls else None
+        ssl_ctx = (
+            _make_ssl_ctx(verify=self._verify_tls, ca_cert=self._ca_cert)
+            if use_tls
+            else None
+        )
 
         retry_count = 0
         while True:
@@ -274,7 +297,11 @@ class IMClientError(Exception):
             body = json.loads(raw)
             if isinstance(body, dict):
                 if isinstance(body.get("detail"), list):
-                    msgs = [e.get("msg", str(e)) for e in body["detail"] if isinstance(e, dict)]
+                    msgs = [
+                        e.get("msg", str(e))
+                        for e in body["detail"]
+                        if isinstance(e, dict)
+                    ]
                     return "; ".join(msgs) if msgs else raw
                 if isinstance(body.get("detail"), str):
                     return body["detail"]

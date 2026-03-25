@@ -4,9 +4,9 @@ client/ui/screens/login.py — Login and registration screens.
 
 from __future__ import annotations
 
-from textual.message import Message
 from textual.app import ComposeResult
 from textual.containers import Center, Vertical
+from textual.message import Message
 from textual.screen import Screen
 from textual.widgets import Button, Input, Label, Static
 
@@ -76,8 +76,8 @@ class LoginScreen(Screen):
     class LoginSuccess(Message):
         def __init__(self, username: str, password: str, totp_code: str) -> None:
             super().__init__()
-            self.username  = username
-            self.password  = password
+            self.username = username
+            self.password = password
             self.totp_code = totp_code
 
     def __init__(self, prefill_username: str = "") -> None:
@@ -89,7 +89,9 @@ class LoginScreen(Screen):
             with Vertical(id="panel"):
                 yield Static("◈ COMP3334 SECURE IM ◈", id="title")
                 yield Label("")
-                yield Input(placeholder="Username", id="username", value=self._prefill_username)
+                yield Input(
+                    placeholder="Username", id="username", value=self._prefill_username
+                )
                 yield Input(placeholder="Password", password=True, id="password")
                 yield Input(
                     placeholder="OTP code (6 digits)",
@@ -107,6 +109,7 @@ class LoginScreen(Screen):
             self._do_login()
         elif event.button.id == "btn_register":
             from client.ui.screens.register import RegisterScreen
+
             self.app.push_screen(RegisterScreen())
         elif event.button.id == "btn_exit":
             self.post_message(self.Exit())
@@ -124,8 +127,8 @@ class LoginScreen(Screen):
     def _do_login(self) -> None:
         username = self.query_one("#username", Input).value.strip()
         password = self.query_one("#password", Input).value
-        totp     = self.query_one("#totp", Input).value.strip()
-        error    = self.query_one("#error", Static)
+        totp = self.query_one("#totp", Input).value.strip()
+        error = self.query_one("#error", Static)
 
         if not username or not password or not totp:
             error.update("All fields are required.")

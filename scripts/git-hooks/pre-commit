@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+echo "Running Black formatter (pre-commit hook)..."
+
+# Try `uv` dev runner first (project uses `uv` for dev env),
+# then fall back to `python -m black`, then `black` on PATH.
+if command -v uv >/dev/null 2>&1; then
+  uv run --extra dev black .
+else
+  if python -c "import importlib; importlib.import_module('black')" >/dev/null 2>&1; then
+    python -m black .
+  elif command -v black >/dev/null 2>&1; then
+    black .
+  else
+    echo "Black not found. Install dev dependencies (e.g., 'uv run --extra dev pip install black') or 'pip install black'." >&2
+    exit 1
+  fi
+fi
+
+# Stage any formatting changes so the commit will include them
+git add -A
+
+exit 0

@@ -9,7 +9,6 @@ from __future__ import annotations
 import asyncio
 import json
 import os
-import signal
 import time
 from contextlib import asynccontextmanager
 
@@ -19,7 +18,7 @@ from fastapi import FastAPI, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
 from scalar_fastapi import get_scalar_api_reference
 
-from server.api.auth import require_auth, router as auth_router
+from server.api.auth import router as auth_router
 from server.api.conversations import router as conv_router
 from server.api.friends import router as friends_router
 from server.api.keys import router as keys_router
@@ -68,12 +67,14 @@ app = FastAPI(
 )
 
 if get_settings().app_env == "development":
+
     @app.get("/v1/scalar", include_in_schema=False)
     async def scalar_reference():
         return get_scalar_api_reference(
             openapi_url=app.openapi_url,
             title=app.title,
         )
+
 
 app.add_middleware(
     CORSMiddleware,
@@ -120,6 +121,7 @@ async def ready():
     except Exception as exc:
         log.warning("readiness_check_failed", error=str(exc))
         from fastapi.responses import JSONResponse
+
         return JSONResponse(
             status_code=503,
             content={"status": "not_ready", "error": str(exc)},
@@ -151,7 +153,7 @@ async def ws_endpoint(websocket: WebSocket) -> None:
     # Wait for auth frame (5-second timeout to prevent idle connections)
     try:
         raw = await asyncio.wait_for(websocket.receive_text(), timeout=5.0)
-    except (asyncio.TimeoutError, Exception):
+    except (TimeoutError, Exception):
         await websocket.close(code=4001)
         return
 
@@ -218,7 +220,9 @@ async def _ttl_cleanup_loop() -> None:
             await db.commit()
 
             if ttl_deleted or age_deleted:
-                log.info("ttl_cleanup", ttl_deleted=ttl_deleted, age_deleted=age_deleted)
+                log.info(
+                    "ttl_cleanup", ttl_deleted=ttl_deleted, age_deleted=age_deleted
+                )
 
         except asyncio.CancelledError:
             raise
@@ -237,7 +241,7 @@ if __name__ == "__main__":
     # Auto-detect TLS: use SSL if cert files exist.
     # Docker entrypoint (scripts/docker-entrypoint.sh) auto-generates them.
     cert = settings.tls_cert_file
-    key  = settings.tls_key_file
+    key = settings.tls_key_file
     use_tls = os.path.isfile(cert) and os.path.isfile(key)
 
     if use_tls:
@@ -256,5 +260,5 @@ if __name__ == "__main__":
         port=settings.port,
         log_level=settings.log_level,
         ssl_certfile=cert if use_tls else None,
-        ssl_keyfile=key  if use_tls else None,
+        ssl_keyfile=key if use_tls else None,
     )

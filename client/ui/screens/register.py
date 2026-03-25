@@ -5,16 +5,17 @@ client/ui/screens/register.py — Registration screen.
 from __future__ import annotations
 
 import io
-from urllib.parse import urlparse, parse_qs
+from urllib.parse import parse_qs, urlparse
 
-from textual.message import Message
 from textual.app import ComposeResult
 from textual.containers import Center, Vertical
+from textual.message import Message
 from textual.screen import Screen
 from textual.widgets import Button, Input, Label, Static
 
 try:
     import qrcode as _qrcode
+
     _HAS_QRCODE = True
 except ImportError:
     _HAS_QRCODE = False
@@ -95,6 +96,7 @@ class RegisterScreen(Screen):
 
     class TotpVerify(Message):
         """Emitted when the user confirms their TOTP code after registration."""
+
         def __init__(self, code: str) -> None:
             super().__init__()
             self.code = code
@@ -104,8 +106,12 @@ class RegisterScreen(Screen):
             with Vertical(id="panel"):
                 yield Static("Create Account", id="title")
                 yield Label("")
-                yield Input(placeholder="Username (3–32 chars, a-z 0-9 _-)", id="username")
-                yield Input(placeholder="Password (min 12 chars)", password=True, id="password")
+                yield Input(
+                    placeholder="Username (3–32 chars, a-z 0-9 _-)", id="username"
+                )
+                yield Input(
+                    placeholder="Password (min 12 chars)", password=True, id="password"
+                )
                 yield Input(placeholder="Confirm password", password=True, id="confirm")
                 yield Static("", id="error")
                 yield Static("", id="info")
@@ -153,10 +159,11 @@ class RegisterScreen(Screen):
 
     def _do_register(self) -> None:
         import re
+
         username = self.query_one("#username", Input).value.strip()
         password = self.query_one("#password", Input).value
-        confirm  = self.query_one("#confirm", Input).value
-        error    = self.query_one("#error", Static)
+        confirm = self.query_one("#confirm", Input).value
+        error = self.query_one("#error", Static)
         if not re.match(r"^[a-zA-Z0-9_\-]{3,32}$", username):
             error.update("Username: 3–32 chars, letters/digits/_/- only.")
             return
@@ -176,7 +183,14 @@ class RegisterScreen(Screen):
         Called by app.py after the server confirms registration.
         """
         # Hide registration form widgets (and exit — account already created, must finish TOTP)
-        for widget_id in ("#username", "#password", "#confirm", "#btn_register", "#btn_back", "#btn_exit"):
+        for widget_id in (
+            "#username",
+            "#password",
+            "#confirm",
+            "#btn_register",
+            "#btn_back",
+            "#btn_exit",
+        ):
             self.query_one(widget_id).add_class("hidden")
 
         # Build and display QR / URI in the info label

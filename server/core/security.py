@@ -10,7 +10,6 @@ import os
 import secrets
 import time
 
-import argon2.low_level as argon2_ll
 import pyotp
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.hashes import SHA256
@@ -32,10 +31,10 @@ from server.core.config import get_settings
 # ---------------------------------------------------------------------------
 
 # OWASP recommended parameters
-_ARGON2_TIME_COST   = 3
-_ARGON2_MEMORY_COST = 65536   # 64 MiB
+_ARGON2_TIME_COST = 3
+_ARGON2_MEMORY_COST = 65536  # 64 MiB
 _ARGON2_PARALLELISM = 1
-_ARGON2_HASH_LEN    = 32
+_ARGON2_HASH_LEN = 32
 
 
 def hash_password(password: str) -> str:
@@ -44,6 +43,7 @@ def hash_password(password: str) -> str:
     includes the salt and parameters (argon2-cffi format).
     """
     import argon2
+
     ph = argon2.PasswordHasher(
         time_cost=_ARGON2_TIME_COST,
         memory_cost=_ARGON2_MEMORY_COST,
@@ -59,6 +59,7 @@ def verify_password(password: str, pw_hash: str) -> bool:
     Returns False (not raises) on mismatch — caller decides response.
     """
     import argon2
+
     ph = argon2.PasswordHasher()
     try:
         return ph.verify(pw_hash, password)
@@ -79,13 +80,14 @@ def verify_password(password: str, pw_hash: str) -> bool:
 #      a DB for every request, so stateless verification adds no benefit.
 # ---------------------------------------------------------------------------
 
+
 def generate_token() -> tuple[str, str]:
     """
     Generate a new opaque bearer token.
     Returns (raw_token, token_hash).
     raw_token is sent to the client; token_hash is stored in DB.
     """
-    raw = secrets.token_urlsafe(32)   # 256-bit CSPRNG
+    raw = secrets.token_urlsafe(32)  # 256-bit CSPRNG
     token_hash = hashlib.sha256(raw.encode()).hexdigest()
     return raw, token_hash
 
@@ -98,6 +100,7 @@ def hash_token(raw_token: str) -> str:
 # ---------------------------------------------------------------------------
 # TOTP secret encryption — AES-256-GCM with server-side key
 # ---------------------------------------------------------------------------
+
 
 def _totp_enc_key(user_id: str) -> bytes:
     """
@@ -119,9 +122,9 @@ def encrypt_totp_secret(user_id: str, totp_secret: str) -> str:
     Encrypt a TOTP secret for storage in DB.
     Returns base64(nonce || ciphertext_with_tag).
     """
-    key   = _totp_enc_key(user_id)
+    key = _totp_enc_key(user_id)
     nonce = os.urandom(12)
-    ct    = AESGCM(key).encrypt(nonce, totp_secret.encode(), user_id.encode())
+    ct = AESGCM(key).encrypt(nonce, totp_secret.encode(), user_id.encode())
     return base64.b64encode(nonce + ct).decode()
 
 
@@ -130,8 +133,8 @@ def decrypt_totp_secret(user_id: str, encrypted_blob: str) -> str:
     Decrypt a TOTP secret from DB storage.
     Raises ValueError on decryption failure (wrong key or corrupted data).
     """
-    key  = _totp_enc_key(user_id)
-    raw  = base64.b64decode(encrypted_blob)
+    key = _totp_enc_key(user_id)
+    raw = base64.b64decode(encrypted_blob)
     nonce, ct = raw[:12], raw[12:]
     try:
         return AESGCM(key).decrypt(nonce, ct, user_id.encode()).decode()
@@ -161,6 +164,7 @@ def verify_totp(secret: str, code: str) -> bool:
 # Rate limiting — simple DB-backed token bucket
 # ---------------------------------------------------------------------------
 
+
 async def check_rate_limit(key: str, max_attempts: int, window_seconds: int) -> bool:
     """
     Atomic rate limit check using INSERT ... ON CONFLICT (upsert).
@@ -174,12 +178,14 @@ async def check_rate_limit(key: str, max_attempts: int, window_seconds: int) -> 
       statement, which SQLite executes under its internal write lock.
     """
     from server.core.database import get_db
+
     db = await get_db()
     now = int(time.time())
 
     # Fast path: if currently locked out, reject without writing
     async with db.execute(
-        "SELECT locked_until FROM rate_limits WHERE key = ?", (key,),
+        "SELECT locked_until FROM rate_limits WHERE key = ?",
+        (key,),
     ) as cur:
         row = await cur.fetchone()
     if row and row["locked_until"] and now < row["locked_until"]:
@@ -211,7 +217,8 @@ async def check_rate_limit(key: str, max_attempts: int, window_seconds: int) -> 
 
     # Read back to determine if this request was allowed
     async with db.execute(
-        "SELECT attempts, locked_until FROM rate_limits WHERE key = ?", (key,),
+        "SELECT attempts, locked_until FROM rate_limits WHERE key = ?",
+        (key,),
     ) as cur:
         row = await cur.fetchone()
 

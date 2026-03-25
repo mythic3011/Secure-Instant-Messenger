@@ -5,20 +5,22 @@ Shows conversation list ordered by last activity (R23) with unread counters (R24
 
 from __future__ import annotations
 
-from textual.message import Message
 from textual.app import ComposeResult
 from textual.containers import Horizontal
+from textual.message import Message
 from textual.screen import Screen
-from textual.widgets import Button, Footer, Header, ListItem, ListView, Static
+from textual.widgets import Button, ListItem, ListView, Static
 
 
 class ConversationItem(ListItem):
-    def __init__(self, conv_id: str, peer_id: str, peer_username: str, unread: int) -> None:
+    def __init__(
+        self, conv_id: str, peer_id: str, peer_username: str, unread: int
+    ) -> None:
         super().__init__()
-        self.conv_id       = conv_id
-        self.peer_id       = peer_id
+        self.conv_id = conv_id
+        self.peer_id = peer_id
         self.peer_username = peer_username
-        self.unread        = unread
+        self.unread = unread
 
     def compose(self) -> ComposeResult:
         if self.unread > 0:
@@ -78,8 +80,8 @@ class ConversationListScreen(Screen):
     class ConversationSelected(Message):
         def __init__(self, conv_id: str, peer_id: str, peer_username: str) -> None:
             super().__init__()
-            self.conv_id       = conv_id
-            self.peer_id       = peer_id
+            self.conv_id = conv_id
+            self.peer_id = peer_id
             self.peer_username = peer_username
 
     class OpenFriends(Message):
@@ -98,8 +100,8 @@ class ConversationListScreen(Screen):
         yield ListView(id="conv_list")
         with Horizontal(id="toolbar"):
             yield Button("⊕ Friends", variant="primary", id="btn_friends")
-            yield Button("⏻ Logout",  variant="default", id="btn_logout")
-            yield Button("✕ Exit",    variant="default", id="btn_exit")
+            yield Button("⏻ Logout", variant="default", id="btn_logout")
+            yield Button("✕ Exit", variant="default", id="btn_exit")
 
     def populate(self, conversations: list[dict]) -> None:
         """Fill the list from a list of conversation dicts (from local store)."""
@@ -122,7 +124,8 @@ class ConversationListScreen(Screen):
         if item:
             item.unread = unread_count
             item.query_one(Static).update(
-                f"  {item.peer_username}  [{unread_count}]" if unread_count > 0
+                f"  {item.peer_username}  [{unread_count}]"
+                if unread_count > 0
                 else f"  {item.peer_username}"
             )
 
@@ -130,7 +133,9 @@ class ConversationListScreen(Screen):
         item = event.item
         if isinstance(item, ConversationItem):
             self.post_message(
-                self.ConversationSelected(item.conv_id, item.peer_id, item.peer_username)
+                self.ConversationSelected(
+                    item.conv_id, item.peer_id, item.peer_username
+                )
             )
 
     def on_button_pressed(self, event: Button.Pressed) -> None:

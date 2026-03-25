@@ -64,7 +64,7 @@ async def websocket_endpoint(websocket: WebSocket, user_id: str) -> None:
             try:
                 raw = await asyncio.wait_for(websocket.receive_text(), timeout=60.0)
                 await _handle_client_message(user_id, raw)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 # Send ping to keep connection alive
                 await websocket.send_text(json.dumps({"type": "ping"}))
 
@@ -99,17 +99,17 @@ async def _flush_offline_queue(websocket: WebSocket, user_id: str) -> None:
         payload = {
             "type": "message",
             "payload": {
-                "id":              row["id"],
-                "type":            "message",
-                "sender_id":       row["sender_id"],
-                "recipient_id":    row["recipient_id"],
+                "id": row["id"],
+                "type": "message",
+                "sender_id": row["sender_id"],
+                "recipient_id": row["recipient_id"],
                 "conversation_id": row["conversation_id"],
-                "counter":         row["counter"],
-                "nonce_b64":       row["nonce_b64"],
-                "ciphertext_b64":  row["ciphertext_b64"],
-                "eph_pub_b64":     row["eph_pub_b64"],
-                "ttl_seconds":     row["ttl_seconds"],
-                "sent_at":         row["sent_at"],
+                "counter": row["counter"],
+                "nonce_b64": row["nonce_b64"],
+                "ciphertext_b64": row["ciphertext_b64"],
+                "eph_pub_b64": row["eph_pub_b64"],
+                "ttl_seconds": row["ttl_seconds"],
+                "sent_at": row["sent_at"],
                 "delivery_status": "delivered",
             },
         }
@@ -117,7 +117,12 @@ async def _flush_offline_queue(websocket: WebSocket, user_id: str) -> None:
             await websocket.send_text(json.dumps(payload))
             delivered_ids.append(row["id"])
         except Exception as exc:
-            log.warning("offline_queue_send_failed", user_id=user_id, msg_id=row["id"], error=str(exc))
+            log.warning(
+                "offline_queue_send_failed",
+                user_id=user_id,
+                msg_id=row["id"],
+                error=str(exc),
+            )
             break  # connection dropped mid-flush
 
     if delivered_ids:
@@ -163,8 +168,16 @@ async def _handle_client_message(user_id: str, raw: str) -> None:
             # Notify sender
             await push_to_user(
                 row["sender_id"],
-                {"type": "ack", "payload": {"message_id": message_id, "delivered_at": now}},
+                {
+                    "type": "ack",
+                    "payload": {"message_id": message_id, "delivered_at": now},
+                },
             )
-            log.info("ws_ack_processed", message_id=message_id, recipient=user_id, sender=row["sender_id"])
+            log.info(
+                "ws_ack_processed",
+                message_id=message_id,
+                recipient=user_id,
+                sender=row["sender_id"],
+            )
     else:
         log.debug("ws_unknown_message_type", user_id=user_id, msg_type=msg.get("type"))

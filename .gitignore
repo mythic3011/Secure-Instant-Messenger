@@ -23,8 +23,12 @@ coverage/
 *.whl
 certs/
 data/
+ai/
+AGENTS.md
 CLAUDE.md
 .claude/
+.agents/
 skills/
 knowledge/
+docs/AI_AGENT_SETUP.md
 docs/PROFESSOR_REVIEW.md

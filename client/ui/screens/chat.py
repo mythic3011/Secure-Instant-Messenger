@@ -10,10 +10,10 @@ import time
 from typing import TYPE_CHECKING
 
 from textual.app import ComposeResult
-from textual.containers import Horizontal, Vertical
+from textual.containers import Horizontal
 from textual.message import Message
 from textual.screen import Screen
-from textual.widgets import Button, Footer, Header, Input, Label, ListItem, ListView, Static
+from textual.widgets import Button, Input, ListItem, ListView, Static
 
 if TYPE_CHECKING:
     pass
@@ -32,12 +32,12 @@ class MessageItem(ListItem):
         is_mine: bool,
     ) -> None:
         super().__init__()
-        self._sender     = sender
-        self._text       = text
-        self._sent_at    = sent_at
-        self._status     = status
-        self._ttl        = ttl_seconds
-        self._is_mine    = is_mine
+        self._sender = sender
+        self._text = text
+        self._sent_at = sent_at
+        self._status = status
+        self._ttl = ttl_seconds
+        self._is_mine = is_mine
         # Pre-compute expiry so _sweep_ttl() can compare without re-parsing
         self._expires_at: int | None = (sent_at + ttl_seconds) if ttl_seconds else None
 
@@ -46,8 +46,11 @@ class MessageItem(ListItem):
 
     def compose(self) -> ComposeResult:
         import datetime
+
         ts = datetime.datetime.fromtimestamp(self._sent_at).strftime("%H:%M")
-        status_icon = {"sent": "✓", "delivered": "✓✓", "read": "✓✓"}.get(self._status, "")
+        status_icon = {"sent": "✓", "delivered": "✓✓", "read": "✓✓"}.get(
+            self._status, ""
+        )
 
         # Show live countdown instead of raw TTL seconds (R10)
         if self._expires_at is not None:
@@ -152,7 +155,7 @@ class ChatScreen(Screen):
         def __init__(self, text: str, ttl: int | None) -> None:
             super().__init__()
             self.text = text
-            self.ttl  = ttl
+            self.ttl = ttl
 
     def __init__(
         self,
@@ -163,10 +166,10 @@ class ChatScreen(Screen):
     ) -> None:
         super().__init__()
         self.conversation_id = conversation_id
-        self.peer_id         = peer_id
-        self.peer_username   = peer_username
-        self.my_user_id      = my_user_id
-        self._key_warning    = False
+        self.peer_id = peer_id
+        self.peer_username = peer_username
+        self.my_user_id = my_user_id
+        self._key_warning = False
 
     def compose(self) -> ComposeResult:
         yield Static(f"◈ {self.peer_username}  ·  🔒 E2EE", id="header")
@@ -186,17 +189,20 @@ class ChatScreen(Screen):
 
     async def _load_history(self) -> None:
         from client.state.store import get_messages
+
         msgs = await get_messages(self.conversation_id, limit=50)
         lv = self.query_one("#messages", ListView)
         for m in reversed(msgs):
-            lv.append(MessageItem(
-                sender=m["sender_id"],
-                text=m["plaintext"],
-                sent_at=m["sent_at"],
-                status=m["delivery_status"],
-                ttl_seconds=m["ttl_seconds"],
-                is_mine=(m["sender_id"] == self.my_user_id),
-            ))
+            lv.append(
+                MessageItem(
+                    sender=m["sender_id"],
+                    text=m["plaintext"],
+                    sent_at=m["sent_at"],
+                    status=m["delivery_status"],
+                    ttl_seconds=m["ttl_seconds"],
+                    is_mine=(m["sender_id"] == self.my_user_id),
+                )
+            )
         lv.scroll_end(animate=False)
 
     async def _sweep_ttl(self) -> None:
@@ -206,6 +212,7 @@ class ChatScreen(Screen):
         Also called on startup via app.py sweep_expired() (local DB layer).
         """
         from client.state.store import sweep_expired
+
         # Purge expired rows from local SQLite first
         await sweep_expired()
 
@@ -213,7 +220,8 @@ class ChatScreen(Screen):
         now = int(time.time())
         lv = self.query_one("#messages", ListView)
         expired = [
-            item for item in lv.children
+            item
+            for item in lv.children
             if isinstance(item, MessageItem)
             and item._expires_at is not None
             and item._expires_at <= now
@@ -247,6 +255,7 @@ class ChatScreen(Screen):
             self._send()
         elif event.button.id == "btn_settings":
             from client.ui.screens.settings import SettingsScreen
+
             self.app.push_screen(
                 SettingsScreen(
                     conversation_id=self.conversation_id,

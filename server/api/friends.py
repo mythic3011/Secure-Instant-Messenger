@@ -29,7 +29,9 @@ log = structlog.get_logger()
 # ---------------------------------------------------------------------------
 
 
-@router.post("/request", response_model=FriendRequestOut, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/request", response_model=FriendRequestOut, status_code=status.HTTP_201_CREATED
+)
 async def send_friend_request(
     body: FriendRequestCreate,
     *,
@@ -221,7 +223,9 @@ async def handle_request(
         )
 
     await db.commit()
-    log.info("friend_request_action", request_id=request_id, action=action, user_id=user_id)
+    log.info(
+        "friend_request_action", request_id=request_id, action=action, user_id=user_id
+    )
 
 
 # ---------------------------------------------------------------------------

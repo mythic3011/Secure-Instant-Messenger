@@ -28,10 +28,12 @@ def _setup_logging(log_dir: Path, verbose: bool = False) -> None:
         encoding="utf-8",
     )
     fh.setLevel(logging.DEBUG)
-    fh.setFormatter(logging.Formatter(
-        "%(asctime)s %(levelname)-8s %(name)s: %(message)s",
-        datefmt="%Y-%m-%dT%H:%M:%S",
-    ))
+    fh.setFormatter(
+        logging.Formatter(
+            "%(asctime)s %(levelname)-8s %(name)s: %(message)s",
+            datefmt="%Y-%m-%dT%H:%M:%S",
+        )
+    )
     root.addHandler(fh)
 
     # Console handler — WARNING by default, DEBUG if --verbose
@@ -49,24 +51,44 @@ def _setup_logging(log_dir: Path, verbose: bool = False) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="COMP3334 Secure IM Client")
-    parser.add_argument("--server", default=None, help="Server base URL (or set SERVER_URL env)")
-    parser.add_argument("--username", default=None, help="Username (prompted if omitted or from USERNAME env)")
-    parser.add_argument("--log-dir", default=None, help="Directory for log files (default: ./logs)")
-    parser.add_argument("--verbose", "-v", action="store_true", help="Print DEBUG logs to stderr as well")
     parser.add_argument(
-        "--verify-tls", dest="verify_tls", action="store_true", default=True,
+        "--server", default=None, help="Server base URL (or set SERVER_URL env)"
+    )
+    parser.add_argument(
+        "--username",
+        default=None,
+        help="Username (prompted if omitted or from USERNAME env)",
+    )
+    parser.add_argument(
+        "--log-dir", default=None, help="Directory for log files (default: ./logs)"
+    )
+    parser.add_argument(
+        "--verbose",
+        "-v",
+        action="store_true",
+        help="Print DEBUG logs to stderr as well",
+    )
+    parser.add_argument(
+        "--verify-tls",
+        dest="verify_tls",
+        action="store_true",
+        default=True,
         help="Verify server TLS certificate (default: enabled)",
     )
     parser.add_argument(
-        "--no-verify-tls", dest="verify_tls", action="store_false",
+        "--no-verify-tls",
+        dest="verify_tls",
+        action="store_false",
         help="Disable TLS certificate verification (insecure; use --ca-cert instead)",
     )
     parser.add_argument(
-        "--ca-cert", default=None,
+        "--ca-cert",
+        default=None,
         help="Path to CA cert or self-signed cert to trust (use instead of --no-verify-tls)",
     )
     parser.add_argument(
-        "--pin-cert", default=None,
+        "--pin-cert",
+        default=None,
         help="Expected SHA256 fingerprint of server cert (hex, 64 chars) for cert pinning",
     )
     args = parser.parse_args()
@@ -92,9 +114,10 @@ def main() -> None:
     ca_cert = args.ca_cert
     if verify_tls and not ca_cert and "localhost" in server:
         # Check if the server cert is self-signed (untrusted) before connecting
-        import ssl
         import socket
+        import ssl
         from urllib.parse import urlparse
+
         parsed = urlparse(server)
         host = parsed.hostname or "localhost"
         port = parsed.port or 8443
@@ -112,13 +135,19 @@ def main() -> None:
                 server,
             )
             verify_tls = False
-        except (OSError, socket.timeout):
+        except (TimeoutError, OSError):
             pass  # server not reachable yet, let the app handle it
 
     log = logging.getLogger(__name__)
-    log.info("Starting client — server=%s username=%s verify_tls=%s", server, username or "(none)", verify_tls)
+    log.info(
+        "Starting client — server=%s username=%s verify_tls=%s",
+        server,
+        username or "(none)",
+        verify_tls,
+    )
 
     from client.ui.app import IMApp
+
     try:
         IMApp(
             server_url=server,

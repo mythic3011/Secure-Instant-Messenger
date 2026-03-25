@@ -74,7 +74,5 @@ async def _run_migrations(db: aiosqlite.Connection) -> None:
         logger.info("Applying migration: %s", mf.name)
         sql = mf.read_text()
         await db.executescript(sql)
-        await db.execute(
-            "INSERT INTO _migrations (filename) VALUES (?)", (mf.name,)
-        )
+        await db.execute("INSERT INTO _migrations (filename) VALUES (?)", (mf.name,))
         await db.commit()

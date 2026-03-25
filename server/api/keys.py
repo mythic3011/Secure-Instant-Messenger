@@ -21,18 +21,20 @@ router = APIRouter(prefix="/v1/keys", tags=["keys"])
 log = structlog.get_logger()
 
 _ED25519_PUB_LEN = 32
-_X25519_PUB_LEN  = 32
+_X25519_PUB_LEN = 32
 
 
-def _verify_key_bundle(identity_pub_b64: str, dh_pub_b64: str, key_sig_b64: str) -> None:
+def _verify_key_bundle(
+    identity_pub_b64: str, dh_pub_b64: str, key_sig_b64: str
+) -> None:
     """
     Verify that the key bundle signature is valid.
     Raises HTTPException 422 if invalid.
     """
     try:
         identity_pub_bytes = base64.b64decode(identity_pub_b64, validate=True)
-        dh_pub_bytes       = base64.b64decode(dh_pub_b64, validate=True)
-        sig_bytes          = base64.b64decode(key_sig_b64, validate=True)
+        dh_pub_bytes = base64.b64decode(dh_pub_b64, validate=True)
+        sig_bytes = base64.b64decode(key_sig_b64, validate=True)
     except Exception as err:
         log.warning("key_bundle_rejected", reason="invalid_base64")
         raise HTTPException(

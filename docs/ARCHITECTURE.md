@@ -55,6 +55,10 @@
 │  │  /v1/    │  │  (pub keys) │  │  (encrypted blobs only)   │   │
 │  └──────────┘  └─────────────┘  └──────────────────────────┘   │
 │  ┌──────────────────────────────────────────────────────────┐   │
+│  │ Thin service layer: auth / conversation / message flow  │   │
+│  │ centralises authz, replay checks, and delivery state    │   │
+│  └──────────────────────────────────────────────────────────┘   │
+│  ┌──────────────────────────────────────────────────────────┐   │
 │  │              SQLite (aiosqlite, WAL mode)                  │   │
 │  └──────────────────────────────────────────────────────────┘   │
 └─────────────────────────────────────────────────────────────────┘
@@ -280,13 +284,25 @@ On receiving a message:
 
 Out-of-order tolerance: window of 50 counters. Anything below `last_counter - 50` is rejected.
 
-### 5.2 Server-side (DB constraint)
+### 5.2 Server-side (service + DB)
 
 ```sql
 UNIQUE(conversation_id, sender_id, counter)
 ```
 
-The DB rejects any duplicate `(conversation_id, sender_id, counter)` tuple before it reaches the client — a second layer of replay prevention.
+Per-sender monotonic state is enforced before insert:
+
+```
+1. Query MAX(counter) for (conversation_id, sender_id)
+2. Reject if new_counter <= last_seen_counter
+3. Insert ciphertext row
+4. Let UNIQUE(conversation_id, sender_id, counter) catch duplicate retries
+```
+
+This means the server rejects both exact duplicates and stale counter regressions
+even when the attacker uses a fresh message UUID. The router still validates wire
+format at the API boundary, while `MessageService.store_message()` owns the
+security state transition.
 
 ---
 

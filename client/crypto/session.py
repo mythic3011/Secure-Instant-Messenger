@@ -20,12 +20,12 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import logging
 import os
-import struct
 from collections import deque
 from dataclasses import dataclass, field
-from typing import Optional
 
+from cryptography.exceptions import InvalidSignature, InvalidTag
 from cryptography.hazmat.primitives.asymmetric.ed25519 import (
     Ed25519PrivateKey,
     Ed25519PublicKey,
@@ -39,11 +39,10 @@ from cryptography.hazmat.primitives.hashes import SHA256
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from cryptography.hazmat.primitives.serialization import (
     Encoding,
-    PublicFormat,
-    PrivateFormat,
     NoEncryption,
+    PrivateFormat,
+    PublicFormat,
 )
-from cryptography.exceptions import InvalidSignature, InvalidTag
 
 from shared.protocol import (
     KDF_INFO_PREFIX,
@@ -54,10 +53,12 @@ from shared.protocol import (
     MessageEnvelope,
 )
 
+log = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Identity keypair
 # ---------------------------------------------------------------------------
+
 
 @dataclass
 class IdentityKeypair:
@@ -66,17 +67,18 @@ class IdentityKeypair:
     Private key NEVER leaves the client machine.
     Public key is uploaded to the server for others to verify.
     """
+
     private_key: Ed25519PrivateKey
-    public_key:  Ed25519PublicKey
+    public_key: Ed25519PublicKey
 
     @classmethod
-    def generate(cls) -> "IdentityKeypair":
+    def generate(cls) -> IdentityKeypair:
         """Generate a new identity keypair using OS CSPRNG."""
         priv = Ed25519PrivateKey.generate()
         return cls(private_key=priv, public_key=priv.public_key())
 
     @classmethod
-    def from_private_bytes(cls, raw: bytes) -> "IdentityKeypair":
+    def from_private_bytes(cls, raw: bytes) -> IdentityKeypair:
         priv = Ed25519PrivateKey.from_private_bytes(raw)
         return cls(private_key=priv, public_key=priv.public_key())
 
@@ -102,16 +104,17 @@ class DHKeypair:
     Used in session establishment (static-static DH component).
     Private key NEVER leaves the client machine.
     """
+
     private_key: X25519PrivateKey
-    public_key:  X25519PublicKey
+    public_key: X25519PublicKey
 
     @classmethod
-    def generate(cls) -> "DHKeypair":
+    def generate(cls) -> DHKeypair:
         priv = X25519PrivateKey.generate()
         return cls(private_key=priv, public_key=priv.public_key())
 
     @classmethod
-    def from_private_bytes(cls, raw: bytes) -> "DHKeypair":
+    def from_private_bytes(cls, raw: bytes) -> DHKeypair:
         priv = X25519PrivateKey.from_private_bytes(raw)
         return cls(private_key=priv, public_key=priv.public_key())
 
@@ -168,6 +171,36 @@ def compute_fingerprint(my_pub: bytes, their_pub: bytes) -> str:
     return "  ".join(digest[i : i + 8] for i in range(0, 40, 8))
 
 
+def _peer_fingerprint(peer_pub: bytes) -> str:
+    """Stable peer-key fingerprint for trust-state persistence."""
+    digest = hashlib.sha256(peer_pub).hexdigest()
+    return "  ".join(digest[i : i + 8] for i in range(0, 40, 8))
+
+
+class SecurityError(Exception):
+    """Base class for security-relevant client-side failures."""
+
+
+class ReplayAttackError(SecurityError):
+    """Raised when a message is detected as a replay or duplicate."""
+
+
+class ReplayError(ReplayAttackError):
+    """Backward-compatible replay rejection error."""
+
+
+class IntegrityError(SecurityError):
+    """Raised when a ciphertext or its authenticated metadata fails integrity checks."""
+
+
+class LocalStorageSecurityError(SecurityError):
+    """Raised when local encrypted storage cannot be used safely."""
+
+
+class TrustStateError(SecurityError):
+    """Raised when trust-state policy blocks a key transition."""
+
+
 # ---------------------------------------------------------------------------
 # Session establishment — 2-DH + HKDF
 #
@@ -182,13 +215,15 @@ def compute_fingerprint(my_pub: bytes, their_pub: bytes) -> str:
 #   exposed. This is documented in ARCHITECTURE.md §14.
 # ---------------------------------------------------------------------------
 
+
 @dataclass
 class SessionKey:
     """
     Derived AES-256 session key for a specific conversation.
     Stored locally after first derivation.
     """
-    raw: bytes   # 32 bytes
+
+    raw: bytes  # 32 bytes
     conversation_id: str
     peer_id: str
 
@@ -244,8 +279,8 @@ def derive_session_key_as_responder(
     my_dh_kp: DHKeypair,
     peer_identity_pub_bytes: bytes,
     peer_dh_pub_bytes: bytes,
-    eph_pub_bytes: bytes,           # received in first message envelope
-    conv_dh_pub_bytes: bytes,       # received in first message envelope (per-conv DH pub)
+    eph_pub_bytes: bytes,  # received in first message envelope
+    conv_dh_pub_bytes: bytes,  # received in first message envelope (per-conv DH pub)
     my_user_id: str,
     peer_user_id: str,
     conversation_id: str,
@@ -260,7 +295,7 @@ def derive_session_key_as_responder(
         session_key = HKDF-SHA256(...)
     """
     conv_dh_pub = X25519PublicKey.from_public_bytes(conv_dh_pub_bytes)
-    eph_pub     = X25519PublicKey.from_public_bytes(eph_pub_bytes)
+    eph_pub = X25519PublicKey.from_public_bytes(eph_pub_bytes)
 
     dh1 = my_dh_kp.private_key.exchange(conv_dh_pub)
     dh2 = my_dh_kp.private_key.exchange(eph_pub)
@@ -268,7 +303,9 @@ def derive_session_key_as_responder(
 
     raw_key = _hkdf_derive(ikm, peer_user_id, my_user_id, conversation_id)
 
-    return SessionKey(raw=raw_key, conversation_id=conversation_id, peer_id=peer_user_id)
+    return SessionKey(
+        raw=raw_key, conversation_id=conversation_id, peer_id=peer_user_id
+    )
 
 
 def _hkdf_derive(
@@ -317,6 +354,7 @@ def _hkdf_simple(key: bytes, info: bytes, length: int = KEY_BYTES) -> bytes:
 # up to MAX_SKIP to handle out-of-order delivery.
 # ---------------------------------------------------------------------------
 
+
 @dataclass
 class RatchetChain:
     """
@@ -325,13 +363,14 @@ class RatchetChain:
     chain_key advances after each message; old values are not retained.
     skipped_keys caches keys for out-of-order messages (up to MAX_SKIP).
     """
-    chain_key:    bytes
-    index:        int = 0
+
+    chain_key: bytes
+    index: int = 0
     skipped_keys: dict = field(default_factory=dict)  # index → msg_key
 
     def advance(self) -> bytes:
         """Derive message_key, advance chain_key. Returns message_key."""
-        msg_key    = _hkdf_simple(self.chain_key, b"COMP3334-msg-key")
+        msg_key = _hkdf_simple(self.chain_key, b"COMP3334-msg-key")
         next_chain = _hkdf_simple(self.chain_key, b"COMP3334-chain-advance")
         # Overwrite old chain_key — forward secrecy
         self.chain_key = next_chain
@@ -354,27 +393,31 @@ class RatchetChain:
             self.skipped_keys[self.index - 1] = skipped_key
         return self.advance()
 
-    def try_skipped(self, index: int) -> Optional[bytes]:
+    def try_skipped(self, index: int) -> bytes | None:
         """Pop and return a previously cached skipped key, or None."""
         return self.skipped_keys.pop(index, None)
 
     def as_dict(self) -> dict:
         return {
             "chain_key_hex": self.chain_key.hex(),
-            "index":         self.index,
-            "skipped_keys":  {str(k): v.hex() for k, v in self.skipped_keys.items()},
+            "index": self.index,
+            "skipped_keys": {str(k): v.hex() for k, v in self.skipped_keys.items()},
         }
 
     @classmethod
-    def from_dict(cls, d: dict) -> "RatchetChain":
+    def from_dict(cls, d: dict) -> RatchetChain:
         return cls(
             chain_key=bytes.fromhex(d["chain_key_hex"]),
             index=d["index"],
-            skipped_keys={int(k): bytes.fromhex(v) for k, v in d.get("skipped_keys", {}).items()},
+            skipped_keys={
+                int(k): bytes.fromhex(v) for k, v in d.get("skipped_keys", {}).items()
+            },
         )
 
 
-def derive_ratchet_chains(root_key: bytes, initiator: bool) -> tuple["RatchetChain", "RatchetChain"]:
+def derive_ratchet_chains(
+    root_key: bytes, initiator: bool
+) -> tuple[RatchetChain, RatchetChain]:
     """
     Derive send and receive ratchet chains from the root session key.
 
@@ -391,6 +434,7 @@ def derive_ratchet_chains(root_key: bytes, initiator: bool) -> tuple["RatchetCha
 # ---------------------------------------------------------------------------
 # AES-256-GCM encrypt / decrypt
 # ---------------------------------------------------------------------------
+
 
 def encrypt_message(
     session_key: SessionKey,
@@ -409,7 +453,7 @@ def encrypt_message(
                NEVER be reused with the same session_key.
                AES-GCM is catastrophically broken under nonce reuse.
     """
-    nonce = os.urandom(NONCE_BYTES)   # 96-bit random nonce, OS CSPRNG
+    nonce = os.urandom(NONCE_BYTES)  # 96-bit random nonce, OS CSPRNG
     aes_gcm = AESGCM(session_key.raw)
     ciphertext = aes_gcm.encrypt(nonce, plaintext, ad)
     return ciphertext, nonce
@@ -438,15 +482,32 @@ def decrypt_message(
 # Key change detection
 # ---------------------------------------------------------------------------
 
-class KeyChangeWarning(Exception):
+
+@dataclass
+class TrustState:
+    fingerprint: str
+    verified: bool
+    key_changed: bool
+
+
+class KeyChangeWarning(TrustStateError):
     """
     Raised when a peer's identity key differs from the locally cached value.
     The caller must display a warning to the user and require re-verification.
     """
-    def __init__(self, peer_id: str, cached: bytes, received: bytes):
-        self.peer_id  = peer_id
-        self.cached   = cached
+
+    def __init__(
+        self,
+        peer_id: str,
+        cached: bytes,
+        received: bytes,
+        *,
+        verified: bool = False,
+    ):
+        self.peer_id = peer_id
+        self.cached = cached
         self.received = received
+        self.verified = verified
         super().__init__(
             f"Identity key for '{peer_id}' has changed! "
             f"Old: {cached.hex()[:16]}… New: {received.hex()[:16]}…"
@@ -462,23 +523,60 @@ class IdentityKeyCache:
     Persisted to local encrypted storage between sessions.
     """
 
-    def __init__(self, store: dict[str, bytes] | None = None):
+    def __init__(
+        self,
+        store: dict[str, bytes] | None = None,
+        trust_states: dict[str, TrustState] | None = None,
+    ):
         self._store: dict[str, bytes] = store or {}
+        self._trust_states: dict[str, TrustState] = trust_states or {}
 
-    def check_and_update(self, peer_id: str, received_pub: bytes) -> None:
+    def check_and_update(self, peer_id: str, received_pub: bytes) -> bool:
         """
         Check received key against cache.
         If not seen before: cache it (first trust / TOFU).
         If seen and matches: OK.
-        If seen and different: raise KeyChangeWarning.
+        If seen and different:
+          - verified contact: raise KeyChangeWarning and do not overwrite
+          - unverified contact: update to the new key and flag key_changed
+
+        Returns:
+            bool: True if a warning should be shown to the user.
         """
         cached = self._store.get(peer_id)
         if cached is None:
             # First contact — Trust On First Use (TOFU)
             self._store[peer_id] = received_pub
-        elif cached != received_pub:
-            raise KeyChangeWarning(peer_id, cached, received_pub)
-        # else: matches — no action needed
+            self._trust_states[peer_id] = TrustState(
+                fingerprint=_peer_fingerprint(received_pub),
+                verified=False,
+                key_changed=False,
+            )
+            return False
+
+        if cached == received_pub:
+            return False
+
+        state = self._trust_states.get(
+            peer_id,
+            TrustState(
+                fingerprint=_peer_fingerprint(cached),
+                verified=False,
+                key_changed=False,
+            ),
+        )
+        if state.verified:
+            state.key_changed = True
+            self._trust_states[peer_id] = state
+            raise KeyChangeWarning(peer_id, cached, received_pub, verified=True)
+
+        self._store[peer_id] = received_pub
+        self._trust_states[peer_id] = TrustState(
+            fingerprint=_peer_fingerprint(received_pub),
+            verified=False,
+            key_changed=True,
+        )
+        return True
 
     def mark_verified(self, peer_id: str, pub: bytes) -> None:
         """
@@ -486,12 +584,61 @@ class IdentityKeyCache:
         Update cache to the new key (used after re-verification on key change).
         """
         self._store[peer_id] = pub
+        self._trust_states[peer_id] = TrustState(
+            fingerprint=_peer_fingerprint(pub),
+            verified=True,
+            key_changed=False,
+        )
 
     def get(self, peer_id: str) -> bytes | None:
         return self._store.get(peer_id)
 
-    def as_dict(self) -> dict[str, bytes]:
-        return dict(self._store)
+    def get_trust_state(self, peer_id: str) -> TrustState | None:
+        return self._trust_states.get(peer_id)
+
+    def as_dict(self) -> dict[str, dict[str, object]]:
+        return {
+            peer_id: {
+                "pub_hex": pub.hex(),
+                "fingerprint": state.fingerprint,
+                "verified": state.verified,
+                "key_changed": state.key_changed,
+            }
+            for peer_id, pub in self._store.items()
+            for state in [self._trust_states.get(peer_id)]
+            if state is not None
+        }
+
+    @classmethod
+    def from_dict(cls, raw: dict[str, object]) -> IdentityKeyCache:
+        store: dict[str, bytes] = {}
+        trust_states: dict[str, TrustState] = {}
+        for peer_id, entry in raw.items():
+            if isinstance(entry, str):
+                # Backward compatibility: old format was {peer_id: hex_pub}
+                pub = bytes.fromhex(entry)
+                store[peer_id] = pub
+                trust_states[peer_id] = TrustState(
+                    fingerprint=_peer_fingerprint(pub),
+                    verified=False,
+                    key_changed=False,
+                )
+                continue
+
+            if not isinstance(entry, dict):
+                continue
+            pub_hex = entry.get("pub_hex")
+            if not isinstance(pub_hex, str):
+                continue
+            store[peer_id] = bytes.fromhex(pub_hex)
+            trust_states[peer_id] = TrustState(
+                fingerprint=str(
+                    entry.get("fingerprint", _peer_fingerprint(store[peer_id]))
+                ),
+                verified=bool(entry.get("verified", False)),
+                key_changed=bool(entry.get("key_changed", False)),
+            )
+        return cls(store=store, trust_states=trust_states)
 
 
 # ---------------------------------------------------------------------------
@@ -506,6 +653,7 @@ class IdentityKeyCache:
 #   a counter value causes an InvalidTag error even if it passes the
 #   window check.
 # ---------------------------------------------------------------------------
+
 
 class ReplayProtector:
     """
@@ -540,8 +688,18 @@ class ReplayProtector:
         Call commit() AFTER successful decryption.
         """
         if message_id in self._seen_ids:
+            log.warning(
+                "security_event type=replay_attack reason=duplicate_message_id message_id=%s",
+                message_id,
+            )
             raise ReplayError(f"Duplicate message ID: {message_id}")
         if counter <= self._max_counter - REPLAY_WINDOW:
+            log.warning(
+                "security_event type=replay_attack reason=counter_outside_window message_id=%s counter=%s max_seen=%s",
+                message_id,
+                counter,
+                self._max_counter,
+            )
             raise ReplayError(
                 f"Counter {counter} is outside replay window "
                 f"(max seen: {self._max_counter}, window: {REPLAY_WINDOW})"
@@ -560,22 +718,18 @@ class ReplayProtector:
         """Serialise state for persistent storage."""
         return {
             "max_counter": self._max_counter,
-            "seen_ids":    list(self._seen_ids),
+            "seen_ids": list(self._seen_ids),
         }
-
-
-class ReplayError(Exception):
-    """Raised when a message is detected as a replay or duplicate."""
-    pass
 
 
 # ---------------------------------------------------------------------------
 # High-level message helpers
 # ---------------------------------------------------------------------------
 
+
 def build_and_encrypt(
     *,
-    send_chain: "RatchetChain",
+    send_chain: RatchetChain,
     plaintext: str,
     sender_id: str,
     recipient_id: str,
@@ -596,29 +750,31 @@ def build_and_encrypt(
 
     # Build envelope skeleton first (needed for AD computation)
     env = MessageEnvelope(
-        sender_id       = sender_id,
-        recipient_id    = recipient_id,
-        conversation_id = conversation_id,
-        counter         = counter,
-        chain_index     = chain_index,
-        nonce_b64       = base64.b64encode(os.urandom(NONCE_BYTES)).decode(),  # placeholder
-        ciphertext_b64  = "",   # placeholder
-        ttl_seconds     = ttl_seconds,
-        sent_at         = sent_at,
+        sender_id=sender_id,
+        recipient_id=recipient_id,
+        conversation_id=conversation_id,
+        counter=counter,
+        chain_index=chain_index,
+        nonce_b64=base64.b64encode(os.urandom(NONCE_BYTES)).decode(),  # placeholder
+        ciphertext_b64="",  # placeholder
+        ttl_seconds=ttl_seconds,
+        sent_at=sent_at,
     )
 
     ad = env.compute_ad()
-    msg_sk = SessionKey(raw=msg_key, conversation_id=conversation_id, peer_id=recipient_id)
+    msg_sk = SessionKey(
+        raw=msg_key, conversation_id=conversation_id, peer_id=recipient_id
+    )
     ciphertext, nonce = encrypt_message(msg_sk, plaintext.encode("utf-8"), ad)
 
-    env.nonce_b64      = base64.b64encode(nonce).decode()
+    env.nonce_b64 = base64.b64encode(nonce).decode()
     env.ciphertext_b64 = base64.b64encode(ciphertext).decode()
     return env
 
 
 def decrypt_envelope(
     *,
-    recv_chain: "RatchetChain",
+    recv_chain: RatchetChain,
     envelope: MessageEnvelope,
     replay_protector: ReplayProtector,
 ) -> str:
@@ -628,7 +784,7 @@ def decrypt_envelope(
 
     Raises:
         ReplayError:  duplicate or replayed message
-        InvalidTag:   ciphertext or AD tampered with
+        IntegrityError: ciphertext or AD tampered with
         ValueError:   malformed fields (bad base64, etc.)
     """
     # Step 1: replay check (before touching crypto)
@@ -641,12 +797,26 @@ def decrypt_envelope(
         msg_key = recv_chain.advance_to(chain_index)
 
     # Step 3: reconstruct AD and decrypt
-    ad         = envelope.compute_ad()
-    nonce      = base64.b64decode(envelope.nonce_b64)
+    ad = envelope.compute_ad()
+    nonce = base64.b64decode(envelope.nonce_b64)
     ciphertext = base64.b64decode(envelope.ciphertext_b64)
 
-    msg_sk = SessionKey(raw=msg_key, conversation_id=envelope.conversation_id, peer_id=envelope.sender_id)
-    plaintext_bytes = decrypt_message(msg_sk, ciphertext, nonce, ad)
+    msg_sk = SessionKey(
+        raw=msg_key,
+        conversation_id=envelope.conversation_id,
+        peer_id=envelope.sender_id,
+    )
+    try:
+        plaintext_bytes = decrypt_message(msg_sk, ciphertext, nonce, ad)
+    except InvalidTag as exc:
+        log.warning(
+            "security_event type=integrity_error message_id=%s conversation_id=%s",
+            envelope.id,
+            envelope.conversation_id,
+        )
+        raise IntegrityError(
+            "Ciphertext or authenticated metadata was tampered with"
+        ) from exc
 
     # Step 4: commit only after successful decryption
     replay_protector.commit(envelope.id, envelope.counter)

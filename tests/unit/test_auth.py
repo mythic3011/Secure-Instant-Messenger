@@ -17,10 +17,10 @@ from server.core.security import (
     verify_totp,
 )
 
-
 # ---------------------------------------------------------------------------
 # Password hashing — Argon2id
 # ---------------------------------------------------------------------------
+
 
 def test_hash_password_roundtrip():
     pw = "correct-horse-battery-staple"
@@ -48,6 +48,7 @@ def test_hash_password_unique_salts():
 # Bearer token
 # ---------------------------------------------------------------------------
 
+
 def test_generate_token_returns_pair():
     raw, token_hash = generate_token()
     assert isinstance(raw, str)
@@ -70,11 +71,14 @@ def test_different_tokens_different_hashes():
 # TOTP secret encryption
 # ---------------------------------------------------------------------------
 
+
 def test_totp_encrypt_decrypt_roundtrip(monkeypatch):
     # Patch settings to provide a known key
     import server.core.security as sec
+
     monkeypatch.setattr(
-        sec, "get_settings",
+        sec,
+        "get_settings",
         lambda: type("S", (), {"totp_encryption_key": "a" * 64})(),
     )
     user_id = "user-abc-123"
@@ -86,8 +90,10 @@ def test_totp_encrypt_decrypt_roundtrip(monkeypatch):
 
 def test_totp_decrypt_wrong_user_id_fails(monkeypatch):
     import server.core.security as sec
+
     monkeypatch.setattr(
-        sec, "get_settings",
+        sec,
+        "get_settings",
         lambda: type("S", (), {"totp_encryption_key": "b" * 64})(),
     )
     user_id = "user-abc-123"
@@ -99,6 +105,7 @@ def test_totp_decrypt_wrong_user_id_fails(monkeypatch):
 
 def test_totp_verify_correct_code():
     import pyotp
+
     secret = generate_totp_secret()
     code = pyotp.TOTP(secret).now()
     assert verify_totp(secret, code) is True

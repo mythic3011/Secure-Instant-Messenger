@@ -5,9 +5,9 @@ Covers: R5 (fingerprint / safety number), R10 (TTL setting)
 
 from __future__ import annotations
 
-from textual.message import Message
 from textual.app import ComposeResult
 from textual.containers import Vertical
+from textual.message import Message
 from textual.screen import Screen
 from textual.widgets import Button, Input, Static
 
@@ -82,19 +82,25 @@ class SettingsScreen(Screen):
     def __init__(self, conversation_id: str, peer_username: str) -> None:
         super().__init__()
         self.conversation_id = conversation_id
-        self.peer_username   = peer_username
-        self._fingerprint    = "Loading…"
+        self.peer_username = peer_username
+        self._fingerprint = "Loading…"
 
     def compose(self) -> ComposeResult:
         with Vertical(id="panel"):
             yield Static(f"⚙ Settings — {self.peer_username}", id="title")
             yield Static("")
-            yield Static("Safety Number (verify out-of-band with your contact):", id="fp_label")
+            yield Static(
+                "Safety Number (verify out-of-band with your contact):", id="fp_label"
+            )
             yield Static(self._fingerprint, id="fingerprint")
             yield Button("✓ Mark as Verified", variant="success", id="btn_verify")
             yield Static("")
-            yield Static("Self-destruct TTL (seconds, blank = no expiry):", id="ttl_label")
-            yield Input(placeholder="e.g. 300 for 5 minutes", id="ttl_input", restrict=r"\d*")
+            yield Static(
+                "Self-destruct TTL (seconds, blank = no expiry):", id="ttl_label"
+            )
+            yield Input(
+                placeholder="e.g. 300 for 5 minutes", id="ttl_input", restrict=r"\d*"
+            )
             yield Static("", id="status")
             yield Button("💾 Save TTL", variant="primary", id="btn_ttl")
             yield Button("← Close", id="btn_close")

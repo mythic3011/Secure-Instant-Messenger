@@ -15,14 +15,24 @@ from textual.widgets import Button, Input, ListItem, ListView, Static
 class FriendRequestItem(ListItem):
     def __init__(self, request_id: str, sender_name: str) -> None:
         super().__init__()
-        self.request_id  = request_id
+        self.request_id = request_id
         self.sender_name = sender_name
 
     def compose(self) -> ComposeResult:
         with Horizontal(classes="req_row"):
             yield Static(f"  ⊛ {self.sender_name}", classes="req_name")
-            yield Button("✓ Accept",  variant="success", id=f"accept_{self.request_id}",  classes="req_btn")
-            yield Button("✕ Decline", variant="error",   id=f"decline_{self.request_id}", classes="req_btn")
+            yield Button(
+                "✓ Accept",
+                variant="success",
+                id=f"accept_{self.request_id}",
+                classes="req_btn",
+            )
+            yield Button(
+                "✕ Decline",
+                variant="error",
+                id=f"decline_{self.request_id}",
+                classes="req_btn",
+            )
 
 
 class FriendsScreen(Screen):
@@ -180,8 +190,8 @@ class FriendsScreen(Screen):
 
     def show_status(self, msg: str) -> None:
         self.query_one("#status", Static).update(msg)
-        self.query_one("#error",  Static).update("")
+        self.query_one("#error", Static).update("")
 
     def show_error(self, msg: str) -> None:
-        self.query_one("#error",  Static).update(msg)
+        self.query_one("#error", Static).update(msg)
         self.query_one("#status", Static).update("")

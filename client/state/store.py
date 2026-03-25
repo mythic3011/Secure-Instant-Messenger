@@ -1,16 +1,21 @@
-"""
-client/state/store.py — Local SQLite store for message history, session state,
-and conversation metadata. All message content is stored as ciphertext only;
-plaintext is never written to disk.
-"""
-
 from __future__ import annotations
 
-import asyncio
+"""
+client/state/store.py — Local SQLite store for message history, session state,
+and conversation metadata. Message bodies are encrypted at rest; plaintext is
+never written to disk.
+"""
+
+import logging
+import os
 import time
 from pathlib import Path
 
 import aiosqlite
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+
+from client.crypto.session import LocalStorageSecurityError
+from client.crypto.storage import get_storage_key, set_active_storage_key
 
 _SCHEMA = """
 PRAGMA journal_mode = WAL;
@@ -22,7 +27,8 @@ CREATE TABLE IF NOT EXISTS local_messages (
     sender_id       TEXT NOT NULL,
     recipient_id    TEXT NOT NULL,
     counter         INTEGER NOT NULL,
-    plaintext       TEXT NOT NULL,      -- decrypted text, stored locally only
+    nonce           BLOB NOT NULL,
+    ciphertext      BLOB NOT NULL,
     sent_at         INTEGER NOT NULL,
     received_at     INTEGER NOT NULL DEFAULT (unixepoch()),
     ttl_seconds     INTEGER,
@@ -47,7 +53,42 @@ CREATE TABLE IF NOT EXISTS local_conversations (
 );
 """
 
+log = logging.getLogger("client.state.store")
+
 _db: aiosqlite.Connection | None = None
+
+
+def set_storage_key(key: bytes | None) -> None:
+    """Backward-compatible test hook for the active storage key."""
+    set_active_storage_key(key)
+
+
+def _aad(conversation_id: str, message_id: str) -> bytes:
+    return f"{conversation_id}:{message_id}".encode("utf-8")
+
+
+def _require_storage_key() -> bytes:
+    try:
+        return get_storage_key()
+    except LocalStorageSecurityError as exc:
+        log.error("storage key unavailable for local message encryption")
+        raise
+
+
+def _encrypt_body(plaintext: str, *, key: bytes, aad: bytes) -> tuple[bytes, bytes]:
+    nonce = os.urandom(12)
+    ciphertext = AESGCM(key).encrypt(nonce, plaintext.encode("utf-8"), aad)
+    return nonce, ciphertext
+
+
+def _decrypt_body(nonce: bytes, ciphertext: bytes, *, key: bytes, aad: bytes) -> str:
+    try:
+        plaintext = AESGCM(key).decrypt(nonce, ciphertext, aad)
+    except Exception as exc:
+        raise LocalStorageSecurityError(
+            "Failed to decrypt local message from encrypted store"
+        ) from exc
+    return plaintext.decode("utf-8")
 
 
 async def init_store(username: str) -> None:
@@ -59,7 +100,6 @@ async def init_store(username: str) -> None:
     _db.row_factory = aiosqlite.Row
     await _db.executescript(_SCHEMA)
     await _db.commit()
-    # Sweep expired messages on startup (R11)
     await sweep_expired()
 
 
@@ -88,20 +128,38 @@ async def save_message(
     ttl_seconds: int | None,
     delivery_status: str = "sent",
 ) -> None:
-    """Persist a decrypted message to local storage."""
     db = _get_db()
+    key = _require_storage_key()
+    aad = _aad(conversation_id, id)
+
     try:
+        nonce, ciphertext = _encrypt_body(plaintext, key=key, aad=aad)
         await db.execute(
             """INSERT OR IGNORE INTO local_messages
                (id, conversation_id, sender_id, recipient_id, counter,
-                plaintext, sent_at, ttl_seconds, delivery_status)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (id, conversation_id, sender_id, recipient_id, counter,
-             plaintext, sent_at, ttl_seconds, delivery_status),
+                nonce, ciphertext, sent_at, ttl_seconds, delivery_status)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                id,
+                conversation_id,
+                sender_id,
+                recipient_id,
+                counter,
+                nonce,
+                ciphertext,
+                sent_at,
+                ttl_seconds,
+                delivery_status,
+            ),
         )
         await db.commit()
-    except Exception:
-        pass  # duplicate — already stored
+    except aiosqlite.IntegrityError:
+        return
+    except LocalStorageSecurityError:
+        raise
+    except Exception as exc:
+        log.error("unexpected error storing message id %s", id, exc_info=exc)
+        raise RuntimeError(f"failed to store message {id}") from exc
 
 
 async def update_delivery_status(message_id: str, status: str) -> None:
@@ -121,6 +179,7 @@ async def get_messages(
     """Fetch local messages for a conversation, newest first."""
     db = _get_db()
     now = int(time.time())
+    key = _require_storage_key()
 
     if before_sent_at:
         async with db.execute(
@@ -141,7 +200,18 @@ async def get_messages(
         ) as cur:
             rows = await cur.fetchall()
 
-    return [dict(r) for r in rows]
+    result: list[dict] = []
+    for row in rows:
+        record = dict(row)
+        aad = _aad(record["conversation_id"], record["id"])
+        record["plaintext"] = _decrypt_body(
+            record["nonce"],
+            record["ciphertext"],
+            key=key,
+            aad=aad,
+        )
+        result.append(record)
+    return result
 
 
 async def sweep_expired() -> int:

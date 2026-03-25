@@ -35,6 +35,7 @@ pytestmark = pytest.mark.asyncio
 # Fixtures
 # ---------------------------------------------------------------------------
 
+
 @pytest.fixture(scope="module")
 def anyio_backend():
     return "asyncio"
@@ -46,13 +47,14 @@ async def app_client():
     import server.core.database as db_mod
 
     # Patch settings to use temp SQLite and known secrets, with rate limiting disabled
-    os.environ["TOKEN_SECRET_KEY"]    = "a" * 64
+    os.environ["TOKEN_SECRET_KEY"] = "a" * 64
     os.environ["TOTP_ENCRYPTION_KEY"] = "b" * 64
-    os.environ["DATABASE_URL"]        = "sqlite+aiosqlite:////tmp/test_e2e.db"
+    os.environ["DATABASE_URL"] = "sqlite+aiosqlite:////tmp/test_e2e.db"
     os.environ["RATE_LIMIT_REGISTER_MAX"] = "1000"
-    os.environ["RATE_LIMIT_LOGIN_MAX"]    = "1000"
+    os.environ["RATE_LIMIT_LOGIN_MAX"] = "1000"
 
     from server.main import app
+
     await db_mod.init_db()
 
     transport = ASGITransport(app=app)
@@ -71,36 +73,47 @@ async def app_client():
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _make_keypair():
     id_kp = IdentityKeypair.generate()
     dh_kp = DHKeypair.generate()
-    sig   = make_key_signature(id_kp, dh_kp)
+    sig = make_key_signature(id_kp, dh_kp)
     return id_kp, dh_kp, sig
 
 
 async def _register(client: AsyncClient, username: str, password: str):
     id_kp, dh_kp, sig = _make_keypair()
-    resp = await client.post("/v1/auth/register", json={
-        "username":         username,
-        "password":         password,
-        "identity_pub_b64": id_kp.public_b64(),
-        "dh_pub_b64":       dh_kp.public_b64(),
-        "key_sig_b64":      base64.b64encode(sig).decode(),
-    })
+    resp = await client.post(
+        "/v1/auth/register",
+        json={
+            "username": username,
+            "password": password,
+            "identity_pub_b64": id_kp.public_b64(),
+            "dh_pub_b64": dh_kp.public_b64(),
+            "key_sig_b64": base64.b64encode(sig).decode(),
+        },
+    )
     assert resp.status_code == 201, resp.text
     totp_uri = resp.json()["totp_provisioning_uri"]
     # Extract secret from otpauth URI: otpauth://totp/...?secret=BASE32...
-    secret = dict(p.split("=", 1) for p in totp_uri.split("?", 1)[1].split("&"))["secret"]
+    secret = dict(p.split("=", 1) for p in totp_uri.split("?", 1)[1].split("&"))[
+        "secret"
+    ]
     return id_kp, dh_kp, secret
 
 
-async def _login(client: AsyncClient, username: str, password: str, totp_secret: str) -> str:
+async def _login(
+    client: AsyncClient, username: str, password: str, totp_secret: str
+) -> str:
     code = pyotp.TOTP(totp_secret).now()
-    resp = await client.post("/v1/auth/login", json={
-        "username":  username,
-        "password":  password,
-        "totp_code": code,
-    })
+    resp = await client.post(
+        "/v1/auth/login",
+        json={
+            "username": username,
+            "password": password,
+            "totp_code": code,
+        },
+    )
     assert resp.status_code == 200, resp.text
     return resp.json()["access_token"]
 
@@ -112,6 +125,7 @@ def _auth(token: str) -> dict:
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.anyio
 @pytest.mark.asyncio
@@ -126,22 +140,28 @@ async def test_full_e2e_message_flow(app_client: AsyncClient):
     client = app_client
 
     # 1. Register Alice and Bob
-    alice_id_kp, alice_dh_kp, alice_totp = await _register(client, "alice_e2e", "AlicePassword123!")
-    bob_id_kp,   bob_dh_kp,   bob_totp   = await _register(client, "bob_e2e",   "BobPassword123!")
+    alice_id_kp, alice_dh_kp, alice_totp = await _register(
+        client, "alice_e2e", "AlicePassword123!"
+    )
+    bob_id_kp, bob_dh_kp, bob_totp = await _register(
+        client, "bob_e2e", "BobPassword123!"
+    )
 
     # 2. Login
     alice_token = await _login(client, "alice_e2e", "AlicePassword123!", alice_totp)
-    bob_token   = await _login(client, "bob_e2e",   "BobPassword123!",   bob_totp)
+    bob_token = await _login(client, "bob_e2e", "BobPassword123!", bob_totp)
 
     # 3. Alice sends Bob a friend request; Bob accepts
-    resp = await client.post("/v1/friends/request",
+    resp = await client.post(
+        "/v1/friends/request",
         json={"recipient_username": "bob_e2e"},
         headers=_auth(alice_token),
     )
     assert resp.status_code == 201, resp.text
     request_id = resp.json()["id"]
 
-    resp = await client.put(f"/v1/friends/request/{request_id}",
+    resp = await client.put(
+        f"/v1/friends/request/{request_id}",
         json={"action": "accept"},
         headers=_auth(bob_token),
     )
@@ -192,7 +212,8 @@ async def test_full_e2e_message_flow(app_client: AsyncClient):
     envelope.conv_dh_pub_b64 = base64.b64encode(conv_dh_pub_bytes).decode()
 
     # 8. Alice POSTs the message
-    resp = await client.post("/v1/messages",
+    resp = await client.post(
+        "/v1/messages",
         json={"envelope": envelope.model_dump()},
         headers=_auth(alice_token),
     )
@@ -200,7 +221,8 @@ async def test_full_e2e_message_flow(app_client: AsyncClient):
     msg_id = resp.json()["id"]
 
     # 9. Bob fetches messages
-    resp = await client.get(f"/v1/messages?conversation_id={conv_id}",
+    resp = await client.get(
+        f"/v1/messages?conversation_id={conv_id}",
         headers=_auth(bob_token),
     )
     assert resp.status_code == 200, resp.text
@@ -231,13 +253,15 @@ async def test_full_e2e_message_flow(app_client: AsyncClient):
 
     # 11. Bob decrypts
     from shared.protocol import MessageEnvelope
+
     env = MessageEnvelope.model_validate(received)
     rp = ReplayProtector()
     decrypted = decrypt_envelope(recv_chain=bob_recv, envelope=env, replay_protector=rp)
     assert decrypted == plaintext
 
     # 12. Bob sends ACK
-    resp = await client.post("/v1/messages/ack",
+    resp = await client.post(
+        "/v1/messages/ack",
         json={"message_id": msg_id, "conversation_id": conv_id},
         headers=_auth(bob_token),
     )
@@ -252,28 +276,34 @@ async def test_replay_rejection(app_client: AsyncClient):
     """
     client = app_client
 
-    alice_id_kp, alice_dh_kp, alice_totp = await _register(client, "alice_replay", "AlicePassword123!")
-    bob_id_kp,   bob_dh_kp,   bob_totp   = await _register(client, "bob_replay",   "BobPassword123!")
+    alice_id_kp, alice_dh_kp, alice_totp = await _register(
+        client, "alice_replay", "AlicePassword123!"
+    )
+    bob_id_kp, bob_dh_kp, bob_totp = await _register(
+        client, "bob_replay", "BobPassword123!"
+    )
 
     alice_token = await _login(client, "alice_replay", "AlicePassword123!", alice_totp)
-    bob_token   = await _login(client, "bob_replay",   "BobPassword123!",   bob_totp)
+    bob_token = await _login(client, "bob_replay", "BobPassword123!", bob_totp)
 
     # Friend request
-    resp = await client.post("/v1/friends/request",
+    resp = await client.post(
+        "/v1/friends/request",
         json={"recipient_username": "bob_replay"},
         headers=_auth(alice_token),
     )
     request_id = resp.json()["id"]
-    await client.put(f"/v1/friends/request/{request_id}",
+    await client.put(
+        f"/v1/friends/request/{request_id}",
         json={"action": "accept"},
         headers=_auth(bob_token),
     )
 
     alice_resp = await client.get("/v1/keys/alice_replay", headers=_auth(alice_token))
-    bob_resp   = await client.get("/v1/keys/bob_replay",   headers=_auth(alice_token))
+    bob_resp = await client.get("/v1/keys/bob_replay", headers=_auth(alice_token))
     alice_user_id = alice_resp.json()["user_id"]
-    bob_user_id   = bob_resp.json()["user_id"]
-    bob_bundle    = bob_resp.json()
+    bob_user_id = bob_resp.json()["user_id"]
+    bob_bundle = bob_resp.json()
 
     # Get conversation ID from server
     conv_resp = await client.get("/v1/conversations", headers=_auth(alice_token))
@@ -305,14 +335,16 @@ async def test_replay_rejection(app_client: AsyncClient):
     envelope.conv_dh_pub_b64 = base64.b64encode(conv_dh_pub_bytes).decode()
 
     # First POST — must succeed
-    resp1 = await client.post("/v1/messages",
+    resp1 = await client.post(
+        "/v1/messages",
         json={"envelope": envelope.model_dump()},
         headers=_auth(alice_token),
     )
     assert resp1.status_code == 201, resp1.text
 
     # Second POST — same envelope — must be rejected as replay
-    resp2 = await client.post("/v1/messages",
+    resp2 = await client.post(
+        "/v1/messages",
         json={"envelope": envelope.model_dump()},
         headers=_auth(alice_token),
     )
