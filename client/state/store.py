@@ -21,7 +21,17 @@ _SCHEMA = """
 PRAGMA journal_mode = WAL;
 PRAGMA foreign_keys = ON;
 
-CREATE TABLE IF NOT EXISTS local_messages (
+CREATE TABLE IF NOT EXISTS local_conversations (
+    id              TEXT PRIMARY KEY,
+    peer_id         TEXT NOT NULL,
+    peer_username   TEXT NOT NULL,
+    last_message_at INTEGER,
+    unread_count    INTEGER NOT NULL DEFAULT 0
+);
+"""
+
+_LOCAL_MESSAGES_TABLE_SQL = """
+CREATE TABLE local_messages (
     id              TEXT PRIMARY KEY,
     conversation_id TEXT NOT NULL,
     sender_id       TEXT NOT NULL,
@@ -39,18 +49,7 @@ CREATE TABLE IF NOT EXISTS local_messages (
                     ) VIRTUAL,
     delivery_status TEXT NOT NULL DEFAULT 'sent',
     UNIQUE(conversation_id, sender_id, counter)
-);
-
-CREATE INDEX IF NOT EXISTS idx_lm_conv ON local_messages(conversation_id, sent_at DESC);
-CREATE INDEX IF NOT EXISTS idx_lm_expires ON local_messages(expires_at) WHERE expires_at IS NOT NULL;
-
-CREATE TABLE IF NOT EXISTS local_conversations (
-    id              TEXT PRIMARY KEY,
-    peer_id         TEXT NOT NULL,
-    peer_username   TEXT NOT NULL,
-    last_message_at INTEGER,
-    unread_count    INTEGER NOT NULL DEFAULT 0
-);
+)
 """
 
 log = logging.getLogger("client.state.store")
@@ -99,8 +98,74 @@ async def init_store(username: str) -> None:
     _db = await aiosqlite.connect(str(db_path))
     _db.row_factory = aiosqlite.Row
     await _db.executescript(_SCHEMA)
+    await _ensure_message_schema(_db)
+    await _create_message_indexes(_db)
     await _db.commit()
     await sweep_expired()
+
+
+async def _ensure_message_schema(db: aiosqlite.Connection) -> None:
+    async with db.execute("PRAGMA table_info(local_messages)") as cur:
+        rows = await cur.fetchall()
+    columns = {row["name"] for row in rows}
+    if not columns:
+        await db.execute(_LOCAL_MESSAGES_TABLE_SQL)
+        return
+    if {"nonce", "ciphertext"}.issubset(columns) and "plaintext" not in columns:
+        return
+    if "plaintext" in columns and not {"nonce", "ciphertext"}.intersection(columns):
+        await _migrate_plaintext_messages(db)
+        return
+    raise LocalStorageSecurityError(
+        f"Unsupported local_messages schema columns: {sorted(columns)}"
+    )
+
+
+async def _migrate_plaintext_messages(db: aiosqlite.Connection) -> None:
+    key = _require_storage_key()
+    async with db.execute(
+        """SELECT id, conversation_id, sender_id, recipient_id, counter, plaintext,
+                  sent_at, received_at, ttl_seconds, delivery_status
+           FROM local_messages"""
+    ) as cur:
+        old_rows = await cur.fetchall()
+
+    await db.execute("ALTER TABLE local_messages RENAME TO local_messages_legacy")
+    await db.execute(_LOCAL_MESSAGES_TABLE_SQL)
+
+    for row in old_rows:
+        aad = _aad(row["conversation_id"], row["id"])
+        nonce, ciphertext = _encrypt_body(row["plaintext"], key=key, aad=aad)
+        await db.execute(
+            """INSERT INTO local_messages
+               (id, conversation_id, sender_id, recipient_id, counter,
+                nonce, ciphertext, sent_at, received_at, ttl_seconds, delivery_status)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                row["id"],
+                row["conversation_id"],
+                row["sender_id"],
+                row["recipient_id"],
+                row["counter"],
+                nonce,
+                ciphertext,
+                row["sent_at"],
+                row["received_at"],
+                row["ttl_seconds"],
+                row["delivery_status"],
+            ),
+        )
+
+    await db.execute("DROP TABLE local_messages_legacy")
+
+
+async def _create_message_indexes(db: aiosqlite.Connection) -> None:
+    await db.execute(
+        "CREATE INDEX IF NOT EXISTS idx_lm_conv ON local_messages(conversation_id, sent_at DESC)"
+    )
+    await db.execute(
+        "CREATE INDEX IF NOT EXISTS idx_lm_expires ON local_messages(expires_at) WHERE expires_at IS NOT NULL"
+    )
 
 
 async def close_store() -> None:

@@ -122,3 +122,76 @@ async def test_missing_storage_key_raises(monkeypatch, tmp_path, caplog):
     )
 
     await store.close_store()
+
+
+@pytest.mark.asyncio
+async def test_init_store_migrates_plaintext_rows(monkeypatch, tmp_path):
+    monkeypatch.setattr(store.Path, "home", lambda: tmp_path)
+    store.set_storage_key(b"c" * 32)
+
+    db_path = tmp_path / ".comp3334im" / "legacy_user" / "messages.db"
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(db_path)
+    try:
+        conn.executescript(
+            """
+            CREATE TABLE local_messages (
+                id TEXT PRIMARY KEY,
+                conversation_id TEXT NOT NULL,
+                sender_id TEXT NOT NULL,
+                recipient_id TEXT NOT NULL,
+                counter INTEGER NOT NULL,
+                plaintext TEXT NOT NULL,
+                sent_at INTEGER NOT NULL,
+                received_at INTEGER NOT NULL DEFAULT (unixepoch()),
+                ttl_seconds INTEGER,
+                delivery_status TEXT NOT NULL DEFAULT 'sent',
+                UNIQUE(conversation_id, sender_id, counter)
+            );
+            CREATE TABLE local_conversations (
+                id TEXT PRIMARY KEY,
+                peer_id TEXT NOT NULL,
+                peer_username TEXT NOT NULL,
+                last_message_at INTEGER,
+                unread_count INTEGER NOT NULL DEFAULT 0
+            );
+            """
+        )
+        conn.execute(
+            """INSERT INTO local_messages
+               (id, conversation_id, sender_id, recipient_id, counter, plaintext,
+                sent_at, received_at, ttl_seconds, delivery_status)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                "legacy-msg-1",
+                "conv-legacy",
+                "alice",
+                "bob",
+                0,
+                "legacy plaintext",
+                int(time.time()),
+                int(time.time()),
+                None,
+                "sent",
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    await store.init_store("legacy_user")
+    messages = await store.get_messages("conv-legacy")
+
+    assert messages[0]["plaintext"] == "legacy plaintext"
+
+    conn = sqlite3.connect(db_path)
+    try:
+        columns = {
+            row[1] for row in conn.execute("PRAGMA table_info(local_messages)").fetchall()
+        }
+    finally:
+        conn.close()
+
+    assert "plaintext" not in columns
+    assert {"nonce", "ciphertext"}.issubset(columns)
+    await store.close_store()

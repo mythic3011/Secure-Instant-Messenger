@@ -21,8 +21,10 @@ from client.crypto.session import (
     DHKeypair,
     IdentityKeyCache,
     IdentityKeypair,
+    IntegrityError,
     KeyChangeWarning,
     ReplayProtector,
+    SecurityError,
     build_and_encrypt,
     compute_fingerprint,
     decrypt_envelope,
@@ -556,20 +558,37 @@ class IMApp(App):
                 try:
                     peer_bundle = await client.get_keys(peer_username)
                     peer_identity_pub = base64.b64decode(peer_bundle.identity_pub_b64)
-                    state.identity_key_cache.check_and_update(peer_id, peer_identity_pub)
+                    key_changed = state.identity_key_cache.check_and_update(
+                        peer_id, peer_identity_pub
+                    )
                 except KeyChangeWarning:
                     key_changed = True
-                except Exception:
-                    pass
+                except IMClientError as exc:
+                    log.warning("key_bundle_refresh_failed", peer=peer_username, err=str(exc))
+                except (httpx.ConnectError, httpx.TimeoutException, httpx.NetworkError) as exc:
+                    log.warning("key_bundle_refresh_network_error", peer=peer_username, err=str(exc))
 
-        # Decrypt — drop silently on replay or tamper
         try:
             plaintext = decrypt_envelope(
                 recv_chain=state.recv_chain,
                 envelope=envelope,
                 replay_protector=state.replay_protector,
             )
-        except Exception:
+        except SecurityError as exc:
+            log.warning(
+                "incoming_message_rejected",
+                conversation_id=conv_id,
+                message_id=envelope.id,
+                error=type(exc).__name__,
+            )
+            return
+        except ValueError as exc:
+            log.warning(
+                "incoming_message_malformed",
+                conversation_id=conv_id,
+                message_id=envelope.id,
+                err=str(exc),
+            )
             return
 
         # Persist locally
@@ -616,12 +635,20 @@ class IMApp(App):
         # Send delivery ACK
         if self._client:
             try:
-                await self._client.send_ack(DeliveryAck(
+                await self._client.send_ack(
+                    DeliveryAck(
+                        message_id=envelope.id,
+                        conversation_id=conv_id,
+                    )
+                )
+            except IMClientError as exc:
+                log.warning("delivery_ack_failed", message_id=envelope.id, err=str(exc))
+            except (httpx.ConnectError, httpx.TimeoutException, httpx.NetworkError) as exc:
+                log.warning(
+                    "delivery_ack_network_error",
                     message_id=envelope.id,
-                    conversation_id=conv_id,
-                ))
-            except Exception:
-                pass
+                    err=str(exc),
+                )
 
     async def _handle_ack(self, payload: dict) -> None:
         message_id = payload.get("message_id")
@@ -646,8 +673,9 @@ class IMApp(App):
 
         try:
             peer_bundle = await self._client.get_keys(peer_username)
-        except (IMClientError, httpx.ConnectError, httpx.TimeoutException,
-                httpx.NetworkError, Exception):
+        except IMClientError:
+            return None
+        except (httpx.ConnectError, httpx.TimeoutException, httpx.NetworkError):
             return None
 
         my_id             = self._user_id or self._username
