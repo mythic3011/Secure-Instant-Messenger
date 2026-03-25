@@ -1,8 +1,8 @@
 # Branch Protection Note
 
 Date: 2026-03-26
-Status: Recommended repo management baseline
-Scope: pull request checks, review routing, auto labeling
+Status: Active repo management baseline with temporary protection fallback
+Scope: pull request checks, review routing, auto labeling, phantom-check troubleshooting
 
 ## Goal
 
@@ -13,7 +13,7 @@ layout without reopening workflow scope.
 
 ## Recommended Required Checks
 
-Require these pull request checks on `main`:
+Stable target state for `main`:
 
 - `CI`
 - `Lint`
@@ -30,6 +30,27 @@ Reason:
 - `Deploy Smoke` is intentionally slower and should not add merge friction to
   every PR.
 
+## Temporary State
+
+The repo hit a real phantom required-check problem during submission hardening.
+
+Observed issue:
+
+- branch protection required `Security`, but the PR only reported
+  `GitGuardian Security Checks`
+- branch protection later required `CI`, but the PR head commit reported no
+  matching status context
+
+Temporary operational state:
+
+- keep review requirement enabled
+- keep conversation resolution enabled
+- do not require a status context that is not actually reported on the PR head
+  commit
+
+Restore required checks only after the workflow names and reported contexts are
+confirmed stable.
+
 ## Ruleset Caution
 
 Do not mark a path-filtered or conditionally-skipped workflow as a required
@@ -40,6 +61,22 @@ status never appears.
 
 Use stable workflow names and require only checks that always report on the PR
 paths you expect to merge.
+
+## Phantom Check Troubleshooting
+
+When a PR shows `Expected — Waiting for status to be reported`:
+
+1. inspect branch protection required contexts
+2. inspect the PR head commit statuses
+3. inspect the PR head commit check runs
+4. compare the names exactly
+
+If the required context does not appear:
+
+- treat it as a stale or mismatched protection rule
+- do not keep debugging product code as if the failure were real
+- either remove the requirement temporarily or rename it to a real reporting
+  check
 
 ## Auto Labeling
 
@@ -90,3 +127,9 @@ Not included in this baseline:
 - new workflow families beyond labeling
 
 These add maintenance cost and are not needed for the current freeze baseline.
+
+## Canonical References
+
+- `knowledge/projects/comp3334-secure-im/REPO_WORKFLOW.md`
+- `skills/repo-governance/SKILL.md`
+- `docs/notes/git-pr-workflow-note.md`
