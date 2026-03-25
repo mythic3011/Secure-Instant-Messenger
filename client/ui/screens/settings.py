@@ -11,6 +11,8 @@ from textual.message import Message
 from textual.screen import Screen
 from textual.widgets import Button, Input, Static
 
+from client.ui.contracts import TrustDisplayState
+
 
 class SettingsScreen(Screen):
     """
@@ -69,6 +71,10 @@ class SettingsScreen(Screen):
         border: tall #1a1a3e;
     }
     #status { color: #00ff9f; text-style: bold; }
+    #trust_state {
+        color: #e0e0ff;
+        margin: 0 0 1 0;
+    }
     """
 
     class SetTTL(Message):
@@ -84,6 +90,7 @@ class SettingsScreen(Screen):
         self.conversation_id = conversation_id
         self.peer_username   = peer_username
         self._fingerprint    = "Loading…"
+        self._trust_state    = TrustDisplayState(verified=False, key_changed=False)
 
     def compose(self) -> ComposeResult:
         with Vertical(id="panel"):
@@ -91,6 +98,7 @@ class SettingsScreen(Screen):
             yield Static("")
             yield Static("Safety Number (verify out-of-band with your contact):", id="fp_label")
             yield Static(self._fingerprint, id="fingerprint")
+            yield Static("", id="trust_state")
             yield Button("✓ Mark as Verified", variant="success", id="btn_verify")
             yield Static("")
             yield Static("Self-destruct TTL (seconds, blank = no expiry):", id="ttl_label")
@@ -114,11 +122,22 @@ class SettingsScreen(Screen):
     def set_fingerprint(self, fp: str) -> None:
         self.query_one("#fingerprint", Static).update(fp)
 
+    def set_trust_state(self, trust_state: TrustDisplayState) -> None:
+        self._trust_state = trust_state
+        parts = [
+            "Verified" if trust_state.verified else "Not verified",
+            "Key changed" if trust_state.key_changed else "Key stable",
+        ]
+        self.query_one("#trust_state", Static).update(" · ".join(parts))
+
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id in ("btn_back", "btn_close"):
             self.app.pop_screen()
         elif event.button.id == "btn_verify":
             self.post_message(self.MarkVerified())
+            self.set_trust_state(
+                TrustDisplayState(verified=True, key_changed=False)
+            )
             self.query_one("#status", Static).update("Marked as verified.")
         elif event.button.id == "btn_ttl":
             self._save_ttl()

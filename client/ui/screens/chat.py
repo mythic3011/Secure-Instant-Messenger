@@ -15,6 +15,8 @@ from textual.message import Message
 from textual.screen import Screen
 from textual.widgets import Button, Input, ListItem, ListView, Static
 
+from client.ui.contracts import ChatHistoryResult, SendResult, UIErrorState
+
 if TYPE_CHECKING:
     pass
 
@@ -156,6 +158,11 @@ class ChatScreen(Screen):
             self.text = text
             self.ttl  = ttl
 
+    class RequestHistory(Message):
+        def __init__(self, conversation_id: str) -> None:
+            super().__init__()
+            self.conversation_id = conversation_id
+
     def __init__(
         self,
         conversation_id: str,
@@ -169,6 +176,8 @@ class ChatScreen(Screen):
         self.peer_username   = peer_username
         self.my_user_id      = my_user_id
         self._key_warning    = False
+        self._key_warning_message = ""
+        self._ui_error: UIErrorState | None = None
 
     def compose(self) -> ComposeResult:
         yield Static(f"◈ {self.peer_username}  ·  🔒 E2EE", id="header")
@@ -182,15 +191,30 @@ class ChatScreen(Screen):
 
     def on_mount(self) -> None:
         self.title = f"Chat — {self.peer_username}"
-        self.app.call_later(self._load_history)
+        self.app.call_later(self._request_history)
         # R11: sweep expired messages every 30 s while chat is open
         self._ttl_timer = self.set_interval(30, self._sweep_ttl)
 
-    async def _load_history(self) -> None:
-        from client.state.store import get_messages
-        msgs = await get_messages(self.conversation_id, limit=50)
+    async def _request_history(self) -> None:
+        self.post_message(self.RequestHistory(self.conversation_id))
+
+    def _refresh_warning(self) -> None:
+        warning = self.query_one("#warning", Static)
+        messages: list[str] = []
+        if self._ui_error is not None:
+            messages.append(self._ui_error.message)
+        if self._key_warning_message:
+            messages.append(self._key_warning_message)
+        warning.update("\n".join(messages))
+
+    def set_ui_error(self, error: UIErrorState | None) -> None:
+        self._ui_error = error
+        self._refresh_warning()
+
+    def render_history_result(self, result: ChatHistoryResult) -> None:
         lv = self.query_one("#messages", ListView)
-        for m in reversed(msgs):
+        lv.clear()
+        for m in reversed(result.messages):
             lv.append(MessageItem(
                 sender=m["sender_id"],
                 text=m["plaintext"],
@@ -199,7 +223,11 @@ class ChatScreen(Screen):
                 ttl_seconds=m["ttl_seconds"],
                 is_mine=(m["sender_id"] == self.my_user_id),
             ))
+        self.set_ui_error(result.error)
         lv.scroll_end(animate=False)
+
+    def apply_send_result(self, result: SendResult) -> None:
+        self.set_ui_error(result.error)
 
     async def _sweep_ttl(self) -> None:
         """
@@ -226,10 +254,16 @@ class ChatScreen(Screen):
     def show_key_warning(self, peer_username: str) -> None:
         """Display key change warning (R6)."""
         self._key_warning = True
-        self.query_one("#warning", Static).update(
+        self._key_warning_message = (
             f"⚠  {peer_username}'s identity key has changed! "
             "Verify fingerprint in ⚙ before trusting messages."
         )
+        self._refresh_warning()
+
+    def clear_key_warning(self) -> None:
+        self._key_warning = False
+        self._key_warning_message = ""
+        self._refresh_warning()
 
     def add_message(
         self,
