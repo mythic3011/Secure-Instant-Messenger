@@ -9,10 +9,12 @@ from __future__ import annotations
 
 import base64
 import time
+from pathlib import Path
 from typing import Any
 
 import httpx
 import structlog
+from pydantic import ValidationError
 from textual.app import App, ComposeResult
 from textual.widgets import Static
 
@@ -23,6 +25,7 @@ from client.crypto.session import (
     IdentityKeypair,
     IntegrityError,
     KeyChangeWarning,
+    LocalStorageSecurityError,
     ReplayProtector,
     SecurityError,
     build_and_encrypt,
@@ -56,6 +59,7 @@ from client.state.store import (
 )
 from client.ui.screens.conversations import ConversationListScreen
 from client.ui.screens.login import LoginScreen
+from client.ui.contracts import ChatHistoryResult, SendResult, TrustDisplayState, UIErrorState
 from shared.protocol import (
     DeliveryAck,
     LoginRequest,
@@ -64,6 +68,17 @@ from shared.protocol import (
 )
 
 log = structlog.get_logger()
+
+LOCAL_HISTORY_UNAVAILABLE = UIErrorState(
+    code="local_history_unavailable",
+    message="Local chat history is unavailable on this device.",
+    severity="warning",
+)
+LOCAL_KEY_UNAVAILABLE = UIErrorState(
+    code="local_key_unavailable",
+    message="Local secure storage is unavailable. Message was not sent.",
+    severity="error",
+)
 
 
 class IMApp(App):
@@ -103,6 +118,111 @@ class IMApp(App):
         # peer_id -> username cache (for get_keys lookups)
         self._peer_usernames: dict[str, str] = {}
 
+    def _persist_sessions(self) -> None:
+        if self._local_keys and self._password and self._username:
+            save_sessions(self._username, self._password, self._sessions)
+
+    def _derive_and_set_storage_key(self, username: str, password: str) -> None:
+        keystore_path = Path.home() / ".comp3334im" / username / "keystore.json"
+        import json
+
+        keystore_data = json.loads(keystore_path.read_text())
+        salt = base64.b64decode(keystore_data["argon2_salt_b64"])
+        storage_key = _derive_storage_key(password, salt)
+        set_storage_key(storage_key)
+
+    def _trust_state_for(self, conversation_id: str) -> TrustDisplayState | None:
+        state = self._sessions.get(conversation_id)
+        if state is None:
+            return None
+        trust = state.identity_key_cache.get_trust_state(state.session_key.peer_id)
+        if trust is None:
+            return None
+        return TrustDisplayState(
+            verified=trust.verified,
+            key_changed=trust.key_changed,
+        )
+
+    async def load_chat_history(self, conversation_id: str) -> ChatHistoryResult:
+        from client.state.store import get_messages
+
+        try:
+            return ChatHistoryResult(messages=await get_messages(conversation_id, limit=50))
+        except (LocalStorageSecurityError, SecurityError) as exc:
+            log.warning(
+                "chat_history_unavailable",
+                conversation_id=conversation_id,
+                error=type(exc).__name__,
+            )
+            return ChatHistoryResult(messages=[], error=LOCAL_HISTORY_UNAVAILABLE)
+
+    async def send_message_action(
+        self,
+        *,
+        conversation_id: str,
+        peer_id: str,
+        plaintext: str,
+    ) -> SendResult:
+        if self._client is None:
+            return SendResult(status="failed")
+
+        ttl = self._ttl_settings.get(conversation_id)
+        counter = self._counters.get(conversation_id, 0)
+        my_id = self._user_id or self._username
+        session_state = await self._ensure_session(conversation_id, peer_id)
+        if session_state is None:
+            return SendResult(status="failed")
+
+        sent_at = int(time.time())
+        envelope = build_and_encrypt(
+            send_chain=session_state.send_chain,
+            plaintext=plaintext,
+            sender_id=my_id,
+            recipient_id=peer_id,
+            conversation_id=conversation_id,
+            counter=counter,
+            ttl_seconds=ttl,
+            sent_at=sent_at,
+        )
+        if counter == 0 and hasattr(session_state, "_eph_pub_b64"):
+            envelope.eph_pub_b64 = session_state._eph_pub_b64  # type: ignore[attr-defined]
+        if counter == 0 and hasattr(session_state, "_conv_dh_pub_b64"):
+            envelope.conv_dh_pub_b64 = session_state._conv_dh_pub_b64  # type: ignore[attr-defined]
+
+        try:
+            await self._client.send_message(envelope)
+            await save_message(
+                id=envelope.id,
+                conversation_id=conversation_id,
+                sender_id=my_id,
+                recipient_id=peer_id,
+                counter=counter,
+                plaintext=plaintext,
+                sent_at=sent_at,
+                ttl_seconds=ttl,
+                delivery_status="sent",
+            )
+        except (LocalStorageSecurityError, SecurityError) as exc:
+            log.warning(
+                "send_message_blocked",
+                conversation_id=conversation_id,
+                peer_id=peer_id,
+                error=type(exc).__name__,
+            )
+            return SendResult(status="blocked", sent_at=sent_at, error=LOCAL_KEY_UNAVAILABLE)
+        except IMClientError:
+            raise
+
+        self._counters[conversation_id] = counter + 1
+        await upsert_conversation(
+            id=conversation_id,
+            peer_id=peer_id,
+            peer_username=self._peer_usernames.get(peer_id, peer_id),
+            last_message_at=sent_at,
+            unread_count=0,
+        )
+        return SendResult(status="sent", sent_at=sent_at)
+
     def compose(self) -> ComposeResult:
         yield from []  # app has no persistent widgets; screens handle layout
 
@@ -138,11 +258,13 @@ class IMApp(App):
             self._client = None
             return
         except (httpx.ConnectError, httpx.TimeoutException, httpx.NetworkError) as e:
+            log.warning("login_network_error", username=username, err=str(e))
             login_screen.query_one("#error", Static).update(f"Cannot reach server — is it running? ({type(e).__name__})")
             await self._client.__aexit__(None, None, None)
             self._client = None
             return
         except Exception as e:
+            log.warning("login_unexpected_error", username=username, err=str(e))
             login_screen.query_one("#error", Static).update(f"Unexpected error: {e}")
             await self._client.__aexit__(None, None, None)
             self._client = None
@@ -160,15 +282,7 @@ class IMApp(App):
 
         try:
             self._local_keys = load_keystore(username, password)
-            # Derive and set storage key for encrypting local messages
-            import base64
-            import json
-            from pathlib import Path
-            keystore_path = Path.home() / ".comp3334im" / username / "keystore.json"
-            keystore_data = json.loads(keystore_path.read_text())
-            salt = base64.b64decode(keystore_data["argon2_salt_b64"])
-            storage_key = _derive_storage_key(password, salt)
-            set_storage_key(storage_key)
+            self._derive_and_set_storage_key(username, password)
         except ValueError:
             login_screen.query_one("#error", Static).update("Wrong password or corrupted keystore.")
             return
@@ -189,6 +303,12 @@ class IMApp(App):
         try:
             await self._client.connect_ws(self._on_ws_message)
         except (httpx.ConnectError, httpx.TimeoutException, httpx.NetworkError, Exception) as e:
+            log.warning(
+                "websocket_connect_failed",
+                username=username,
+                error=type(e).__name__,
+                err=str(e),
+            )
             login_screen.query_one("#error", Static).update(
                 f"WebSocket connection failed: {type(e).__name__} — is server running?"
             )
@@ -232,24 +352,24 @@ class IMApp(App):
                     self.screen.query_one("#error", Static).update(
                         f"Cannot reach server — is it running? ({type(e).__name__})"
                     )
-                except Exception:
-                    pass
+                except Exception as exc:  # allow-silent-except
+                    log.warning("register_error_render_failed", err=str(exc))
                 return
             except IMClientError as e:
                 try:
                     self.screen.query_one("#error", Static).update(
                         f"Registration failed: {e.detail}"
                     )
-                except Exception:
-                    pass
+                except Exception as exc:  # allow-silent-except
+                    log.warning("register_error_render_failed", err=str(exc))
                 return
             except Exception as e:
                 try:
                     self.screen.query_one("#error", Static).update(
                         f"Unexpected error: {e}"
                     )
-                except Exception:
-                    pass
+                except Exception as exc:  # allow-silent-except
+                    log.warning("register_error_render_failed", err=str(exc))
                 return
 
         save_keystore(username, password, local_keys)
@@ -295,12 +415,11 @@ class IMApp(App):
         if self._client:
             try:
                 await self._client.logout()
-            except Exception:
-                pass
+            except Exception as exc:  # allow-silent-except
+                log.warning("logout_failed", err=str(exc))
             await self._client.__aexit__(None, None, None)
             self._client = None
-        if self._local_keys and self._password and self._username:
-            save_sessions(self._username, self._password, self._sessions)
+        self._persist_sessions()
         self.pop_screen()
 
     # ------------------------------------------------------------------
@@ -315,66 +434,26 @@ class IMApp(App):
 
         conv_id = chat.conversation_id
         peer_id = chat.peer_id
-        my_id   = self._user_id or self._username
-        ttl     = self._ttl_settings.get(conv_id)
-        counter = self._counters.get(conv_id, 0)
-
-        # require that the API client exists before proceeding
-        if self._client is None:
-            return
-
-        session_state = await self._ensure_session(conv_id, peer_id)
-        if session_state is None:
-            chat.add_message("system", "Could not establish session.", int(time.time()), "sent", None, False)
-            return
-
-        sent_at  = int(time.time())
-        envelope = build_and_encrypt(
-            send_chain=session_state.send_chain,
-            plaintext=msg.text,
-            sender_id=my_id,
-            recipient_id=peer_id,
-            conversation_id=conv_id,
-            counter=counter,
-            ttl_seconds=ttl,
-            sent_at=sent_at,
-        )
-
-        # Include eph_pub and conv_dh_pub on the first message so Bob can derive the session key
-        if counter == 0 and hasattr(session_state, "_eph_pub_b64"):
-            envelope.eph_pub_b64 = session_state._eph_pub_b64  # type: ignore[attr-defined]
-        if counter == 0 and hasattr(session_state, "_conv_dh_pub_b64"):
-            envelope.conv_dh_pub_b64 = session_state._conv_dh_pub_b64  # type: ignore[attr-defined]
 
         try:
-            await self._client.send_message(envelope)
+            result = await self.send_message_action(
+                conversation_id=conv_id,
+                peer_id=peer_id,
+                plaintext=msg.text,
+            )
         except IMClientError as e:
-            chat.add_message("system", f"Send failed: {e.detail}", sent_at, "sent", None, False)
+            chat.add_message("system", f"Send failed: {e.detail}", int(time.time()), "sent", None, False)
             return
-
-        self._counters[conv_id] = counter + 1
-
-        await save_message(
-            id=envelope.id,
-            conversation_id=conv_id,
-            sender_id=my_id,
-            recipient_id=peer_id,
-            counter=counter,
-            plaintext=msg.text,
-            sent_at=sent_at,
-            ttl_seconds=ttl,
-            delivery_status="sent",
-        )
-
-        await upsert_conversation(
-            id=conv_id,
-            peer_id=peer_id,
-            peer_username=self._peer_usernames.get(peer_id, peer_id),
-            last_message_at=sent_at,
-            unread_count=0,
-        )
-
-        chat.add_message(my_id, msg.text, sent_at, "sent", ttl, is_mine=True)
+        chat.apply_send_result(result)
+        if result.status == "failed":
+            chat.add_message("system", "Could not establish session.", int(time.time()), "sent", None, False)
+            return
+        if result.status == "blocked":
+            return
+        if result.sent_at is None:
+            return
+        ttl = self._ttl_settings.get(conv_id)
+        chat.add_message(self._user_id or self._username, msg.text, result.sent_at, "sent", ttl, is_mine=True)
 
     # ------------------------------------------------------------------
     # Friends screen events
@@ -390,17 +469,18 @@ class IMApp(App):
             try:
                 friends = self.screen
                 friends.populate_pending([r.model_dump() for r in requests])
-            except Exception:
-                pass
-        except Exception:
-            pass
+            except Exception as exc:  # allow-silent-except
+                log.warning("friends_screen_update_failed", err=str(exc))
+        except (IMClientError, httpx.ConnectError, httpx.TimeoutException, httpx.NetworkError) as exc:
+            log.warning("friends_pending_load_failed", err=str(exc))
 
     async def on_friends_screen_send_request(self, msg: Any) -> None:
         if self._client is None:
             return
         try:
             friends = self.screen
-        except Exception:
+        except Exception as exc:  # allow-silent-except
+            log.warning("friends_screen_lookup_failed", err=str(exc))
             return
         try:
             await self._client.send_friend_request(msg.username)
@@ -419,8 +499,8 @@ class IMApp(App):
             await self._client.handle_friend_request(msg.request_id, "accept")
             requests = await self._client.list_pending_requests()
             friends.populate_pending([r.model_dump() for r in requests])
-        except Exception:
-            pass
+        except (IMClientError, httpx.ConnectError, httpx.TimeoutException, httpx.NetworkError) as exc:
+            log.warning("friend_request_accept_failed", request_id=msg.request_id, err=str(exc))
 
     async def on_friends_screen_decline_request(self, msg: Any) -> None:
         from client.ui.screens.friends import FriendsScreen
@@ -433,8 +513,20 @@ class IMApp(App):
             await self._client.handle_friend_request(msg.request_id, "decline")
             requests = await self._client.list_pending_requests()
             friends.populate_pending([r.model_dump() for r in requests])
-        except Exception:
-            pass
+        except (IMClientError, httpx.ConnectError, httpx.TimeoutException, httpx.NetworkError) as exc:
+            log.warning("friend_request_decline_failed", request_id=msg.request_id, err=str(exc))
+
+    async def on_chat_screen_request_history(self, msg: Any) -> None:
+        from client.ui.screens.chat import ChatScreen
+
+        chat = self.screen
+        if not isinstance(chat, ChatScreen):
+            return
+        result = await self.load_chat_history(msg.conversation_id)
+        chat.render_history_result(result)
+        trust_state = self._trust_state_for(msg.conversation_id)
+        if trust_state and trust_state.key_changed:
+            chat.show_key_warning(chat.peer_username)
 
     # ------------------------------------------------------------------
     # Settings screen events
@@ -460,9 +552,15 @@ class IMApp(App):
             if peer_pub:
                 fp = compute_fingerprint(self._local_keys.identity_kp.public_bytes(), peer_pub)
                 settings_screen.set_fingerprint(fp)
+            trust_state = self._trust_state_for(msg.conversation_id)
+            if trust_state is not None:
+                settings_screen.set_trust_state(trust_state)
 
     async def on_settings_screen_mark_verified(self, msg: Any) -> None:
         from client.ui.screens.chat import ChatScreen
+        from client.ui.screens.settings import SettingsScreen
+
+        settings_screen = self.screen
         stack = self.screen_stack
         chat = stack[-2] if len(stack) >= 2 else None
         if isinstance(chat, ChatScreen):
@@ -471,10 +569,12 @@ class IMApp(App):
                 peer_pub = state.identity_key_cache.get(chat.peer_id)
                 if peer_pub:
                     state.identity_key_cache.mark_verified(chat.peer_id, peer_pub)
-                    try:
-                        chat.query_one("#warning", Static).update("")
-                    except Exception:
-                        pass
+                    self._persist_sessions()
+                    chat.clear_key_warning()
+                    if isinstance(settings_screen, SettingsScreen):
+                        trust_state = self._trust_state_for(chat.conversation_id)
+                        if trust_state is not None:
+                            settings_screen.set_trust_state(trust_state)
 
     # ------------------------------------------------------------------
     # WebSocket message handler
@@ -490,7 +590,8 @@ class IMApp(App):
     async def _handle_incoming_message(self, payload: dict) -> None:
         try:
             envelope = MessageEnvelope.model_validate(payload)
-        except Exception:
+        except ValidationError as exc:
+            log.warning("incoming_message_invalid", err=str(exc))
             return
 
         # if we haven't established a network client nothing can proceed
@@ -517,7 +618,7 @@ class IMApp(App):
             except (httpx.ConnectError, httpx.TimeoutException, httpx.NetworkError) as e:
                 log.warning("get_keys network error", peer=peer_username, err=str(e))
                 return
-            except Exception as e:
+            except IMClientError as e:
                 log.warning("get_keys failed", peer=peer_username, err=str(e))
                 return
 
@@ -548,6 +649,7 @@ class IMApp(App):
                 identity_key_cache=cache,
             )
             self._sessions[conv_id] = state
+            self._persist_sessions()
 
         # Key change check on re-keying messages
         key_changed = False
@@ -561,8 +663,10 @@ class IMApp(App):
                     key_changed = state.identity_key_cache.check_and_update(
                         peer_id, peer_identity_pub
                     )
+                    self._persist_sessions()
                 except KeyChangeWarning:
                     key_changed = True
+                    self._persist_sessions()
                 except IMClientError as exc:
                     log.warning("key_bundle_refresh_failed", peer=peer_username, err=str(exc))
                 except (httpx.ConnectError, httpx.TimeoutException, httpx.NetworkError) as exc:
@@ -591,18 +695,33 @@ class IMApp(App):
             )
             return
 
+        from client.ui.screens.chat import ChatScreen
+        active_chat = self.screen if isinstance(self.screen, ChatScreen) else None
+
         # Persist locally
-        await save_message(
-            id=envelope.id,
-            conversation_id=conv_id,
-            sender_id=peer_id,
-            recipient_id=my_id,
-            counter=envelope.counter,
-            plaintext=plaintext,
-            sent_at=envelope.sent_at,
-            ttl_seconds=envelope.ttl_seconds,
-            delivery_status="delivered",
-        )
+        try:
+            await save_message(
+                id=envelope.id,
+                conversation_id=conv_id,
+                sender_id=peer_id,
+                recipient_id=my_id,
+                counter=envelope.counter,
+                plaintext=plaintext,
+                sent_at=envelope.sent_at,
+                ttl_seconds=envelope.ttl_seconds,
+                delivery_status="delivered",
+            )
+        except (LocalStorageSecurityError, SecurityError) as exc:
+            log.warning(
+                "incoming_message_store_failed",
+                conversation_id=conv_id,
+                message_id=envelope.id,
+                error=type(exc).__name__,
+            )
+            if active_chat and active_chat.conversation_id == conv_id:
+                active_chat.set_ui_error(LOCAL_HISTORY_UNAVAILABLE)
+            return
+        self._persist_sessions()
 
         peer_username = self._peer_usernames.get(peer_id, peer_id)
         await upsert_conversation(
@@ -614,8 +733,6 @@ class IMApp(App):
         )
 
         # Route to active chat or increment unread
-        from client.ui.screens.chat import ChatScreen
-        active_chat = self.screen if isinstance(self.screen, ChatScreen) else None
         if active_chat and active_chat.conversation_id == conv_id:
             active_chat.add_message(
                 peer_id, plaintext, envelope.sent_at, "delivered",
@@ -707,6 +824,7 @@ class IMApp(App):
         state._conv_dh_pub_b64 = base64.b64encode(conv_dh_pub_bytes).decode()  # type: ignore[attr-defined]
 
         self._sessions[conv_id] = state
+        self._persist_sessions()
         return state
 
     # ------------------------------------------------------------------
@@ -714,7 +832,6 @@ class IMApp(App):
     # ------------------------------------------------------------------
 
     async def on_unmount(self) -> None:
-        if self._local_keys and self._password and self._username:
-            save_sessions(self._username, self._password, self._sessions)
+        self._persist_sessions()
         if self._client:
             await self._client.__aexit__(None, None, None)

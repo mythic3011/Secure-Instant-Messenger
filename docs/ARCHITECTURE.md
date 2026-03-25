@@ -1,7 +1,7 @@
 # COMP3334 Secure IM — Architecture & Protocol Design
 
 > Stack: Python (FastAPI + Textual + SQLite). Implemented and tested.
-> 5-person team | Deadline: 2 April 2026 | Tests: 53/53 passing
+> 5-person team | Deadline: 2 April 2026 | Implemented and tested
 
 ---
 
@@ -230,7 +230,7 @@ def compute_fingerprint(my_pub: bytes, their_pub: bytes) -> str:
   "id": "uuid-v4",
   "sender_id": "alice_user_id",
   "recipient_id": "bob_user_id",
-  "conversation_id": "sha256(sorted(alice_id, bob_id))[:16]",
+  "conversation_id": "server-issued random conversation ID",
   "counter": 42,
   "nonce_b64": "base64(12 random bytes)",
   "ciphertext_b64": "base64(AES-256-GCM output)",
@@ -285,13 +285,18 @@ On receiving a message:
 
 Out-of-order tolerance: window of 50 counters. Anything below `last_counter - 50` is rejected.
 
-### 5.2 Server-side (DB constraint)
+### 5.2 Server-side (service + DB)
 
 ```sql
 UNIQUE(conversation_id, sender_id, counter)
 ```
 
-The DB rejects any duplicate `(conversation_id, sender_id, counter)` tuple before it reaches the client — a second layer of replay prevention.
+The server enforces replay resistance in two steps:
+
+1. `MessageService` checks the sender's last seen counter for the conversation
+   and rejects stale or regressed counters.
+2. The DB constraint rejects exact duplicate `(conversation_id, sender_id, counter)`
+   tuples before they reach the client.
 
 ---
 
@@ -301,7 +306,7 @@ The DB rejects any duplicate `(conversation_id, sender_id, counter)` tuple befor
 | --- | --------------------------- | ----------------------------------------------------------------------- |
 | R1  | Registration                | `POST /v1/auth/register` — Argon2id hash, unique username, rate-limited |
 | R2  | Login + OTP                 | `POST /v1/auth/login` — Argon2id verify + pyotp TOTP (±1 window)        |
-| R3  | Logout                      | `DELETE /v1/auth/session` — token revoked in DB immediately             |
+| R3  | Logout                      | `POST /v1/auth/logout` — token revoked in DB immediately                |
 | R4  | Per-device identity keypair | Ed25519 generated client-side; private key never leaves device          |
 | R5  | Fingerprint UI              | SHA256(sorted pub keys), 5×8 hex groups in ⚙ settings screen            |
 | R6  | Key change detection        | `IdentityKeyCache.check_and_update()` on every re-keying message        |
@@ -315,11 +320,11 @@ The DB rejects any duplicate `(conversation_id, sender_id, counter)` tuple befor
 | R14 | Request lifecycle           | accept / decline / cancel endpoints                                     |
 | R15 | Block / remove              | `PUT /v1/friends/{id}/block`, `DELETE /v1/friends/{id}`                 |
 | R16 | Anti-spam                   | Non-friends cannot send messages (DB friendship check)                  |
-| R17 | Delivery states             | `sent` -> `delivered` -> `read`                                         |
-| R18 | Delivered semantics         | ACK sent by recipient client via `POST /v1/messages/{id}/ack`           |
+| R17 | Delivery states             | `sent` -> `delivered`; `read` is reserved for future UX                 |
+| R18 | Delivered semantics         | server-assisted ACK via `POST /v1/messages/ack`                         |
 | R19 | Metadata disclosure         | Documented: server sees timing, sizes, contact graph                    |
 | R20 | Offline queue               | Ciphertext stored in `messages` table; flushed on WS reconnect          |
-| R21 | Retention                   | Deleted after delivery OR after `max_message_age_days`                  |
+| R21 | Retention                   | Deleted on TTL expiry or age cap; delivery alone does not delete ciphertext |
 | R22 | Replay robustness           | Same counter/ID mechanism handles retransmission                        |
 | R23 | Conversation list           | `GET /v1/conversations` ordered by `last_message_at DESC`               |
 | R24 | Unread counters             | `unread_count_a` / `unread_count_b` columns per conversation            |
@@ -337,7 +342,7 @@ On login:
   2. Store SHA256(token) in sessions table — raw token never persisted
   3. Return token to client in LoginResponse.access_token
   4. Client sends: Authorization: Bearer <token>
-     WebSocket auth: ?token=<token> query param
+     WebSocket auth: first-frame JSON auth after TLS handshake
 
 On each request:
   1. Compute SHA256(received_token)
@@ -387,7 +392,7 @@ Key derivation:
 File permissions: 600 (owner read/write only)
 
 Session cache: ~/.comp3334im/<username>/sessions.json
-  Same storage_key encrypts session keys + ReplayProtector state.
+  Same storage_key encrypts session keys, ratchet state, and ReplayProtector state.
 
 Threat coverage:
   - Disk theft: cannot decrypt without user password
@@ -490,6 +495,10 @@ project/
 │   │   ├── config.py              # pydantic-settings, lru_cache, dev auto-keygen
 │   │   ├── database.py            # aiosqlite, WAL+FK+secure_delete, migration runner
 │   │   └── security.py            # Argon2id, opaque tokens, TOTP encryption, rate limiting
+│   ├── services/
+│   │   ├── auth_service.py        # auth/session workflow logic
+│   │   ├── conversation_service.py# unread counters and conversation metadata
+│   │   └── message_service.py     # replay checks, persistence, ACK flow
 │   ├── ws/
 │   │   └── handler.py             # WebSocket connection manager, offline queue flush
 │   └── migrations/
@@ -513,7 +522,7 @@ project/
 │           ├── friends.py         # friend request management
 │           └── settings.py        # fingerprint display (R5), TTL config (R10)
 ├── shared/
-│   └── protocol.py                # Pydantic wire models, make_conversation_id(), enums
+│   └── protocol.py                # Pydantic wire models and protocol enums
 ├── tests/
 │   ├── unit/
 │   │   ├── test_crypto.py         # 22 tests: Ed25519, X25519, AES-GCM, replay, fingerprint
@@ -658,7 +667,7 @@ Two jobs run on every push/PR to `main`:
 
 | Job            | What it does                                                                                          |
 | -------------- | ----------------------------------------------------------------------------------------------------- |
-| `test`         | `uv sync --extra dev` -> `pytest -v --tb=short` (45 tests)                                            |
+| `test`         | `uv sync --extra dev` -> `pytest -v --tb=short`                                                        |
 | `docker-build` | bootstrap env -> `docker compose up --build -d` -> wait for healthcheck -> `curl /health` -> teardown |
 
 ### 13.2 Local Deploy Test (`scripts/test-deploy.sh`)
@@ -705,11 +714,15 @@ _Last updated: 2026-03-13_
 
 This section documents known limitations. These are intentional trade-offs made for implementation simplicity within the project scope, not oversights.
 
-### 14.1 No Per-Message Forward Secrecy
+### 14.1 No Full Signal-Style Double Ratchet
 
-The 2-DH protocol provides forward secrecy for the initial key exchange (the ephemeral key is discarded after session establishment), but subsequent messages reuse the cached session key with only a counter increment. If the session key is compromised (e.g., via memory dump on the client), all past and future messages in that conversation are exposed.
+The design uses 2-DH to establish a root key, then a symmetric ratchet to derive
+fresh per-message keys. This gives per-message forward secrecy for message keys,
+but it does not provide the full recovery and post-compromise properties of a
+Signal-style Double Ratchet with DH-ratchet turns.
 
-**Mitigation in a production system:** Implement the Double Ratchet algorithm (as in Signal) to derive a new symmetric key for each message. This was not implemented due to the significant complexity of handling out-of-order messages, lost messages, and ratchet state persistence.
+**Mitigation in a production system:** Implement a full Double Ratchet with DH
+ratchet steps and stronger post-compromise recovery semantics.
 
 ### 14.2 Static DH Key Reuse Across Conversations
 
@@ -726,7 +739,8 @@ The server learns:
 - **Message sizes:** approximate plaintext length (ciphertext size minus GCM overhead)
 - **Online status:** WebSocket connection state
 - **Delivery ACKs:** which specific messages were successfully decrypted (ACK is plaintext; see `DeliveryAck` docstring in `shared/protocol.py` for rationale)
-- **Conversation IDs:** deterministic (`SHA256(sorted(user_a, user_b))[:16]`), so anyone who knows two user IDs can compute their conversation ID
+- **Conversation IDs:** random server-assigned identifiers. The server still
+  learns the contact graph through friendship rows and message routing metadata.
 
 **Mitigation in a production system:** Metadata-resistant messaging requires techniques like sealed sender (Signal), onion routing, or private information retrieval — all far beyond the scope of this project.
 
@@ -745,6 +759,13 @@ The TTL-based self-destruct (R10–R12) is best-effort:
 - Server-side deletion runs on a configurable interval (default 300s), so messages may persist briefly past expiry
 - Client-side deletion depends on the app running; messages on disk persist until next launch
 
-### 14.6 Deterministic Conversation ID
+### 14.6 Delivery ACK Trade-off
 
-`make_conversation_id(a, b) = SHA256(sorted(a, b))[:16]` is deterministic. Under the HbC model this is acceptable (the server already knows both participants), but any party who knows two user IDs can compute whether a conversation exists between them. This does not leak message content but could confirm social connections.
+The system uses a server-assisted acknowledgement path (assignment Option A).
+When the recipient client acknowledges delivery, the server learns that delivery
+occurred and when it occurred. This is simpler to implement and easier to demo,
+but exposes delivery timing metadata and provides weaker authenticity semantics
+than an end-to-end protected acknowledgement.
+
+**Mitigation in a production system:** Implement Option B, where delivery ACKs
+are bound to the session and protected end-to-end.

@@ -1,6 +1,6 @@
 # COMP3334 Project — Task Breakdown
 
-## Status: In Progress — 53/53 tests passing ✅
+## Status: In Progress
 
 **Team:** 5 people (P1–P5)
 **Deadline:** April 2, 2026 16:59
@@ -11,7 +11,7 @@
 
 ### Foundation (Done)
 
-- `shared/protocol.py` — Pydantic wire models, `make_conversation_id()`, all enums
+- `shared/protocol.py` — Pydantic wire models and protocol enums
 - `shared/__init__.py`
 - `001_init.sql` -> `server/migrations/001_init.sql` — full DB schema
 
@@ -104,8 +104,9 @@
 
 1. ~~**`client/ui/app.py` event handler naming**~~ — ✅ All handlers verified correct (`on_login_screen_login_success`, `on_conversation_list_screen_conversation_selected`, etc.).
 2. ~~**`make_key_signature` import**~~ — ✅ Imported directly from `client/crypto/session.py` in `app.py:31`. No issue.
-3. **TLS in dev** — client uses `verify=False`. For production, use real certs and set `verify=True`.
+3. **TLS in dev** — verification stays enabled by default. Prefer trusting the dev cert with `--ca-cert`; use `--no-verify-tls` only as a local exception.
 4. **pytest requires `--extra dev`** — run as `uv run --extra dev pytest` (pytest is in `[project.optional-dependencies].dev`).
+5. **Submission guardrails enabled** — `scripts/check_silent_excepts.py` and `scripts/check_stale_security_claims.py` run in pre-commit and `lint.yml`.
 
 ---
 
@@ -133,9 +134,20 @@ uv run --extra dev pytest tests/unit/ -v
 # Run security tests
 uv run --extra dev pytest tests/security/ -v
 
+# Guardrails for submission freeze
+UV_CACHE_DIR=$PWD/.uv-cache uv run python scripts/check_silent_excepts.py
+UV_CACHE_DIR=$PWD/.uv-cache uv run python scripts/check_stale_security_claims.py
+
+# Type check
+./.venv/bin/mypy client server
+
 # Run integration tests
 uv run --extra dev pytest tests/integration/ -v
 
 # Docker
 docker compose up --build
 ```
+
+## Final Assurance Story
+
+Before submission, development moved from feature work into hardening mode. The final gate is layered: `ruff`, `bandit`, two custom repository checks, `mypy`, and then the full `pytest` suite. The custom checks enforce two important invariants: silent broad exception swallowing is blocked, and stale security claims in docs or comments are blocked. MyPy is used in a non-strict, boundary-focused way to catch `None` crashes and wrong return shapes across client, storage, and API boundaries. The result is not just “the tests pass”, but that static checks, invariant enforcement, type checks, and runtime tests all support the same reliability and security claims.

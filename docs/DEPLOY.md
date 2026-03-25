@@ -157,6 +157,11 @@ uv run uvicorn server.main:app --host 0.0.0.0 --port 8443
 
 Open a **new terminal** in the project directory:
 
+> Note:
+> Course tutorial materials (for example `docs/Tutorial/Tutorial.pdf`) are not
+> the deployment baseline for this project. This project uses Python 3.12 +
+> `uv` for reproducible environments.
+
 ```bash
 uv run python -m client.main --server https://localhost:8443
 ```
@@ -226,11 +231,21 @@ uv run --extra dev pytest tests/integration/ -v
 # Security tests (replay attack, ciphertext tampering)
 uv run --extra dev pytest tests/security/ -v
 
+# Repository guardrails (submission freeze)
+UV_CACHE_DIR=$PWD/.uv-cache uv run python scripts/check_silent_excepts.py
+UV_CACHE_DIR=$PWD/.uv-cache uv run python scripts/check_stale_security_claims.py
+
+# Type check
+./.venv/bin/mypy client server
+
 # All tests
 uv run --extra dev pytest -v
 ```
 
-Expected output: **53 tests passed**.
+Use the fresh `pytest` summary as the evidence source instead of relying on a
+hard-coded test count in this document. Use the guard-script outputs as
+evidence that silent broad exception swallowing and stale security claims are
+repository-enforced invariants.
 
 ---
 
@@ -239,7 +254,7 @@ Expected output: **53 tests passed**.
 | Problem                               | Solution                                                                                                                   |
 | ------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
 | Port 8443 already in use              | Change `PORT=8443` in `.env.local` to another port, e.g. `8444`                                                            |
-| TLS certificate errors in client      | Expected for self-signed certs — client uses `verify=False` in dev mode                                                    |
+| TLS certificate errors in client      | Expected for self-signed certs — prefer `--ca-cert <path>` to trust the dev cert. Use `--no-verify-tls` only as a local development exception. |
 | TOTP code rejected                    | Ensure your system clock is accurate. Ubuntu: `timedatectl set-ntp true`. Windows: Settings -> Time & Language -> Sync now |
 | Docker permission denied (Linux)      | Run `sudo usermod -aG docker $USER` then log out and back in                                                               |
 | `uv: command not found`               | Restart terminal after installing `uv`, or use `pip install -e .` instead                                                  |

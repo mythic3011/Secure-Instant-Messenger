@@ -204,15 +204,15 @@ class TrustStateError(SecurityError):
 # ---------------------------------------------------------------------------
 # Session establishment — 2-DH + HKDF
 #
-# Why 2-DH and not X3DH or Double Ratchet:
+# Why 2-DH plus a symmetric ratchet, not X3DH or full Double Ratchet:
 #   X3DH requires a server-managed one-time pre-key bundle with replenishment
-#   logic. Double Ratchet requires per-message ratchet state and out-of-order
-#   message handling. Both add significant complexity. Our 2-DH (static-static
-#   + ephemeral-static) provides forward secrecy for the initial exchange via
-#   the ephemeral key, but reuses the session key for subsequent messages.
-#   Trade-off: simpler implementation at the cost of no per-message forward
-#   secrecy. If the session key leaks, all messages in that conversation are
-#   exposed. This is documented in ARCHITECTURE.md §14.
+#   logic. A full Double Ratchet requires DH-ratchet turns, skipped-message-key
+#   persistence, and more complex recovery logic. This project keeps the
+#   initial root-key establishment explainable with 2-DH, then derives
+#   per-message symmetric keys using a one-way ratchet.
+#   Trade-off: simpler than Signal while still providing per-message forward
+#   secrecy for the message keys. It does not provide the same recovery and
+#   post-compromise properties as a full Double Ratchet.
 # ---------------------------------------------------------------------------
 
 
@@ -395,9 +395,10 @@ class RatchetChain:
 
     def try_skipped(self, index: int) -> bytes | None:
         """Pop and return a previously cached skipped key, or None."""
-        return self.skipped_keys.pop(index, None)
+        value = self.skipped_keys.pop(index, None)
+        return value if isinstance(value, bytes) else None
 
-    def as_dict(self) -> dict:
+    def as_dict(self) -> dict[str, object]:
         return {
             "chain_key_hex": self.chain_key.hex(),
             "index": self.index,

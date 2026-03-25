@@ -29,21 +29,20 @@ MAX_SKIP         = 50     # max skipped messages in ratchet chain
 # ---------------------------------------------------------------------------
 # Session lifecycle limits
 #
-# SECURITY TRADE-OFF: Session message limit
-#   Our 2-DH protocol reuses the session key for all messages in a conversation
-#   (unlike Double Ratchet which derives new keys per message). This means if
-#   the session key is compromised, ALL messages in that session are exposed.
+# SECURITY TRADE-OFF: Session re-key limit
+#   After the initial 2-DH setup, the client uses a symmetric ratchet to derive
+#   a fresh message key for each message. This provides per-message forward
+#   secrecy within a conversation. We still enforce a hard session message limit
+#   so long-lived conversations periodically establish a fresh root key.
 #
-#   To mitigate this, we enforce a hard message limit per session. When reached,
-#   the client MUST re-derive a fresh session key (new ephemeral DH exchange).
-#   This bounds the blast radius of a key compromise to MAX_SESSION_MESSAGES.
+#   This does not replace a full Signal-style Double Ratchet. It is a simpler
+#   bound on long-lived session exposure and a clear re-key trigger for the UI.
 #
 #   Value rationale:
 #   - Too low: frequent re-keying adds latency and UX friction
-#   - Too high: larger exposure window if key leaks
+#   - Too high: larger exposure window for long-lived root-key compromise
 #   - 500 messages ≈ a moderately active conversation for several days
-#   - Signal's ratchet advances per-message; our limit compensates for the
-#     lack of per-message forward secrecy by forcing periodic re-keying.
+#   - periodic re-keying keeps the simplified design explainable for the report
 # ---------------------------------------------------------------------------
 MAX_SESSION_MESSAGES = 500  # force re-key after this many messages per session
 
@@ -54,7 +53,7 @@ MAX_SESSION_MESSAGES = 500  # force re-key after this many messages per session
 #   - sender_id, recipient_id: who is talking to whom
 #   - conversation_id: which conversation a message belongs to
 #   - message timing (sent_at, delivered_at): when messages are sent
-#   - delivery_status: whether a message was delivered/read
+#   - delivery_status: whether a message was sent or delivered
 #   - message size (ciphertext length): approximate plaintext length
 #
 # The server CANNOT see:
@@ -86,7 +85,7 @@ class FriendRequestStatus(str, enum.Enum):
 
 class MessageType(str, enum.Enum):
     MESSAGE = "message"
-    ACK     = "ack"        # delivery acknowledgement (E2EE-protected)
+    ACK     = "ack"        # delivery acknowledgement event
     SYSTEM  = "system"     # key change warning, etc.
 
 
@@ -299,5 +298,3 @@ class ConversationOut(BaseModel):
 
 class ConversationListResponse(BaseModel):
     conversations: list[ConversationOut]
-
-

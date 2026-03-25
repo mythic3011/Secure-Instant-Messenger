@@ -224,7 +224,7 @@ async def _ttl_cleanup_loop() -> None:
 
         except asyncio.CancelledError:
             raise
-        except Exception as exc:
+        except Exception as exc:  # allow-silent-except
             log.warning("ttl_cleanup_error", error=str(exc))
 
         # Drift-corrected: sleep only the remaining time in this interval

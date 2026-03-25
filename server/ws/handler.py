@@ -72,7 +72,7 @@ async def websocket_endpoint(websocket: WebSocket, user_id: str) -> None:
 
     except WebSocketDisconnect:
         log.info("ws_disconnected_clean", user_id=user_id)
-    except Exception as exc:
+    except Exception as exc:  # allow-silent-except
         log.warning("ws_error", user_id=user_id, error=str(exc))
     finally:
         async with _lock:
@@ -129,7 +129,14 @@ async def _flush_offline_queue(websocket: WebSocket, user_id: str) -> None:
 
 
 async def _handle_client_message(user_id: str, raw: str) -> None:
-    """Process a message received from the client over WebSocket (e.g. ACK)."""
+    """
+    Process a message received from the client over WebSocket.
+
+    Delivery acknowledgements handled here are server-assisted metadata events.
+    They are not E2EE payloads: the server learns that delivery occurred and
+    when it occurred. This is an intentional Option A trade-off kept simple for
+    the assignment's HbC server model.
+    """
     try:
         msg = json.loads(raw)
     except json.JSONDecodeError:
@@ -141,6 +148,10 @@ async def _handle_client_message(user_id: str, raw: str) -> None:
         return  # keepalive response
 
     # Client-side ACK: {"type": "ack", "message_id": "..."}
+    # Security trade-off:
+    #   - simple and easy to demo/report
+    #   - server can observe delivery timing
+    #   - stronger Option B would encrypt/bind the ACK end-to-end
     if msg.get("type") == "ack":
         message_id = msg.get("message_id")
         if not message_id:

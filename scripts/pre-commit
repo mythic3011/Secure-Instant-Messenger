@@ -15,4 +15,10 @@ echo "ruff check …"
 uv run ruff check "${PY_FILES[@]}"
 echo "ruff format --check …"
 uv run ruff format --check "${PY_FILES[@]}"
+echo "mypy …"
+./.venv/bin/mypy client server
+echo "check silent broad excepts …"
+uv run python scripts/check_silent_excepts.py
+echo "check stale security claims …"
+uv run python scripts/check_stale_security_claims.py
 echo "pre-commit checks passed"

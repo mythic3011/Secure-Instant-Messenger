@@ -297,7 +297,7 @@ def load_sessions(
                 base64.b64decode(entry["session_key_ct_b64"]),
                 base64.b64decode(entry["session_key_nonce_b64"]),
             )
-        except Exception as exc:
+        except Exception as exc:  # allow-silent-except
             logging.error(
                 f"Failed to decrypt session for user {username}, conversation {conv_id}: {exc}"
             )

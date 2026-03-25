@@ -18,6 +18,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import logging
 import os
 import ssl
 import sys
@@ -27,6 +28,8 @@ from pathlib import Path
 from typing import Any
 
 import httpx
+
+log = logging.getLogger(__name__)
 
 # ── Custom user config ────────────────────────────────────────────────────────
 # Edit this list to add/remove seed users.
@@ -93,8 +96,8 @@ def _load_totp_secrets() -> dict[str, str]:
     if TOTP_STATE_FILE.exists():
         try:
             return json.loads(TOTP_STATE_FILE.read_text())
-        except Exception:
-            pass
+        except (json.JSONDecodeError, OSError) as exc:
+            log.warning("failed to load persisted TOTP state: %s", exc)
     return {}
 
 
@@ -363,8 +366,8 @@ async def send_mock_messages(
             for conv in resp.get("conversations", []):
                 a, b = sorted([sess.user_id, conv["peer_id"]])
                 conv_id_cache[(a, b)] = conv["id"]
-        except Exception:
-            pass
+        except RuntimeError as exc:
+            warn(f"Skipping cached conversations for {uname}: {exc}")
 
     # Per-pair counters so replay protection doesn't reject sequential messages
     counters: dict[tuple[str, str], int] = {}

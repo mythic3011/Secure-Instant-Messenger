@@ -12,6 +12,7 @@ import logging
 import ssl
 import warnings
 from collections.abc import Awaitable, Callable
+from typing import Any
 from typing import Literal
 
 import httpx
@@ -37,7 +38,38 @@ from shared.protocol import (
 
 log = logging.getLogger(__name__)
 
-MessageCallback = Callable[[dict], Awaitable[None]]
+MessageCallback = Callable[[dict[str, Any]], Awaitable[None]]
+
+
+def apply_tls_policy(
+    *,
+    verify_tls: bool = True,
+    ca_cert: str | None = None,
+    pin_sha256: str | None = None,
+) -> tuple[bool | str | ssl.SSLContext, ssl.SSLContext | None]:
+    """
+    Resolve HTTP and WebSocket TLS settings.
+
+    Default is fail-closed verification. Insecure mode is only enabled when the
+    caller explicitly passes verify_tls=False.
+    """
+    if not verify_tls and ca_cert is None:
+        log.warning("tls_insecure_mode_enabled")
+
+    ws_ssl_ctx = None
+    if pin_sha256 is not None or ca_cert is not None or not verify_tls:
+        ws_ssl_ctx = _make_ssl_ctx(
+            verify=verify_tls,
+            ca_cert=ca_cert,
+            pin_sha256=pin_sha256,
+        )
+
+    http_verify: bool | str | ssl.SSLContext
+    if ws_ssl_ctx is not None and pin_sha256 is not None:
+        http_verify = ws_ssl_ctx
+    else:
+        http_verify = ca_cert if ca_cert else verify_tls
+    return http_verify, ws_ssl_ctx
 
 
 def _make_ssl_ctx(
@@ -50,7 +82,7 @@ def _make_ssl_ctx(
 
     Priority:
       1. ca_cert provided -> load it as trusted CA (for self-signed certs)
-      2. verify=False     -> disable verification with deprecation warning
+      2. verify_tls=False -> disable verification with deprecation warning
       3. default          -> system CA bundle
 
     If pin_sha256 is provided, a verify callback is added to check the certificate
@@ -107,44 +139,38 @@ class IMClient:
         self._base_url = base_url.rstrip("/")
         self._token: str | None = None
         self._http: httpx.AsyncClient | None = None
-        self._ws_task: asyncio.Task | None = None
+        self._ws_task: asyncio.Task[None] | None = None
         self._on_message: MessageCallback | None = None
         self._verify_tls = verify_tls
         self._ca_cert = ca_cert
         self._pin_sha256 = pin_sha256.lower() if pin_sha256 else None
 
     async def __aenter__(self) -> IMClient:
-        # httpx: use ca_cert path if provided, else fall back to verify_tls bool
-        verify: bool | str = self._ca_cert if self._ca_cert else self._verify_tls
-
-        # Create SSL context with certificate pinning if pin_sha256 is provided
-        ssl_ctx = None
-        if self._pin_sha256 and self._verify_tls:
-            ssl_ctx = _make_ssl_ctx(
-                verify=self._verify_tls,
-                ca_cert=self._ca_cert,
-                pin_sha256=self._pin_sha256,
-            )
+        verify, _ = apply_tls_policy(
+            verify_tls=self._verify_tls,
+            ca_cert=self._ca_cert,
+            pin_sha256=self._pin_sha256,
+        )
 
         self._http = httpx.AsyncClient(
             base_url=self._base_url,
             timeout=10.0,
-            verify=ssl_ctx if ssl_ctx else verify,
+            verify=verify,
             trust_env=False,
         )
         return self
 
-    async def __aexit__(self, *_) -> None:
+    async def __aexit__(self, *_: object) -> None:
         await self.disconnect()
         if self._http:
             await self._http.aclose()
 
-    def _headers(self) -> dict:
+    def _headers(self) -> dict[str, str]:
         if self._token:
             return {"Authorization": f"Bearer {self._token}"}
         return {}
 
-    async def _request(self, method: str, path: str, **kwargs) -> httpx.Response:
+    async def _request(self, method: str, path: str, **kwargs: Any) -> httpx.Response:
         assert self._http is not None, "Use IMClient as async context manager"
         log.debug("-> %s %s", method.upper(), path)
         resp = await self._http.request(method, path, headers=self._headers(), **kwargs)
@@ -189,7 +215,7 @@ class IMClient:
         before_id: str | None = None,
         limit: int = 50,
     ) -> FetchMessagesResponse:
-        params: dict = {"conversation_id": conversation_id, "limit": limit}
+        params: dict[str, str | int] = {"conversation_id": conversation_id, "limit": limit}
         if before_id:
             params["before_id"] = before_id
         resp = await self._request("GET", "/v1/messages", params=params)
@@ -260,11 +286,12 @@ class IMClient:
         ws_url = self._base_url.replace("https://", "wss://").replace("http://", "ws://")
         ws_url = f"{ws_url}/v1/ws"
         use_tls = ws_url.startswith("wss://")
-        ssl_ctx = _make_ssl_ctx(
-            verify=self._verify_tls,
+        _, ssl_ctx = apply_tls_policy(
+            verify_tls=self._verify_tls,
             ca_cert=self._ca_cert,
             pin_sha256=self._pin_sha256,
-        ) if use_tls else None
+        )
+        ssl_ctx = ssl_ctx if use_tls else None
 
         retry_count = 0
         while True:
@@ -292,13 +319,13 @@ class IMClient:
                                 await self._on_message(msg)
                         except json.JSONDecodeError as exc:
                             log.warning("WS JSON parse error: %s", exc)
-                        except Exception as exc:
+                        except Exception as exc:  # allow-silent-except
                             log.warning("WS handler error: %s", exc)
             except websockets.exceptions.ConnectionClosed as exc:
                 log.info("WS closed (code=%s), reconnecting in 3s…", exc.code)
             except asyncio.CancelledError:
                 return
-            except Exception as exc:
+            except Exception as exc:  # allow-silent-except
                 log.warning("WebSocket error (%s): %s", type(exc).__name__, exc)
 
             retry_count += 1
@@ -319,11 +346,12 @@ class IMClientError(Exception):
         try:
             body = json.loads(raw)
             if isinstance(body, dict):
-                if isinstance(body.get("detail"), list):
-                    msgs = [e.get("msg", str(e)) for e in body["detail"] if isinstance(e, dict)]
+                detail = body.get("detail")
+                if isinstance(detail, list):
+                    msgs = [e.get("msg", str(e)) for e in detail if isinstance(e, dict)]
                     return "; ".join(msgs) if msgs else raw
-                if isinstance(body.get("detail"), str):
-                    return body["detail"]
+                if isinstance(detail, str):
+                    return detail
         except (json.JSONDecodeError, KeyError, TypeError):
             pass
         return raw

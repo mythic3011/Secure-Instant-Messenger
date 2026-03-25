@@ -10,6 +10,7 @@ import logging
 import os
 import time
 from pathlib import Path
+from typing import Any
 
 import aiosqlite
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
@@ -55,6 +56,7 @@ CREATE TABLE local_messages (
 log = logging.getLogger("client.state.store")
 
 _db: aiosqlite.Connection | None = None
+MessageRow = dict[str, Any]
 
 
 def set_storage_key(key: bytes | None) -> None:
@@ -240,7 +242,7 @@ async def get_messages(
     conversation_id: str,
     limit: int = 50,
     before_sent_at: int | None = None,
-) -> list[dict]:
+) -> list[MessageRow]:
     """Fetch local messages for a conversation, newest first."""
     db = _get_db()
     now = int(time.time())
@@ -265,7 +267,7 @@ async def get_messages(
         ) as cur:
             rows = await cur.fetchall()
 
-    result: list[dict] = []
+    result: list[MessageRow] = []
     for row in rows:
         record = dict(row)
         aad = _aad(record["conversation_id"], record["id"])
@@ -311,7 +313,7 @@ async def upsert_conversation(
     await db.commit()
 
 
-async def get_conversations() -> list[dict]:
+async def get_conversations() -> list[MessageRow]:
     db = _get_db()
     async with db.execute(
         "SELECT * FROM local_conversations ORDER BY last_message_at DESC NULLS LAST"
