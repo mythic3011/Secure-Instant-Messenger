@@ -1,0 +1,5 @@
+# Keep ownership narrow and predictable for submission hardening.
+
+.github/ @mythic3011
+client/ui/ @mythic3011
+server/ @mythic3011
