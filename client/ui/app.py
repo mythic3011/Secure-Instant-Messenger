@@ -363,6 +363,14 @@ class IMApp(App):
                 except Exception as exc:  # allow-silent-except
                     log.warning("register_error_render_failed", err=str(exc))
                 return
+            except ValidationError as e:
+                try:
+                    self.screen.query_one("#error", Static).update(
+                        f"Registration failed: {e.errors()[0]['msg'].strip('Value error, ')}"
+                    )
+                except Exception as exc:  # allow-silent-except
+                    log.warning("register_error_render_failed", err=str(exc))
+                return
             except Exception as e:
                 try:
                     self.screen.query_one("#error", Static).update(
