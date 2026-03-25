@@ -1,129 +1,119 @@
-"""
-client/state/store.py — Local SQLite store for message history, session state,
-and conversation metadata. All message content is stored as ciphertext only;
-plaintext is never written to disk.
-"""
-
 from __future__ import annotations
 
-import base64
+"""
+client/state/store.py — Local SQLite store for message history, session state,
+and conversation metadata. Message bodies are encrypted at rest; plaintext is
+never written to disk.
+"""
+
+import logging
 import os
 import time
 from pathlib import Path
 
-from sqlalchemy import Column, Integer, String, Text, DateTime, func, event
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
-from sqlalchemy.orm import DeclarativeBase
+import aiosqlite
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
-# Base class for local models
-class LocalBase(DeclarativeBase):
-    pass
+from client.crypto.session import LocalStorageSecurityError
+from client.crypto.storage import get_storage_key, set_active_storage_key
 
+_SCHEMA = """
+PRAGMA journal_mode = WAL;
+PRAGMA foreign_keys = ON;
 
-class LocalMessage(LocalBase):
-    """Local message storage with encrypted plaintext."""
+CREATE TABLE IF NOT EXISTS local_messages (
+    id              TEXT PRIMARY KEY,
+    conversation_id TEXT NOT NULL,
+    sender_id       TEXT NOT NULL,
+    recipient_id    TEXT NOT NULL,
+    counter         INTEGER NOT NULL,
+    nonce           BLOB NOT NULL,
+    ciphertext      BLOB NOT NULL,
+    sent_at         INTEGER NOT NULL,
+    received_at     INTEGER NOT NULL DEFAULT (unixepoch()),
+    ttl_seconds     INTEGER,
+    expires_at      INTEGER GENERATED ALWAYS AS (
+                        CASE WHEN ttl_seconds IS NOT NULL
+                        THEN received_at + ttl_seconds
+                        ELSE NULL END
+                    ) VIRTUAL,
+    delivery_status TEXT NOT NULL DEFAULT 'sent',
+    UNIQUE(conversation_id, sender_id, counter)
+);
 
-    __tablename__ = "local_messages"
+CREATE INDEX IF NOT EXISTS idx_lm_conv ON local_messages(conversation_id, sent_at DESC);
+CREATE INDEX IF NOT EXISTS idx_lm_expires ON local_messages(expires_at) WHERE expires_at IS NOT NULL;
 
-    id = Column(String(36), primary_key=True)
-    conversation_id = Column(String(32), nullable=False, index=True)
-    sender_id = Column(String(32), nullable=False)
-    recipient_id = Column(String(32), nullable=False)
-    counter = Column(Integer, nullable=False)
-    ciphertext_b64 = Column(Text, nullable=False)  # AES-GCM encrypted plaintext
-    nonce_b64 = Column(Text, nullable=False)  # AES-GCM nonce
-    sent_at = Column(Integer, nullable=False)
-    received_at = Column(Integer, nullable=False, default=func.unixepoch())
-    ttl_seconds = Column(Integer, nullable=True)
-    expires_at = Column(Integer, nullable=True)
-    delivery_status = Column(String(20), nullable=False, default="sent")
+CREATE TABLE IF NOT EXISTS local_conversations (
+    id              TEXT PRIMARY KEY,
+    peer_id         TEXT NOT NULL,
+    peer_username   TEXT NOT NULL,
+    last_message_at INTEGER,
+    unread_count    INTEGER NOT NULL DEFAULT 0
+);
+"""
 
+log = logging.getLogger("client.state.store")
 
-class LocalConversation(LocalBase):
-    """Local conversation metadata."""
-
-    __tablename__ = "local_conversations"
-
-    id = Column(String(32), primary_key=True)
-    peer_id = Column(String(32), nullable=False)
-    peer_username = Column(String(255), nullable=False)
-    last_message_at = Column(Integer, nullable=True)
-    unread_count = Column(Integer, nullable=False, default=0)
-
-
-_engine = None
-_session_factory = None
-_storage_key: bytes | None = None
-
-
-def _get_storage_key() -> bytes:
-    """Get the storage key for encrypting/decrypting messages."""
-    if _storage_key is None:
-        raise RuntimeError("Storage key not set. Call set_storage_key() first.")
-    return _storage_key
+_db: aiosqlite.Connection | None = None
 
 
-def set_storage_key(key: bytes) -> None:
-    """Set the storage key for encrypting/decrypting messages."""
-    global _storage_key
-    _storage_key = key
+def set_storage_key(key: bytes | None) -> None:
+    """Backward-compatible test hook for the active storage key."""
+    set_active_storage_key(key)
 
 
-def _aes_encrypt(plaintext: bytes) -> tuple[bytes, bytes]:
-    """Encrypt plaintext with AES-256-GCM. Returns (ciphertext_with_tag, nonce)."""
-    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+def _aad(conversation_id: str, message_id: str) -> bytes:
+    return f"{conversation_id}:{message_id}".encode("utf-8")
+
+
+def _require_storage_key() -> bytes:
+    try:
+        return get_storage_key()
+    except LocalStorageSecurityError as exc:
+        log.error("storage key unavailable for local message encryption")
+        raise
+
+
+def _encrypt_body(plaintext: str, *, key: bytes, aad: bytes) -> tuple[bytes, bytes]:
     nonce = os.urandom(12)
-    ct = AESGCM(_get_storage_key()).encrypt(nonce, plaintext, None)
-    return ct, nonce
+    ciphertext = AESGCM(key).encrypt(nonce, plaintext.encode("utf-8"), aad)
+    return nonce, ciphertext
 
 
-def _aes_decrypt(ciphertext: bytes, nonce: bytes) -> bytes:
-    """Decrypt AES-256-GCM ciphertext. Raises InvalidTag on failure."""
-    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-    return AESGCM(_get_storage_key()).decrypt(nonce, ciphertext, None)
+def _decrypt_body(nonce: bytes, ciphertext: bytes, *, key: bytes, aad: bytes) -> str:
+    try:
+        plaintext = AESGCM(key).decrypt(nonce, ciphertext, aad)
+    except Exception as exc:
+        raise LocalStorageSecurityError(
+            "Failed to decrypt local message from encrypted store"
+        ) from exc
+    return plaintext.decode("utf-8")
 
 
 async def init_store(username: str) -> None:
     """Open (or create) the local message store for this user."""
-    global _engine, _session_factory
-
+    global _db
     db_path = Path.home() / ".comp3334im" / username / "messages.db"
     db_path.parent.mkdir(parents=True, exist_ok=True)
-
-    url = f"sqlite+aiosqlite:///{db_path}"
-    _engine = create_async_engine(url, echo=False)
-
-    # Enable WAL mode and foreign keys
-    @event.listens_for(_engine.sync_engine, "connect")
-    def set_sqlite_pragma(dbapi_connection, connection_record):
-        cursor = dbapi_connection.cursor()
-        cursor.execute("PRAGMA journal_mode=WAL")
-        cursor.execute("PRAGMA foreign_keys=ON")
-        cursor.execute("PRAGMA secure_delete=ON")
-        cursor.close()
-
-    _session_factory = async_sessionmaker(_engine, class_=AsyncSession, expire_on_commit=False)
-
-    # Create all tables
-    async with _engine.begin() as conn:
-        await conn.run_sync(LocalBase.metadata.create_all)
-
-    # Sweep expired messages on startup (R11)
+    _db = await aiosqlite.connect(str(db_path))
+    _db.row_factory = aiosqlite.Row
+    await _db.executescript(_SCHEMA)
+    await _db.commit()
     await sweep_expired()
 
 
 async def close_store() -> None:
-    global _engine, _session_factory
-    if _engine:
-        await _engine.dispose()
-        _engine = None
-        _session_factory = None
+    global _db
+    if _db:
+        await _db.close()
+        _db = None
 
 
-def _get_session() -> AsyncSession:
-    if _session_factory is None:
+def _get_db() -> aiosqlite.Connection:
+    if _db is None:
         raise RuntimeError("Store not initialised. Call init_store() first.")
-    return _session_factory()
+    return _db
 
 
 async def save_message(
@@ -138,35 +128,47 @@ async def save_message(
     ttl_seconds: int | None,
     delivery_status: str = "sent",
 ) -> None:
-    """Persist an encrypted message to local storage."""
-    async with _get_session() as session:
-        try:
-            # Encrypt plaintext before storing
-            ciphertext, nonce = _aes_encrypt(plaintext.encode("utf-8"))
-            message = LocalMessage(
-                id=id,
-                conversation_id=conversation_id,
-                sender_id=sender_id,
-                recipient_id=recipient_id,
-                counter=counter,
-                ciphertext_b64=base64.b64encode(ciphertext).decode("ascii"),
-                nonce_b64=base64.b64encode(nonce).decode("ascii"),
-                sent_at=sent_at,
-                ttl_seconds=ttl_seconds,
-                delivery_status=delivery_status,
-            )
-            session.add(message)
-            await session.commit()
-        except Exception:
-            pass  # duplicate — already stored
+    db = _get_db()
+    key = _require_storage_key()
+    aad = _aad(conversation_id, id)
+
+    try:
+        nonce, ciphertext = _encrypt_body(plaintext, key=key, aad=aad)
+        await db.execute(
+            """INSERT OR IGNORE INTO local_messages
+               (id, conversation_id, sender_id, recipient_id, counter,
+                nonce, ciphertext, sent_at, ttl_seconds, delivery_status)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                id,
+                conversation_id,
+                sender_id,
+                recipient_id,
+                counter,
+                nonce,
+                ciphertext,
+                sent_at,
+                ttl_seconds,
+                delivery_status,
+            ),
+        )
+        await db.commit()
+    except aiosqlite.IntegrityError:
+        return
+    except LocalStorageSecurityError:
+        raise
+    except Exception as exc:
+        log.error("unexpected error storing message id %s", id, exc_info=exc)
+        raise RuntimeError(f"failed to store message {id}") from exc
 
 
 async def update_delivery_status(message_id: str, status: str) -> None:
-    async with _get_session() as session:
-        from sqlalchemy import update
-        stmt = update(LocalMessage).where(LocalMessage.id == message_id).values(delivery_status=status)
-        await session.execute(stmt)
-        await session.commit()
+    db = _get_db()
+    await db.execute(
+        "UPDATE local_messages SET delivery_status = ? WHERE id = ?",
+        (status, message_id),
+    )
+    await db.commit()
 
 
 async def get_messages(
@@ -175,74 +177,53 @@ async def get_messages(
     before_sent_at: int | None = None,
 ) -> list[dict]:
     """Fetch local messages for a conversation, newest first."""
-    async with _get_session() as session:
-        from sqlalchemy import select
-        now = int(time.time())
+    db = _get_db()
+    now = int(time.time())
+    key = _require_storage_key()
 
-        if before_sent_at:
-            stmt = (
-                select(LocalMessage)
-                .where(
-                    LocalMessage.conversation_id == conversation_id,
-                    LocalMessage.sent_at < before_sent_at,
-                    (LocalMessage.expires_at.is_(None) | (LocalMessage.expires_at > now)),
-                )
-                .order_by(LocalMessage.sent_at.desc())
-                .limit(limit)
-            )
-        else:
-            stmt = (
-                select(LocalMessage)
-                .where(
-                    LocalMessage.conversation_id == conversation_id,
-                    (LocalMessage.expires_at.is_(None) | (LocalMessage.expires_at > now)),
-                )
-                .order_by(LocalMessage.sent_at.desc())
-                .limit(limit)
-            )
+    if before_sent_at:
+        async with db.execute(
+            """SELECT * FROM local_messages
+               WHERE conversation_id = ? AND sent_at < ?
+                 AND (expires_at IS NULL OR expires_at > ?)
+               ORDER BY sent_at DESC LIMIT ?""",
+            (conversation_id, before_sent_at, now, limit),
+        ) as cur:
+            rows = await cur.fetchall()
+    else:
+        async with db.execute(
+            """SELECT * FROM local_messages
+               WHERE conversation_id = ?
+                 AND (expires_at IS NULL OR expires_at > ?)
+               ORDER BY sent_at DESC LIMIT ?""",
+            (conversation_id, now, limit),
+        ) as cur:
+            rows = await cur.fetchall()
 
-        result = await session.execute(stmt)
-        messages = result.scalars().all()
-
-        # Decrypt messages
-        decrypted_messages = []
-        for msg in messages:
-            try:
-                ciphertext = base64.b64decode(msg.ciphertext_b64)
-                nonce = base64.b64decode(msg.nonce_b64)
-                plaintext = _aes_decrypt(ciphertext, nonce).decode("utf-8")
-            except Exception:
-                plaintext = "[decryption failed]"
-
-            decrypted_messages.append({
-                "id": msg.id,
-                "conversation_id": msg.conversation_id,
-                "sender_id": msg.sender_id,
-                "recipient_id": msg.recipient_id,
-                "counter": msg.counter,
-                "plaintext": plaintext,
-                "sent_at": msg.sent_at,
-                "received_at": msg.received_at,
-                "ttl_seconds": msg.ttl_seconds,
-                "expires_at": msg.expires_at,
-                "delivery_status": msg.delivery_status,
-            })
-
-        return decrypted_messages
+    result: list[dict] = []
+    for row in rows:
+        record = dict(row)
+        aad = _aad(record["conversation_id"], record["id"])
+        record["plaintext"] = _decrypt_body(
+            record["nonce"],
+            record["ciphertext"],
+            key=key,
+            aad=aad,
+        )
+        result.append(record)
+    return result
 
 
 async def sweep_expired() -> int:
     """Delete expired messages from local storage (R11). Returns count deleted."""
-    async with _get_session() as session:
-        from sqlalchemy import delete
-        now = int(time.time())
-        stmt = delete(LocalMessage).where(
-            LocalMessage.expires_at.isnot(None),
-            LocalMessage.expires_at <= now,
-        )
-        result = await session.execute(stmt)
-        await session.commit()
-        return result.rowcount
+    db = _get_db()
+    now = int(time.time())
+    result = await db.execute(
+        "DELETE FROM local_messages WHERE expires_at IS NOT NULL AND expires_at <= ?",
+        (now,),
+    )
+    await db.commit()
+    return result.rowcount
 
 
 async def upsert_conversation(
@@ -253,58 +234,40 @@ async def upsert_conversation(
     last_message_at: int | None,
     unread_count: int,
 ) -> None:
-    async with _get_session() as session:
-        from sqlalchemy import select
-        stmt = select(LocalConversation).where(LocalConversation.id == id)
-        result = await session.execute(stmt)
-        existing = result.scalar_one_or_none()
-
-        if existing is not None:
-            existing.last_message_at = last_message_at
-            existing.unread_count = unread_count
-        else:
-            conversation = LocalConversation(
-                id=id,
-                peer_id=peer_id,
-                peer_username=peer_username,
-                last_message_at=last_message_at,
-                unread_count=unread_count,
-            )
-            session.add(conversation)
-
-        await session.commit()
+    db = _get_db()
+    await db.execute(
+        """INSERT INTO local_conversations (id, peer_id, peer_username, last_message_at, unread_count)
+           VALUES (?, ?, ?, ?, ?)
+           ON CONFLICT(id) DO UPDATE SET
+             last_message_at = excluded.last_message_at,
+             unread_count    = excluded.unread_count""",
+        (id, peer_id, peer_username, last_message_at, unread_count),
+    )
+    await db.commit()
 
 
 async def get_conversations() -> list[dict]:
-    async with _get_session() as session:
-        from sqlalchemy import select
-        stmt = select(LocalConversation).order_by(LocalConversation.last_message_at.desc().nulls_last())
-        result = await session.execute(stmt)
-        conversations = result.scalars().all()
-
-        return [
-            {
-                "id": conv.id,
-                "peer_id": conv.peer_id,
-                "peer_username": conv.peer_username,
-                "last_message_at": conv.last_message_at,
-                "unread_count": conv.unread_count,
-            }
-            for conv in conversations
-        ]
+    db = _get_db()
+    async with db.execute(
+        "SELECT * FROM local_conversations ORDER BY last_message_at DESC NULLS LAST"
+    ) as cur:
+        rows = await cur.fetchall()
+    return [dict(r) for r in rows]
 
 
 async def increment_unread(conversation_id: str) -> None:
-    async with _get_session() as session:
-        from sqlalchemy import update
-        stmt = update(LocalConversation).where(LocalConversation.id == conversation_id).values(unread_count=LocalConversation.unread_count + 1)
-        await session.execute(stmt)
-        await session.commit()
+    db = _get_db()
+    await db.execute(
+        "UPDATE local_conversations SET unread_count = unread_count + 1 WHERE id = ?",
+        (conversation_id,),
+    )
+    await db.commit()
 
 
 async def reset_unread(conversation_id: str) -> None:
-    async with _get_session() as session:
-        from sqlalchemy import update
-        stmt = update(LocalConversation).where(LocalConversation.id == conversation_id).values(unread_count=0)
-        await session.execute(stmt)
-        await session.commit()
+    db = _get_db()
+    await db.execute(
+        "UPDATE local_conversations SET unread_count = 0 WHERE id = ?",
+        (conversation_id,),
+    )
+    await db.commit()

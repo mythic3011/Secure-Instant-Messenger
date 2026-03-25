@@ -15,11 +15,13 @@ from client.crypto.session import (
     DHKeypair,
     IdentityKeyCache,
     IdentityKeypair,
+    IntegrityError,
     KeyChangeWarning,
     RatchetChain,
     ReplayError,
     ReplayProtector,
     SessionKey,
+    TrustState,
     build_and_encrypt,
     compute_fingerprint,
     decrypt_envelope,
@@ -41,6 +43,7 @@ def _random_conv_id() -> str:
 # ---------------------------------------------------------------------------
 # Identity keypair
 # ---------------------------------------------------------------------------
+
 
 def test_identity_keypair_generate():
     kp = IdentityKeypair.generate()
@@ -67,12 +70,14 @@ def test_key_bundle_signature_invalid():
     sig = make_key_signature(id_kp, dh_kp)
     # Tamper with signature
     bad_sig = bytes([sig[0] ^ 0xFF]) + sig[1:]
-    assert verify_key_bundle(id_kp.public_bytes(), dh_kp.public_bytes(), bad_sig) is False
+    assert (
+        verify_key_bundle(id_kp.public_bytes(), dh_kp.public_bytes(), bad_sig) is False
+    )
 
 
 def test_key_bundle_wrong_key():
-    id_kp  = IdentityKeypair.generate()
-    dh_kp  = DHKeypair.generate()
+    id_kp = IdentityKeypair.generate()
+    dh_kp = DHKeypair.generate()
     dh_kp2 = DHKeypair.generate()
     sig = make_key_signature(id_kp, dh_kp)
     # Sig is over dh_kp but we pass dh_kp2
@@ -82,6 +87,7 @@ def test_key_bundle_wrong_key():
 # ---------------------------------------------------------------------------
 # Fingerprint
 # ---------------------------------------------------------------------------
+
 
 def test_fingerprint_symmetric():
     a = os.urandom(32)
@@ -105,12 +111,13 @@ def test_fingerprint_format():
 # Session key derivation
 # ---------------------------------------------------------------------------
 
+
 def _make_session(alice_id="alice", bob_id="bob"):
     alice_id_kp = IdentityKeypair.generate()
     alice_dh_kp = DHKeypair.generate()
-    bob_id_kp   = IdentityKeypair.generate()
-    bob_dh_kp   = DHKeypair.generate()
-    conv_id     = _random_conv_id()
+    bob_id_kp = IdentityKeypair.generate()
+    bob_dh_kp = DHKeypair.generate()
+    conv_id = _random_conv_id()
 
     alice_sk, eph_pub, conv_dh_pub = derive_session_key_as_initiator(
         my_identity_kp=alice_id_kp,
@@ -135,7 +142,7 @@ def _make_session(alice_id="alice", bob_id="bob"):
     )
 
     alice_send, alice_recv = derive_ratchet_chains(alice_sk.raw, initiator=True)
-    bob_send,   bob_recv   = derive_ratchet_chains(bob_sk.raw,   initiator=False)
+    bob_send, bob_recv = derive_ratchet_chains(bob_sk.raw, initiator=False)
 
     return alice_sk, bob_sk, conv_id, alice_send, alice_recv, bob_send, bob_recv
 
@@ -155,6 +162,7 @@ def test_session_key_different_conversations():
 # ---------------------------------------------------------------------------
 # AES-256-GCM encrypt / decrypt
 # ---------------------------------------------------------------------------
+
 
 def test_encrypt_decrypt_roundtrip():
     sk = SessionKey(raw=os.urandom(32), conversation_id="c1", peer_id="bob")
@@ -192,6 +200,7 @@ def test_decrypt_wrong_key():
 # Replay protection
 # ---------------------------------------------------------------------------
 
+
 def test_replay_protector_normal_flow():
     rp = ReplayProtector()
     rp.check("msg-1", 0)
@@ -210,6 +219,7 @@ def test_replay_protector_duplicate_id():
 
 def test_replay_protector_counter_outside_window():
     from shared.protocol import REPLAY_WINDOW
+
     rp = ReplayProtector()
     # Advance counter to REPLAY_WINDOW + 10
     for i in range(REPLAY_WINDOW + 10):
@@ -234,8 +244,11 @@ def test_replay_protector_serialise_roundtrip():
 # Full encrypt/decrypt via build_and_encrypt / decrypt_envelope
 # ---------------------------------------------------------------------------
 
+
 def test_build_and_decrypt_envelope():
-    alice_sk, bob_sk, conv_id, alice_send, alice_recv, bob_send, bob_recv = _make_session()
+    alice_sk, bob_sk, conv_id, alice_send, alice_recv, bob_send, bob_recv = (
+        _make_session()
+    )
     import time
 
     env = build_and_encrypt(
@@ -255,7 +268,9 @@ def test_build_and_decrypt_envelope():
 
 
 def test_decrypt_envelope_replay_rejected():
-    alice_sk, bob_sk, conv_id, alice_send, alice_recv, bob_send, bob_recv = _make_session()
+    alice_sk, bob_sk, conv_id, alice_send, alice_recv, bob_send, bob_recv = (
+        _make_session()
+    )
     import time
 
     env = build_and_encrypt(
@@ -279,10 +294,14 @@ def test_decrypt_envelope_replay_rejected():
 # Ratchet chain tests
 # ---------------------------------------------------------------------------
 
+
 def test_ratchet_each_message_different_key():
     """Each message must use a different key — forward secrecy."""
     import time
-    alice_sk, bob_sk, conv_id, alice_send, alice_recv, bob_send, bob_recv = _make_session()
+
+    alice_sk, bob_sk, conv_id, alice_send, alice_recv, bob_send, bob_recv = (
+        _make_session()
+    )
 
     envs = []
     for i in range(3):
@@ -298,7 +317,7 @@ def test_ratchet_each_message_different_key():
         )
         envs.append(env)
 
-    # All nonces differ (different keys -> different ciphertexts)
+    # All nonces differ (different keys → different ciphertexts)
     nonces = [e.nonce_b64 for e in envs]
     assert len(set(nonces)) == 3, "Each message must use a unique nonce"
 
@@ -312,7 +331,10 @@ def test_ratchet_each_message_different_key():
 def test_ratchet_out_of_order_within_window():
     """Out-of-order messages within MAX_SKIP must be decryptable."""
     import time
-    alice_sk, bob_sk, conv_id, alice_send, alice_recv, bob_send, bob_recv = _make_session()
+
+    alice_sk, bob_sk, conv_id, alice_send, alice_recv, bob_send, bob_recv = (
+        _make_session()
+    )
 
     # Alice sends 3 messages
     envs = []
@@ -354,6 +376,7 @@ def test_ratchet_chain_serialise_roundtrip():
 # Key change detection
 # ---------------------------------------------------------------------------
 
+
 def test_identity_key_cache_tofu():
     cache = IdentityKeyCache()
     pub = os.urandom(32)
@@ -366,8 +389,7 @@ def test_identity_key_cache_change_raises():
     pub1 = os.urandom(32)
     pub2 = os.urandom(32)
     cache.check_and_update("alice", pub1)
-    with pytest.raises(KeyChangeWarning):
-        cache.check_and_update("alice", pub2)
+    assert cache.check_and_update("alice", pub2) is True
 
 
 def test_identity_key_cache_mark_verified():
@@ -377,3 +399,110 @@ def test_identity_key_cache_mark_verified():
     cache.check_and_update("alice", pub1)
     cache.mark_verified("alice", pub2)
     cache.check_and_update("alice", pub2)  # should not raise
+
+
+def test_truststate_tofu_created_on_first_contact():
+    cache = IdentityKeyCache()
+    pub = os.urandom(32)
+
+    warned = cache.check_and_update("alice", pub)
+
+    assert warned is False
+    assert cache.get("alice") == pub
+    assert cache.get_trust_state("alice") == TrustState(
+        fingerprint=cache.get_trust_state("alice").fingerprint,
+        verified=False,
+        key_changed=False,
+    )
+
+
+def test_truststate_mark_verified_persists_after_reload():
+    cache = IdentityKeyCache()
+    pub = os.urandom(32)
+    cache.check_and_update("alice", pub)
+    cache.mark_verified("alice", pub)
+
+    restored = IdentityKeyCache.from_dict(cache.as_dict())
+    trust = restored.get_trust_state("alice")
+
+    assert trust is not None
+    assert trust.verified is True
+    assert trust.key_changed is False
+    assert restored.get("alice") == pub
+
+
+def test_verified_key_change_sets_key_changed_flag():
+    cache = IdentityKeyCache()
+    pub1 = os.urandom(32)
+    pub2 = os.urandom(32)
+    cache.check_and_update("alice", pub1)
+    cache.mark_verified("alice", pub1)
+
+    with pytest.raises(KeyChangeWarning):
+        cache.check_and_update("alice", pub2)
+
+    trust = cache.get_trust_state("alice")
+    assert trust is not None
+    assert trust.verified is True
+    assert trust.key_changed is True
+
+
+def test_verified_key_change_does_not_overwrite_fingerprint():
+    cache = IdentityKeyCache()
+    pub1 = os.urandom(32)
+    pub2 = os.urandom(32)
+    cache.check_and_update("alice", pub1)
+    cache.mark_verified("alice", pub1)
+    original = cache.get_trust_state("alice")
+
+    with pytest.raises(KeyChangeWarning):
+        cache.check_and_update("alice", pub2)
+
+    updated = cache.get_trust_state("alice")
+    assert updated is not None
+    assert original is not None
+    assert updated.fingerprint == original.fingerprint
+    assert cache.get("alice") == pub1
+
+
+def test_unverified_key_change_soft_warning_and_update_fingerprint():
+    cache = IdentityKeyCache()
+    pub1 = os.urandom(32)
+    pub2 = os.urandom(32)
+    cache.check_and_update("alice", pub1)
+    original = cache.get_trust_state("alice")
+
+    warned = cache.check_and_update("alice", pub2)
+    updated = cache.get_trust_state("alice")
+
+    assert warned is True
+    assert original is not None
+    assert updated is not None
+    assert updated.verified is False
+    assert updated.key_changed is True
+    assert updated.fingerprint != original.fingerprint
+    assert cache.get("alice") == pub2
+
+
+def test_decrypt_envelope_tamper_raises_integrity_error():
+    _, _, conv_id, alice_send, _, _, bob_recv = _make_session()
+    import time
+
+    env = build_and_encrypt(
+        send_chain=alice_send,
+        plaintext="hello",
+        sender_id="alice",
+        recipient_id="bob",
+        conversation_id=conv_id,
+        counter=0,
+        ttl_seconds=None,
+        sent_at=int(time.time()),
+    )
+    env.sender_id = "mallory"
+
+    with pytest.raises(IntegrityError):
+        decrypt_envelope(
+            recv_chain=bob_recv,
+            envelope=env,
+            replay_protector=ReplayProtector(),
+        )
