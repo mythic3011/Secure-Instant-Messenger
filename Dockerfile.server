@@ -60,5 +60,5 @@ ctx.verify_mode = ssl.CERT_NONE; \
 urllib.request.urlopen('https://localhost:8443/health', context=ctx)" \
     || exit 1
 
-ENTRYPOINT ["docker-entrypoint.sh"]
+ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
 CMD ["python", "-m", "server.main"]
