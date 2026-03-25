@@ -10,12 +10,14 @@ import time
 from typing import TYPE_CHECKING
 
 from textual.app import ComposeResult
-from textual.containers import Horizontal
+from textual.containers import Horizontal, Vertical
 from textual.message import Message
 from textual.screen import Screen
 from textual.widgets import Button, Input, ListItem, ListView, Static
 
-from client.ui.contracts import ChatHistoryResult, SendResult, UIErrorState
+from client.ui.contracts import ChatHistoryResult, SendResult, UIBanner
+from client.ui.theme import Theme
+from client.ui.widgets.banner import Banner
 
 if TYPE_CHECKING:
     pass
@@ -57,20 +59,35 @@ class MessageItem(ListItem):
         if self._expires_at is not None:
             remaining = self._expires_at - int(time.time())
             if remaining <= 0:
-                ttl_tag = " 🔥expired"
+                ttl_tag = "TTL expired"
             else:
-                ttl_tag = f" 🔥{remaining}s"
+                ttl_tag = f"TTL {remaining}s"
         else:
-            ttl_tag = ""
+            ttl_tag = "TTL off"
 
-        if self._is_mine:
-            # Right side: status + ttl on left of text, no sender prefix
-            line = f"{status_icon}{ttl_tag}  {self._text}  [{ts}]"
-        else:
-            # Left side: sender + text + ttl
-            line = f"[{ts}]  {self._sender}: {self._text}{ttl_tag}"
+        meta_parts = [ts]
+        if self._is_mine and status_icon:
+            meta_parts.append(status_icon)
+        meta_parts.append(ttl_tag)
+        meta_line = "  ·  ".join(meta_parts)
 
-        yield Static(line)
+        with Vertical():
+            if not self._is_mine:
+                yield Static(f"{self._sender}", classes="message_sender")
+            yield Static(self._text, classes="message_body")
+            yield Static(meta_line, classes="message_meta")
+
+
+class PlaceholderItem(ListItem):
+    def __init__(self, title: str, detail: str) -> None:
+        super().__init__()
+        self._title = title
+        self._detail = detail
+
+    def compose(self) -> ComposeResult:
+        with Vertical():
+            yield Static(self._title, classes="placeholder_title")
+            yield Static(self._detail, classes="placeholder_detail")
 
 
 class ChatScreen(Screen):
@@ -82,19 +99,19 @@ class ChatScreen(Screen):
     CSS = """
     ChatScreen {
         layout: vertical;
-        background: #0a0a0f;
+        background: __APP_BACKGROUND__;
     }
     #btn_back {
-        background: #0d0d1a;
-        color: #ff4444;
-        border: tall #ff4444;
+        background: __SURFACE__;
+        color: __ERROR__;
+        border: tall __ERROR__;
     }
     #btn_back:hover { background: #1a0000; }
     #header {
         height: 3;
-        background: #0d0d1a;
-        border-bottom: solid #00ff9f;
-        color: #00ff9f;
+        background: __SURFACE__;
+        border-bottom: solid __ACCENT__;
+        color: __ACCENT__;
         text-style: bold;
         content-align: left middle;
         padding: 0 2;
@@ -102,7 +119,7 @@ class ChatScreen(Screen):
     #messages {
         height: 1fr;
         border: solid #1a1a3e;
-        background: #0a0a0f;
+        background: __APP_BACKGROUND__;
         padding: 0 1;
     }
     /* theirs — left aligned, white */
@@ -122,35 +139,67 @@ class ChatScreen(Screen):
         padding: 0 1;
         text-align: right;
     }
+    .message_sender {
+        color: #9aa0c8;
+        text-style: bold;
+    }
+    .message_body {
+        color: #f4f7ff;
+        text-style: bold;
+    }
+    .message_meta {
+        color: #7d86ad;
+    }
     #warning {
-        color: #ffaa00;
-        height: auto;
-        background: #1a0d00;
-        padding: 0 1;
+        margin: 0 0 1 0;
+    }
+    #messages > ListItem.placeholder {
+        color: #cbd5e1;
+        background: #0d1220;
+        border: dashed #334155;
+        margin: 1 6;
+        padding: 1 2;
+    }
+    .placeholder_title {
+        color: #e2e8f0;
+        text-style: bold;
+    }
+    .placeholder_detail {
+        color: #94a3b8;
     }
     #input_row {
         height: 3;
-        background: #0d0d1a;
+        background: __SURFACE__;
         border-top: solid #1a1a3e;
     }
     #msg_input {
         width: 1fr;
         border: tall #1a1a3e;
-        background: #0a0a1a;
+        background: __SURFACE_ALT__;
         color: #e0e0ff;
     }
-    #msg_input:focus { border: tall #00ff9f; }
+    #msg_input:focus { border: tall __ACCENT__; }
     #btn_send {
-        background: #00ff9f;
+        background: __ACCENT__;
         color: #000000;
         text-style: bold;
     }
     #btn_settings {
-        background: #0d0d1a;
-        color: #00ccff;
+        background: __SURFACE__;
+        color: __ACCENT_ALT__;
         border: tall #1a1a3e;
     }
-    """
+    """.replace("__APP_BACKGROUND__", Theme.APP_BACKGROUND).replace(
+        "__SURFACE__", Theme.SURFACE
+    ).replace(
+        "__ERROR__", Theme.ERROR
+    ).replace(
+        "__ACCENT__", Theme.ACCENT
+    ).replace(
+        "__SURFACE_ALT__", Theme.SURFACE_ALT
+    ).replace(
+        "__ACCENT_ALT__", Theme.ACCENT_ALT
+    )
 
     class SendMessage(Message):
         def __init__(self, text: str, ttl: int | None) -> None:
@@ -175,13 +224,28 @@ class ChatScreen(Screen):
         self.peer_id         = peer_id
         self.peer_username   = peer_username
         self.my_user_id      = my_user_id
-        self._key_warning    = False
-        self._key_warning_message = ""
-        self._ui_error: UIErrorState | None = None
+        self._banner: UIBanner | None = None
+
+    def _render_placeholder(self, state_kind: str) -> PlaceholderItem:
+        if state_kind == "degraded":
+            item = PlaceholderItem(
+                "History unavailable",
+                "Local message history cannot be shown on this device right now.",
+            )
+        else:
+            item = PlaceholderItem(
+                "No messages yet",
+                "Start the conversation here. Security warnings will still appear above.",
+            )
+        item.add_class("placeholder")
+        return item
+
+    def _set_send_enabled(self, enabled: bool) -> None:
+        self.query_one("#btn_send", Button).disabled = not enabled
 
     def compose(self) -> ComposeResult:
         yield Static(f"◈ {self.peer_username}  ·  🔒 E2EE", id="header")
-        yield Static("", id="warning")
+        yield Banner(id="warning")
         yield ListView(id="messages")
         with Horizontal(id="input_row"):
             yield Input(placeholder="Type a message…", id="msg_input")
@@ -199,35 +263,40 @@ class ChatScreen(Screen):
         self.post_message(self.RequestHistory(self.conversation_id))
 
     def _refresh_warning(self) -> None:
-        warning = self.query_one("#warning", Static)
-        messages: list[str] = []
-        if self._ui_error is not None:
-            messages.append(self._ui_error.message)
-        if self._key_warning_message:
-            messages.append(self._key_warning_message)
-        warning.update("\n".join(messages))
+        warning = self.query_one("#warning")
+        if hasattr(warning, "show_banner"):
+            warning.show_banner(self._banner)
+            return
+        warning.update("" if self._banner is None else f"{self._banner.title}\n{self._banner.message}")
 
-    def set_ui_error(self, error: UIErrorState | None) -> None:
-        self._ui_error = error
+    def set_banner(self, banner: UIBanner | None) -> None:
+        self._banner = banner
         self._refresh_warning()
 
     def render_history_result(self, result: ChatHistoryResult) -> None:
         lv = self.query_one("#messages", ListView)
         lv.clear()
-        for m in reversed(result.messages):
-            lv.append(MessageItem(
-                sender=m["sender_id"],
-                text=m["plaintext"],
-                sent_at=m["sent_at"],
-                status=m["delivery_status"],
-                ttl_seconds=m["ttl_seconds"],
-                is_mine=(m["sender_id"] == self.my_user_id),
-            ))
-        self.set_ui_error(result.error)
+        if result.messages:
+            for m in reversed(result.messages):
+                lv.append(MessageItem(
+                    sender=m["sender_id"],
+                    text=m["plaintext"],
+                    sent_at=m["sent_at"],
+                    status=m["delivery_status"],
+                    ttl_seconds=m["ttl_seconds"],
+                    is_mine=(m["sender_id"] == self.my_user_id),
+                ))
+        else:
+            lv.append(self._render_placeholder(result.state.kind))
+        self.set_banner(result.state.primary_banner)
+        self._set_send_enabled("send" not in result.state.disabled_actions)
         lv.scroll_end(animate=False)
 
     def apply_send_result(self, result: SendResult) -> None:
-        self.set_ui_error(result.error)
+        self.set_banner(result.state.primary_banner)
+        self._set_send_enabled("send" not in result.state.disabled_actions)
+        if result.ok and "send" not in result.state.disabled_actions:
+            self.query_one("#msg_input", Input).value = ""
 
     async def _sweep_ttl(self) -> None:
         """
@@ -253,17 +322,23 @@ class ChatScreen(Screen):
 
     def show_key_warning(self, peer_username: str) -> None:
         """Display key change warning (R6)."""
-        self._key_warning = True
-        self._key_warning_message = (
-            f"⚠  {peer_username}'s identity key has changed! "
-            "Verify fingerprint in ⚙ before trusting messages."
+        self.set_banner(
+            UIBanner(
+                code="key_changed",
+                severity="error",
+                title="Identity key changed",
+                message=(
+                    f"{peer_username}'s identity key has changed. "
+                    "Verify fingerprint in settings before trusting new messages."
+                ),
+                persistent=True,
+                dismissible=False,
+            )
         )
-        self._refresh_warning()
 
     def clear_key_warning(self) -> None:
-        self._key_warning = False
-        self._key_warning_message = ""
-        self._refresh_warning()
+        if self._banner and self._banner.code == "key_changed":
+            self.set_banner(None)
 
     def add_message(
         self,
@@ -308,7 +383,6 @@ class ChatScreen(Screen):
         text = inp.value.strip()
         if not text:
             return
-        inp.value = ""
         # TTL is managed by app._ttl_settings; pass None here,
         # app.on_chat_screen_send_message reads it from its own state.
         self.post_message(self.SendMessage(text, ttl=None))

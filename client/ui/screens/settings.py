@@ -11,7 +11,9 @@ from textual.message import Message
 from textual.screen import Screen
 from textual.widgets import Button, Input, Static
 
-from client.ui.contracts import TrustDisplayState
+from client.ui.contracts import TrustViewModel
+from client.ui.theme import Theme
+from client.ui.widgets.security_badge import SecurityBadge
 
 
 class SettingsScreen(Screen):
@@ -24,58 +26,82 @@ class SettingsScreen(Screen):
     CSS = """
     SettingsScreen {
         align: center middle;
-        background: #0a0a0f;
+        background: __APP_BACKGROUND__;
     }
     #panel {
         width: 64;
         height: auto;
-        border: double #00ccff;
+        border: double __ACCENT_ALT__;
         padding: 1 3;
-        background: #0d0d1a;
+        background: __SURFACE__;
     }
     #title {
-        color: #00ccff;
+        color: __ACCENT_ALT__;
         text-style: bold;
         content-align: center middle;
         padding: 0 0 1 0;
     }
+    .section_label {
+        color: __TEXT_MUTED__;
+        text-style: bold;
+        margin: 1 0 0 0;
+    }
     #fingerprint {
-        color: #00ff9f;
+        color: __ACCENT__;
         text-style: bold;
         margin: 1 0;
         background: #001a0d;
         padding: 0 1;
-        border: solid #00ff9f;
+        border: solid __ACCENT__;
+    }
+    #trust_hint, #action_hint {
+        color: #cbd5e1;
+        margin: 0 0 1 0;
+    }
+    #action_hint {
+        background: #17121f;
+        border-left: thick #f59e0b;
+        padding: 0 1;
     }
     #ttl_input {
         margin-bottom: 1;
         border: tall #1a1a3e;
-        background: #0a0a1a;
+        background: __SURFACE_ALT__;
         color: #e0e0ff;
     }
-    #ttl_input:focus { border: tall #00ccff; }
+    #ttl_input:focus { border: tall __ACCENT_ALT__; }
     Button { margin-top: 1; width: 100%; }
     #btn_save_ttl {
-        background: #00ccff;
+        background: __ACCENT_ALT__;
         color: #000000;
         text-style: bold;
     }
     #btn_verify {
-        background: #00ff9f;
+        background: __ACCENT__;
         color: #000000;
         text-style: bold;
     }
     #btn_close {
-        background: #0d0d1a;
-        color: #00ccff;
+        background: __SURFACE__;
+        color: __ACCENT_ALT__;
         border: tall #1a1a3e;
     }
-    #status { color: #00ff9f; text-style: bold; }
+    #status { color: __ACCENT__; text-style: bold; }
     #trust_state {
         color: #e0e0ff;
         margin: 0 0 1 0;
     }
-    """
+    """.replace("__APP_BACKGROUND__", Theme.APP_BACKGROUND).replace(
+        "__ACCENT_ALT__", Theme.ACCENT_ALT
+    ).replace(
+        "__SURFACE__", Theme.SURFACE
+    ).replace(
+        "__TEXT_MUTED__", Theme.TEXT_MUTED
+    ).replace(
+        "__ACCENT__", Theme.ACCENT
+    ).replace(
+        "__SURFACE_ALT__", Theme.SURFACE_ALT
+    )
 
     class SetTTL(Message):
         def __init__(self, ttl_seconds: int | None) -> None:
@@ -89,19 +115,27 @@ class SettingsScreen(Screen):
         super().__init__()
         self.conversation_id = conversation_id
         self.peer_username   = peer_username
-        self._fingerprint    = "Loading…"
-        self._trust_state    = TrustDisplayState(verified=False, key_changed=False)
+        self._trust_view_model = TrustViewModel(
+            fingerprint="Loading…",
+            verified=False,
+            key_changed=False,
+            requires_action=False,
+            last_verified_at=None,
+        )
 
     def compose(self) -> ComposeResult:
         with Vertical(id="panel"):
             yield Static(f"⚙ Settings — {self.peer_username}", id="title")
-            yield Static("")
-            yield Static("Safety Number (verify out-of-band with your contact):", id="fp_label")
-            yield Static(self._fingerprint, id="fingerprint")
+            yield Static("Trust status", classes="section_label")
+            yield SecurityBadge(id="trust_badge")
             yield Static("", id="trust_state")
+            yield Static("", id="trust_hint")
+            yield Static("Fingerprint", classes="section_label")
+            yield Static("Loading…", id="fingerprint")
+            yield Static("Actions", classes="section_label")
+            yield Static("", id="action_hint")
             yield Button("✓ Mark as Verified", variant="success", id="btn_verify")
-            yield Static("")
-            yield Static("Self-destruct TTL (seconds, blank = no expiry):", id="ttl_label")
+            yield Static("TTL defaults", classes="section_label")
             yield Input(placeholder="e.g. 300 for 5 minutes", id="ttl_input", restrict=r"\d*")
             yield Static("", id="status")
             yield Button("💾 Save TTL", variant="primary", id="btn_ttl")
@@ -122,23 +156,47 @@ class SettingsScreen(Screen):
     def set_fingerprint(self, fp: str) -> None:
         self.query_one("#fingerprint", Static).update(fp)
 
-    def set_trust_state(self, trust_state: TrustDisplayState) -> None:
-        self._trust_state = trust_state
-        parts = [
-            "Verified" if trust_state.verified else "Not verified",
-            "Key changed" if trust_state.key_changed else "Key stable",
-        ]
-        self.query_one("#trust_state", Static).update(" · ".join(parts))
+    def set_trust_view_model(self, trust_view_model: TrustViewModel) -> None:
+        self._trust_view_model = trust_view_model
+        self.query_one("#fingerprint", Static).update(trust_view_model.fingerprint)
+        badge = "Action required" if trust_view_model.requires_action else (
+            "Verified" if trust_view_model.verified else "Not verified"
+        )
+        trust_parts = ["Key changed" if trust_view_model.key_changed else "Key stable"]
+        if not trust_view_model.verified or trust_view_model.key_changed:
+            trust_parts.insert(0, "Verified" if trust_view_model.verified else "Not verified")
+        hint = (
+            trust_view_model.banner.message
+            if trust_view_model.banner is not None
+            else "This contact is verified. Compare fingerprints again after any key change."
+            if trust_view_model.verified
+            else "This contact is not verified yet. Compare fingerprints before trusting sensitive messages."
+        )
+        action_hint = (
+            "Re-verify this contact before trusting new messages."
+            if trust_view_model.requires_action
+            else "No action required."
+        )
+        badge_widget = self.query_one("#trust_badge")
+        if hasattr(badge_widget, "set_badge"):
+            badge_widget.set_badge(
+                badge,
+                tone="error" if trust_view_model.requires_action else (
+                    "success" if trust_view_model.verified else "warning"
+                ),
+            )
+        else:
+            badge_widget.update(badge)
+        self.query_one("#trust_state", Static).update(" · ".join(trust_parts))
+        self.query_one("#trust_hint", Static).update(hint)
+        self.query_one("#action_hint", Static).update(action_hint)
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id in ("btn_back", "btn_close"):
             self.app.pop_screen()
         elif event.button.id == "btn_verify":
             self.post_message(self.MarkVerified())
-            self.set_trust_state(
-                TrustDisplayState(verified=True, key_changed=False)
-            )
-            self.query_one("#status", Static).update("Marked as verified.")
+            self.query_one("#status", Static).update("Verification requested.")
         elif event.button.id == "btn_ttl":
             self._save_ttl()
 

@@ -1,8 +1,20 @@
 #!/usr/bin/env bash
-# Pre-commit hook: run ruff lint + format check on staged Python files.
+# Pre-commit hook: clean mechanical whitespace first, then run Python checks.
 # Skip with: git commit --no-verify
 
 set -euo pipefail
+
+# Collect staged text files where trailing whitespace is always accidental.
+mapfile -t TEXT_FILES < <(
+    git diff --cached --name-only --diff-filter=ACMR -- \
+        '*.py' '*.md' '*.txt' '*.toml' '*.yml' '*.yaml' '*.sh'
+)
+
+if [[ ${#TEXT_FILES[@]} -gt 0 ]]; then
+    echo "clean trailing whitespace …"
+    perl -pi -e 's/[ \t]+$//' "${TEXT_FILES[@]}"
+    git add -- "${TEXT_FILES[@]}"
+fi
 
 # Collect staged .py files (added, copied, modified, renamed)
 mapfile -t PY_FILES < <(git diff --cached --name-only --diff-filter=ACMR -- '*.py')
