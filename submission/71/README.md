@@ -44,17 +44,12 @@ For `code/scripts/`, include only:
 
 Exclude all other non-required docs and development artifacts, including:
 
-- AI workflow scaffolding:
-  - `AGENTS.md`
-  - `ai/`
-  - `knowledge/`
-  - `skills/`
-  - `template/`
 - non-required project docs
 - planning notes
 - freeze notes
 - review notes
 - local settings
+- internal development-only context files
 - non-required helper scripts such as:
   - `scripts/build_submission_zip.sh`
   - `scripts/check_silent_excepts.py`
