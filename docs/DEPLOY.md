@@ -71,23 +71,33 @@ cd TeamID/code
 uv sync
 ```
 
+This installs the runtime libraries needed by both the server and client.
+
 > **For running tests**, install dev dependencies too:
 >
 > ```bash
 > uv sync --extra dev
 > ```
 
-Fallback (if `uv` is unavailable):
+Fallback only if `uv` cannot be installed:
 
 ```bash
 pip install -e .
 ```
 
+If `uv sync` fails on a clean machine:
+
+- confirm you are using Python 3.12: `python --version`
+- rerun `uv sync` from the project root
+- use `uv sync --extra dev` only if you need tests
+- if Windows reports build or PATH issues, reopen the terminal after installing Python / `uv`
+- if runtime import errors still appear later, rerun `uv sync` before debugging application code
+
 ---
 
 ## 4. Configure Environment
 
-Run the bootstrap script — it copies `.env.example` to `.env.local` and **automatically generates cryptographically random secrets** for `TOKEN_SECRET_KEY` and `TOTP_ENCRYPTION_KEY`:
+Run the bootstrap script — it copies `.env.example` to `.env.local`, **automatically generates cryptographically random secrets** for `TOKEN_SECRET_KEY` and `TOTP_ENCRYPTION_KEY`, and generates a local TLS certificate when `openssl` is available:
 
 **Ubuntu / macOS / Git Bash (Windows):**
 
@@ -96,27 +106,22 @@ chmod +x scripts/bootstrap-env.sh
 ./scripts/bootstrap-env.sh
 ```
 
-**Windows (PowerShell, if Git Bash is unavailable):**
+**Windows (Command Prompt / PowerShell, no Git Bash required):**
 
-```powershell
-python -c "
-import shutil, secrets, re, pathlib
-src = pathlib.Path('.env.example').read_text()
-src = src.replace('REPLACE_WITH_RANDOM_64_HEX_CHARS', '__REPLACE__', 1)
-src = src.replace('REPLACE_WITH_RANDOM_64_HEX_CHARS', '__REPLACE__', 1)
-src = src.replace('__REPLACE__', secrets.token_hex(32), 1)
-src = src.replace('__REPLACE__', secrets.token_hex(32), 1)
-pathlib.Path('.env.local').write_text(src)
-print('Wrote .env.local')
-"
+```bat
+scripts\bootstrap-env.bat
 ```
 
 > If `.env.local` already exists, the script will exit without overwriting it.
-> To regenerate secrets: `rm .env.local && ./scripts/bootstrap-env.sh`
+> To regenerate secrets on Linux / Git Bash: `rm .env.local && ./scripts/bootstrap-env.sh`
+> To regenerate secrets on Windows CMD / PowerShell: `del .env.local && scripts\bootstrap-env.bat`
 
 ---
 
 ## 5. Generate a Self-Signed TLS Certificate (Development)
+
+Bootstrap is the primary path.
+Use this manual step only if certificate auto-generation was skipped or failed.
 
 ```bash
 mkdir -p certs
@@ -143,6 +148,21 @@ To stop: `docker compose down`
 
 ### Option B — Direct (development, no Docker)
 
+Linux / macOS / Git Bash:
+
+```bash
+chmod +x scripts/run-server.sh
+./scripts/run-server.sh
+```
+
+Windows CMD / PowerShell:
+
+```bat
+scripts\run-server.bat
+```
+
+Manual equivalent:
+
 ```bash
 uv run uvicorn server.main:app --host 0.0.0.0 --port 8443
 ```
@@ -150,6 +170,21 @@ uv run uvicorn server.main:app --host 0.0.0.0 --port 8443
 > **Note:** In development mode (`app_env=development`), if `TOKEN_SECRET_KEY` or
 > `TOTP_ENCRYPTION_KEY` are missing from `.env.local`, the server auto-generates
 > temporary values and logs a warning. **Never rely on this in production.**
+
+### Database initialization / import
+
+This project includes a database initialization artifact at:
+
+```text
+server/migrations/001_init.sql
+```
+
+For a normal first-time deployment, the application will initialize the local
+SQLite database automatically when the server starts.
+
+If your marker or teammate needs an explicit schema file for inspection or
+manual import, use `server/migrations/001_init.sql` as the authoritative
+database initialization file.
 
 ---
 
@@ -161,6 +196,21 @@ Open a **new terminal** in the project directory:
 > Course tutorial materials (for example `docs/Tutorial/Tutorial.pdf`) are not
 > the deployment baseline for this project. This project uses Python 3.12 +
 > `uv` for reproducible environments.
+
+Linux / macOS / Git Bash:
+
+```bash
+chmod +x scripts/run-client.sh
+./scripts/run-client.sh
+```
+
+Windows CMD / PowerShell:
+
+```bat
+scripts\run-client.bat
+```
+
+Manual equivalent:
 
 ```bash
 uv run python -m client.main --server https://localhost:8443
@@ -258,11 +308,13 @@ repository-enforced invariants.
 | TOTP code rejected                    | Ensure your system clock is accurate. Ubuntu: `timedatectl set-ntp true`. Windows: Settings -> Time & Language -> Sync now |
 | Docker permission denied (Linux)      | Run `sudo usermod -aG docker $USER` then log out and back in                                                               |
 | `uv: command not found`               | Restart terminal after installing `uv`, or use `pip install -e .` instead                                                  |
-| `ModuleNotFoundError`                 | Run `uv sync` (add `--extra dev` for tests) from the project root                                                          |
+| `ModuleNotFoundError` or missing library import | Run `uv sync` from the project root, then retry. Use `uv sync --extra dev` only for tests.                             |
+| `scripts\\run-server.bat` or `scripts\\run-client.bat` exits immediately | Read the printed prerequisite message, then fix the missing step: install `uv`, run `uv sync`, or create `.env.local` first. |
+| `./scripts/run-server.sh` or `./scripts/run-client.sh` says dependencies are missing | Run `uv sync` again from the repo root before debugging application code.                                        |
 | Database locked error                 | Stop any other running server instance before starting a new one                                                           |
 | Keystore not found on login           | You must register on this device first — keys are stored locally in `~/.comp3334im/<username>/`                            |
-| `.env.local` already exists           | Delete it first: `rm .env.local`, then re-run `./scripts/bootstrap-env.sh`                                                 |
-| `bootstrap-env.sh: Permission denied` | Run `chmod +x scripts/bootstrap-env.sh` first                                                                              |
+| `.env.local` already exists           | Linux / Git Bash: `rm .env.local && ./scripts/bootstrap-env.sh` . Windows CMD / PowerShell: `del .env.local && scripts\bootstrap-env.bat` |
+| `bootstrap-env.sh: Permission denied` | Linux / Git Bash only: run `chmod +x scripts/bootstrap-env.sh` first                                                       |
 
 ---
 
@@ -270,7 +322,9 @@ repository-enforced invariants.
 
 | File                                     | Purpose                                                  |
 | ---------------------------------------- | -------------------------------------------------------- |
-| `scripts/bootstrap-env.sh`               | Auto-generates `.env.local` with random secrets          |
+| `scripts/bootstrap-env.sh` / `scripts/bootstrap-env.bat` | Auto-generates `.env.local`, secrets, and local TLS material when possible |
+| `scripts/run-server.sh` / `scripts/run-server.bat` | Starts the direct development server with prerequisite checks |
+| `scripts/run-client.sh` / `scripts/run-client.bat` | Starts the client with prerequisite checks |
 | `.env.local`                             | Server configuration (secrets, ports) — **never commit** |
 | `certs/server.crt`                       | TLS certificate                                          |
 | `certs/server.key`                       | TLS private key                                          |
