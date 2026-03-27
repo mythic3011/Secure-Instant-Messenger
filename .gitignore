@@ -19,11 +19,15 @@ dist/
 *.log
 coverage/
 .pytest_cache/
+.mypy_cache/
 *.egg
 *.whl
 certs/
 data/
+.uv-cache/
+.uv-tools/
+.local-share/
+.agents/
+docs/plans/
 CLAUDE.md
 .claude/
-skills/
-knowledge/

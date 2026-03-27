@@ -11,7 +11,7 @@ import json
 import os
 import time
 from contextlib import asynccontextmanager
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import structlog
 import uvicorn
@@ -26,7 +26,7 @@ from server.api.friends import router as friends_router
 from server.api.keys import router as keys_router
 from server.api.messages import router as msg_router
 from server.core.config import get_settings
-from server.core.database import close_db, get_db, get_session, init_db
+from server.core.database import close_db, get_session, init_db
 from server.models.message import Message
 from server.models.session import Session
 from server.ws.handler import websocket_endpoint
@@ -203,7 +203,7 @@ async def _ttl_cleanup_loop() -> None:
         tick = time.monotonic()
         try:
             async with get_session() as db:
-                now_dt = datetime.now(timezone.utc)
+                now_dt = datetime.now(UTC)
                 cutoff_dt = now_dt - timedelta(days=settings.max_message_age_days)
 
                 stmt = delete(Message).where(

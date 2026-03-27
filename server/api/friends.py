@@ -9,7 +9,7 @@ import secrets
 
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import select, update, delete, or_, and_
+from sqlalchemy import and_, delete, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from server.api.auth import require_auth

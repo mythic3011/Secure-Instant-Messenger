@@ -8,7 +8,7 @@ from __future__ import annotations
 import base64
 import re
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -319,7 +319,7 @@ async def delivery_ack(
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not your message")
 
     if msg.delivered_at is None:
-        now_dt = datetime.now(timezone.utc)
+        now_dt = datetime.now(UTC)
         msg.delivered_at = now_dt
         await db.commit()
 

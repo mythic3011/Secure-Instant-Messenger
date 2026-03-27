@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import structlog
 from fastapi import WebSocket, WebSocketDisconnect
@@ -83,7 +83,7 @@ async def websocket_endpoint(websocket: WebSocket, user_id: str) -> None:
 async def _flush_offline_queue(websocket: WebSocket, user_id: str) -> None:
     """Deliver all undelivered messages to a newly connected user."""
     async with get_session() as db:
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
 
         # Race condition fix: Use SELECT...FOR UPDATE to lock rows being processed
         # This prevents concurrent delivery attempts from multiple connections
@@ -158,7 +158,7 @@ async def _handle_client_message(user_id: str, raw: str) -> None:
             log.warning("ws_ack_missing_message_id", user_id=user_id)
             return
         async with get_session() as db:
-            now_dt = datetime.now(timezone.utc)
+            now_dt = datetime.now(UTC)
             # Race condition fix: Use SELECT...FOR UPDATE to lock the message row
             # This prevents concurrent ACK processing from multiple connections
             stmt = select(Message.sender_id, Message.delivered_at).where(

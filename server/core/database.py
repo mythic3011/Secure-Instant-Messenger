@@ -10,7 +10,6 @@ from typing import Any
 
 from sqlalchemy import event
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
-from sqlalchemy.orm import DeclarativeBase
 
 from server.core.config import get_settings
 from server.models.base import Base

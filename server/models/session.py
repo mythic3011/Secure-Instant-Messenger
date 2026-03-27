@@ -2,10 +2,9 @@
 
 from __future__ import annotations
 
-from datetime import datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import DateTime, ForeignKey, Integer, String, Text, func
+from sqlalchemy import ForeignKey, Integer, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from server.models.base import Base, TimestampMixin
@@ -28,7 +27,7 @@ class Session(Base, TimestampMixin):
     revoked: Mapped[bool] = mapped_column(Integer, default=0, nullable=False)
 
     # Relationships
-    user: Mapped["User"] = relationship("User", back_populates="sessions")
+    user: Mapped[User] = relationship("User", back_populates="sessions")
 
     def __repr__(self) -> str:
         return f"<Session(id={self.id!r}, user_id={self.user_id!r})>"

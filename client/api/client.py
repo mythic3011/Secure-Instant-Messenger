@@ -12,8 +12,7 @@ import logging
 import ssl
 import warnings
 from collections.abc import Awaitable, Callable
-from typing import Any
-from typing import Literal
+from typing import Any, Literal
 
 import httpx
 import websockets
@@ -123,7 +122,7 @@ def _make_ssl_ctx(
             return preverify_ok
 
         # Use setattr to avoid Pylance type errors (verify_callback exists at runtime)
-        setattr(ctx, "verify_callback", _verify_pin_callback)
+        ctx.verify_callback = _verify_pin_callback
 
     return ctx
 

@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from pathlib import Path
-import re
 
 ROOTS = ("docs", "shared", "client", "server")
 INCLUDED_SUFFIXES = {".md", ".py"}
