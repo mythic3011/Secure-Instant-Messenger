@@ -29,4 +29,4 @@ if "%CHECK_ONLY%"=="1" (
   exit /b 0
 )
 
-uv run uvicorn server.main:app --host 0.0.0.0 --port 8443
+uv run python -m server.main

@@ -30,4 +30,4 @@ if [[ $CHECK_ONLY -eq 1 ]]; then
     exit 0
 fi
 
-exec uv run uvicorn server.main:app --host 0.0.0.0 --port 8443
+exec uv run python -m server.main

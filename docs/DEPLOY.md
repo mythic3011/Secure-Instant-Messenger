@@ -164,7 +164,7 @@ scripts\run-server.bat
 Manual equivalent:
 
 ```bash
-uv run uvicorn server.main:app --host 0.0.0.0 --port 8443
+uv run python -m server.main
 ```
 
 > **Note:** In development mode (`app_env=development`), if `TOKEN_SECRET_KEY` or
