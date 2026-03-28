@@ -29,8 +29,8 @@ Install the following in order:
 3. **Docker Desktop** — https://www.docker.com/products/docker-desktop/
    After install: start Docker Desktop and wait for the engine to be running
 
-4. **OpenSSL** (for TLS cert generation) — included with Git for Windows.
-   Open **Git Bash** for all commands below.
+4. **OpenSSL** (required for TLS cert generation) — included with Git for Windows.
+   Ensure `openssl` is available in `PATH` before running the bootstrap script.
 
 ### Install `uv` (Python package manager)
 
@@ -97,7 +97,7 @@ If `uv sync` fails on a clean machine:
 
 ## 4. Configure Environment
 
-Run the bootstrap script — it copies `.env.example` to `.env.local`, **automatically generates cryptographically random secrets** for `TOKEN_SECRET_KEY` and `TOTP_ENCRYPTION_KEY`, and generates a local TLS certificate when `openssl` is available:
+Run the bootstrap script — it copies `.env.example` to `.env.local`, **automatically generates cryptographically random secrets** for `TOKEN_SECRET_KEY` and `TOTP_ENCRYPTION_KEY`, and generates the local TLS certificate required by this project:
 
 **Ubuntu / macOS / Git Bash (Windows):**
 
@@ -121,7 +121,7 @@ scripts\bootstrap-env.bat
 ## 5. Generate a Self-Signed TLS Certificate (Development)
 
 Bootstrap is the primary path.
-Use this manual step only if certificate auto-generation was skipped or failed.
+Use this manual step only if certificate auto-generation failed.
 
 ```bash
 mkdir -p certs
