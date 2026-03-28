@@ -1,3 +1,12 @@
+from client.use_cases.friends import (
+    FriendRequestHandled,
+    FriendsContext,
+    HandleFriendRequestResult,
+    LoadPendingResult,
+    PendingRequestsLoaded,
+    execute_handle_friend_request,
+    execute_load_pending_requests,
+)
 from client.use_cases.results import (
     LocalSecurityFailure,
     NetworkFailure,
@@ -26,6 +35,13 @@ __all__ = [
     "UnexpectedFailure",
     "UseCaseFailure",
     "UseCaseResult",
+    "FriendRequestHandled",
+    "FriendsContext",
+    "HandleFriendRequestResult",
+    "LoadPendingResult",
+    "PendingRequestsLoaded",
+    "execute_handle_friend_request",
+    "execute_load_pending_requests",
     "SendMessageBlocked",
     "SendMessageContext",
     "SendMessageResult",

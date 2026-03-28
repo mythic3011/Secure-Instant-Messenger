@@ -66,11 +66,16 @@ from client.ui.contracts import (
 from client.ui.screens.conversations import ConversationListScreen
 from client.ui.screens.login import LoginScreen
 from client.use_cases import (
+    FriendRequestHandled,
+    FriendsContext,
     NetworkFailure,
+    PendingRequestsLoaded,
     SendMessageBlocked,
     SendMessageContext,
     SendMessageSucceeded,
     ServerFailure,
+    execute_handle_friend_request,
+    execute_load_pending_requests,
     execute_send_message,
 )
 from client.use_cases import (
@@ -672,23 +677,15 @@ class IMApp(App):
         except Exception as exc:  # allow-silent-except
             log.warning("friends_screen_lookup_failed", err=str(exc))
             return
-        try:
-            requests = await self._client.list_pending_requests()
+        result = await execute_load_pending_requests(FriendsContext(client=self._client))
+        if isinstance(result, PendingRequestsLoaded):
             try:
-                friends.populate_pending([r.model_dump() for r in requests])
+                friends.populate_pending(result.requests)
             except Exception as exc:  # allow-silent-except
                 log.warning("friends_screen_update_failed", err=str(exc))
-        except (
-            IMClientError,
-            httpx.ConnectError,
-            httpx.TimeoutException,
-            httpx.NetworkError,
-        ) as exc:
-            log.warning("friends_pending_load_failed", err=str(exc))
-            if isinstance(exc, IMClientError):
-                friends.show_error(exc.detail)
-            else:
-                friends.show_error("Cannot reach server. Pending requests unavailable.")
+            return
+        log.warning("friends_pending_load_failed", err=result.message)
+        friends.show_error(result.message)
 
     async def on_friends_screen_send_request(self, msg: Any) -> None:
         if self._client is None:
@@ -708,33 +705,33 @@ class IMApp(App):
         if self._client is None:
             return
         friends = self.screen
-        try:
-            await self._client.handle_friend_request(msg.request_id, "accept")
-            requests = await self._client.list_pending_requests()
-            friends.populate_pending([r.model_dump() for r in requests])
-            friends.show_status("Friend request accepted.")
-        except IMClientError as exc:
-            log.warning("friend_request_accept_failed", request_id=msg.request_id, err=str(exc))
-            friends.show_error(exc.detail)
-        except (httpx.ConnectError, httpx.TimeoutException, httpx.NetworkError) as exc:
-            log.warning("friend_request_accept_failed", request_id=msg.request_id, err=str(exc))
-            friends.show_error("Cannot reach server. Pending request unchanged.")
+        result = await execute_handle_friend_request(
+            FriendsContext(client=self._client),
+            request_id=msg.request_id,
+            action="accept",
+        )
+        if isinstance(result, FriendRequestHandled):
+            friends.populate_pending(result.requests)
+            friends.show_status(result.status_message)
+            return
+        log.warning("friend_request_accept_failed", request_id=msg.request_id, err=result.message)
+        friends.show_error(result.message)
 
     async def on_friends_screen_decline_request(self, msg: Any) -> None:
         if self._client is None:
             return
         friends = self.screen
-        try:
-            await self._client.handle_friend_request(msg.request_id, "decline")
-            requests = await self._client.list_pending_requests()
-            friends.populate_pending([r.model_dump() for r in requests])
-            friends.show_status("Friend request declined.")
-        except IMClientError as exc:
-            log.warning("friend_request_decline_failed", request_id=msg.request_id, err=str(exc))
-            friends.show_error(exc.detail)
-        except (httpx.ConnectError, httpx.TimeoutException, httpx.NetworkError) as exc:
-            log.warning("friend_request_decline_failed", request_id=msg.request_id, err=str(exc))
-            friends.show_error("Cannot reach server. Pending request unchanged.")
+        result = await execute_handle_friend_request(
+            FriendsContext(client=self._client),
+            request_id=msg.request_id,
+            action="decline",
+        )
+        if isinstance(result, FriendRequestHandled):
+            friends.populate_pending(result.requests)
+            friends.show_status(result.status_message)
+            return
+        log.warning("friend_request_decline_failed", request_id=msg.request_id, err=result.message)
+        friends.show_error(result.message)
 
     async def on_chat_screen_request_history(self, msg: Any) -> None:
         from client.ui.screens.chat import ChatScreen
