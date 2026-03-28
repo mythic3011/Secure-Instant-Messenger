@@ -27,7 +27,13 @@ class FriendRequestHandled:
     status_message: str
 
 
+@dataclass(frozen=True)
+class FriendRequestSent:
+    status_message: str
+
+
 type LoadPendingResult = PendingRequestsLoaded | NetworkFailure | ServerFailure
+type SendFriendRequestResult = FriendRequestSent | NetworkFailure | ServerFailure
 type HandleFriendRequestResult = FriendRequestHandled | NetworkFailure | ServerFailure
 
 
@@ -41,6 +47,22 @@ async def execute_load_pending_requests(context: FriendsContext) -> LoadPendingR
     except (httpx.ConnectError, httpx.TimeoutException, httpx.NetworkError):
         return NetworkFailure(message="Cannot reach server. Pending requests unavailable.")
     return PendingRequestsLoaded(requests=[request.model_dump() for request in requests])
+
+
+async def execute_send_friend_request(
+    context: FriendsContext,
+    *,
+    username: str,
+) -> SendFriendRequestResult:
+    if context.client is None:
+        return ServerFailure(message="Friend requests are unavailable.")
+    try:
+        await context.client.send_friend_request(username)
+    except IMClientError as exc:
+        return ServerFailure(message=exc.detail)
+    except (httpx.ConnectError, httpx.TimeoutException, httpx.NetworkError):
+        return NetworkFailure(message="Cannot reach server. Friend request not sent.")
+    return FriendRequestSent(status_message=f"Request sent to {username}.")
 
 
 async def execute_handle_friend_request(

@@ -8,10 +8,12 @@ import pytest
 from client.api.client import IMClientError
 from client.use_cases.friends import (
     FriendRequestHandled,
+    FriendRequestSent,
     FriendsContext,
     PendingRequestsLoaded,
     execute_handle_friend_request,
     execute_load_pending_requests,
+    execute_send_friend_request,
 )
 from client.use_cases.results import NetworkFailure, ServerFailure
 
@@ -93,3 +95,30 @@ async def test_execute_handle_friend_request_returns_network_failure() -> None:
     result = await execute_handle_friend_request(context, request_id="req-1", action="decline")
 
     assert result == NetworkFailure(message="Cannot reach server. Pending request unchanged.")
+
+
+@pytest.mark.asyncio
+async def test_execute_send_friend_request_returns_success() -> None:
+    sent_to: list[str] = []
+
+    async def _send_friend_request(username: str) -> None:
+        sent_to.append(username)
+
+    context = FriendsContext(client=SimpleNamespace(send_friend_request=_send_friend_request))
+
+    result = await execute_send_friend_request(context, username="bob")
+
+    assert sent_to == ["bob"]
+    assert result == FriendRequestSent(status_message="Request sent to bob.")
+
+
+@pytest.mark.asyncio
+async def test_execute_send_friend_request_returns_network_failure() -> None:
+    async def _raise_send(*_args, **_kwargs):
+        raise httpx.ConnectError("offline")
+
+    context = FriendsContext(client=SimpleNamespace(send_friend_request=_raise_send))
+
+    result = await execute_send_friend_request(context, username="bob")
+
+    assert result == NetworkFailure(message="Cannot reach server. Friend request not sent.")

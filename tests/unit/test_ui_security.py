@@ -754,6 +754,23 @@ async def test_friend_accept_server_error_is_shown(monkeypatch: pytest.MonkeyPat
 
 
 @pytest.mark.asyncio
+async def test_friend_send_request_network_error_is_shown(monkeypatch: pytest.MonkeyPatch) -> None:
+    app = IMApp("https://example.test", "alice")
+    screen = _FakeFriendsScreen()
+    app._screen_stack.append(screen)  # type: ignore[attr-defined]
+
+    async def _raise_send(*_args, **_kwargs):
+        raise httpx.ConnectError("offline")
+
+    app._client = SimpleNamespace(send_friend_request=_raise_send)
+
+    await app.on_friends_screen_send_request(SimpleNamespace(username="bob"))
+
+    assert screen.error == "Cannot reach server. Friend request not sent."
+    assert screen.status == ""
+
+
+@pytest.mark.asyncio
 async def test_friend_decline_network_error_is_shown(monkeypatch: pytest.MonkeyPatch) -> None:
     app = IMApp("https://example.test", "alice")
     screen = _FakeFriendsScreen()

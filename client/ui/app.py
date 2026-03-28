@@ -67,12 +67,14 @@ from client.ui.screens.conversations import ConversationListScreen
 from client.ui.screens.login import LoginScreen
 from client.use_cases import (
     FriendRequestHandled,
+    FriendRequestSent,
     FriendsContext,
     LoginContext,
     LoginFailed,
     LoginSucceeded,
     NetworkFailure,
     PendingRequestsLoaded,
+    SendFriendRequestResult,
     SendMessageBlocked,
     SendMessageContext,
     SendMessageSucceeded,
@@ -80,6 +82,7 @@ from client.use_cases import (
     execute_handle_friend_request,
     execute_load_pending_requests,
     execute_login_handshake,
+    execute_send_friend_request,
     execute_send_message,
 )
 from client.use_cases import (
@@ -480,6 +483,17 @@ class IMApp(App):
             return
         friends.show_error(result.message)
 
+    @staticmethod
+    def _apply_send_friend_request_result(
+        *,
+        friends: Any,
+        result: SendFriendRequestResult,
+    ) -> None:
+        if isinstance(result, FriendRequestSent):
+            friends.show_status(result.status_message)
+            return
+        friends.show_error(result.message)
+
     def compose(self) -> ComposeResult:
         yield from []  # app has no persistent widgets; screens handle layout
 
@@ -693,11 +707,14 @@ class IMApp(App):
         if friends is None:
             log.warning("friends_screen_lookup_failed", err="FriendsScreen not active")
             return
-        try:
-            await self._client.send_friend_request(msg.username)
-            friends.show_status(f"Request sent to {msg.username}.")
-        except IMClientError as e:
-            friends.show_error(f"Failed: {e.detail}")
+        result = await execute_send_friend_request(
+            self._friends_context(),
+            username=msg.username,
+        )
+        self._apply_send_friend_request_result(friends=friends, result=result)
+        if isinstance(result, FriendRequestSent):
+            return
+        log.warning("friend_request_send_failed", username=msg.username, err=result.message)
 
     async def on_friends_screen_accept_request(self, msg: Any) -> None:
         if self._client is None:
