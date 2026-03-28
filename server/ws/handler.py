@@ -15,6 +15,7 @@ from sqlalchemy import select, update
 
 from server.core.database import get_session
 from server.models.message import Message
+from server.ws.events import build_message_event
 
 log = structlog.get_logger()
 
@@ -128,23 +129,7 @@ async def _flush_offline_queue(websocket: WebSocket, user_id: str) -> None:
 
         delivered_ids = []
         for msg in messages:
-            payload = {
-                "type": "message",
-                "payload": {
-                    "id": msg.id,
-                    "type": "message",
-                    "sender_id": msg.sender_id,
-                    "recipient_id": msg.recipient_id,
-                    "conversation_id": msg.conversation_id,
-                    "counter": msg.counter,
-                    "nonce_b64": msg.nonce_b64,
-                    "ciphertext_b64": msg.ciphertext_b64,
-                    "eph_pub_b64": msg.eph_pub_b64,
-                    "ttl_seconds": msg.ttl_seconds,
-                    "sent_at": msg.sent_at,
-                    "delivery_status": "delivered",
-                },
-            }
+            payload = build_message_event(msg)
             try:
                 await websocket.send_text(json.dumps(payload))
                 delivered_ids.append(msg.id)

@@ -19,6 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from server.api.auth import require_auth
 from server.core.database import get_db
 from server.models import Conversation, Friendship, Message, User
+from server.ws.events import build_message_event
 from server.ws.handler import push_to_user
 from shared.protocol import (
     DeliveryAck,
@@ -241,7 +242,7 @@ async def send_message(
 
     # Push to recipient if online (WebSocket)
     delivered_at = None
-    pushed = await push_to_user(env.recipient_id, {"type": "message", "payload": env.model_dump()})
+    pushed = await push_to_user(env.recipient_id, build_message_event(env))
     if pushed:
         delivered_at = stored_at
         stmt = update(Message).where(Message.id == env.id).values(delivered_at=delivered_at)
