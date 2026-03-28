@@ -2,12 +2,20 @@ from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Protocol
 
 import httpx
 
-from client.api.client import IMClient, IMClientConnectionError, IMClientError
+from client.api.client import IMClientConnectionError, IMClientError
 from shared.protocol import LoginRequest
+
+
+class LoginClientProtocol(Protocol):
+    async def __aenter__(self) -> object: ...
+    async def __aexit__(self, *_args: object) -> None: ...
+    async def login(self, body: LoginRequest) -> object: ...
+    async def get_keys(self, username: str) -> Any: ...
+    async def connect_ws(self, on_message: Callable[[dict], Awaitable[None]]) -> None: ...
 
 
 @dataclass
@@ -17,7 +25,7 @@ class LoginContext:
     ca_cert: str | None
     pin_sha256: str | None
     on_ws_message: Callable[[dict], Awaitable[None]]
-    client_factory: Callable[..., IMClient | Any]
+    client_factory: Callable[..., LoginClientProtocol]
     keystore_exists_fn: Callable[[str], bool]
     load_keystore_fn: Callable[[str, str], Any]
     derive_storage_key_fn: Callable[[str, str], None]
@@ -28,7 +36,7 @@ class LoginContext:
 
 @dataclass(frozen=True)
 class LoginSucceeded:
-    client: IMClient | Any
+    client: LoginClientProtocol
     username: str
     password: str
     user_id: str
@@ -44,7 +52,7 @@ class LoginFailed:
 type LoginHandshakeResult = LoginSucceeded | LoginFailed
 
 
-async def _close_and_fail(client: IMClient | Any, message: str) -> LoginFailed:
+async def _close_and_fail(client: LoginClientProtocol, message: str) -> LoginFailed:
     await client.__aexit__(None, None, None)
     return LoginFailed(message=message)
 
