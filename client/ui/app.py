@@ -79,6 +79,7 @@ from client.use_cases import (
     SendMessageContext,
     SendMessageSucceeded,
     ServerFailure,
+    Success,
     execute_handle_friend_request,
     execute_load_pending_requests,
     execute_login_handshake,
@@ -87,6 +88,10 @@ from client.use_cases import (
 )
 from client.use_cases import (
     ensure_session as ensure_send_session,
+)
+from client.use_cases.open_conversation import (
+    OpenConversationContext,
+    execute_open_conversation,
 )
 from shared.protocol import (
     DeliveryAck,
@@ -528,10 +533,39 @@ class IMApp(App):
         await self._show_conversations()
 
     async def _show_conversations(self) -> None:
+        await self._sync_conversations_from_server()
         convs = await get_conversations()
+        self._rehydrate_peer_usernames(convs)
         screen = ConversationListScreen(my_username=self._username)
         await self.push_screen(screen)
         screen.populate(self._build_conversation_summaries(convs))
+
+    async def _sync_conversations_from_server(self) -> None:
+        if self._client is None:
+            return
+        try:
+            response = await self._client.list_conversations()
+        except IMClientError as exc:
+            log.warning("list_conversations_failed", err=exc.detail)
+            return
+        except (httpx.ConnectError, httpx.TimeoutException, httpx.NetworkError) as exc:
+            log.warning("list_conversations_network_error", err=str(exc))
+            return
+
+        for conversation in response.conversations:
+            await upsert_conversation(
+                id=conversation.id,
+                peer_id=conversation.peer_id,
+                peer_username=conversation.peer_username,
+                last_message_at=conversation.last_message_at,
+                unread_count=conversation.unread_count,
+            )
+
+    def _rehydrate_peer_usernames(self, conversations: list[dict[str, Any]]) -> None:
+        self._peer_usernames = {
+            conversation["peer_id"]: conversation["peer_username"]
+            for conversation in conversations
+        }
 
     # ------------------------------------------------------------------
     # Registration flow
@@ -605,10 +639,20 @@ class IMApp(App):
     async def on_conversation_list_screen_conversation_selected(
         self, msg: ConversationListScreen.ConversationSelected
     ) -> None:
-        await reset_unread(msg.conv_id)
-        if self._client:
-            await self._client.mark_read(msg.conv_id)
         self._peer_usernames[msg.peer_id] = msg.peer_username
+        result = await execute_open_conversation(
+            OpenConversationContext(
+                client=self._client,
+                reset_unread_fn=reset_unread,
+            ),
+            conversation_id=msg.conv_id,
+        )
+        if not isinstance(result, Success):
+            log.warning(
+                "open_conversation_mark_read_failed",
+                conversation_id=msg.conv_id,
+                error=result.message,
+            )
         from client.ui.screens.chat import ChatScreen
 
         screen = ChatScreen(

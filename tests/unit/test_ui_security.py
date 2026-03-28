@@ -907,5 +907,77 @@ async def test_login_waits_for_initial_websocket_startup_before_showing_conversa
     assert app._client is fake_client
 
 
+@pytest.mark.asyncio
+async def test_show_conversations_syncs_server_rows_and_rehydrates_peer_map(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app = IMApp("https://example.test", "alice")
+    synced_rows: list[dict[str, object]] = []
+    pushed_screens: list[object] = []
+    populated: list[list[ConversationSummaryViewModel]] = []
+    app._client = _as_any(
+        SimpleNamespace(
+            list_conversations=lambda: _async_value(
+                SimpleNamespace(
+                    conversations=[
+                        SimpleNamespace(
+                            id="conv-1",
+                            peer_id="bob-id",
+                            peer_username="bob",
+                            last_message_at=123,
+                            unread_count=2,
+                        )
+                    ]
+                )
+            )
+        )
+    )
+
+    async def _upsert_conversation(**kwargs) -> None:
+        synced_rows.append(kwargs)
+
+    async def _get_conversations() -> list[dict[str, object]]:
+        return [
+            {
+                "id": "conv-1",
+                "peer_id": "bob-id",
+                "peer_username": "bob",
+                "last_message_at": 123,
+                "unread_count": 2,
+            }
+        ]
+
+    async def _push_screen(screen: object) -> None:
+        pushed_screens.append(screen)
+
+    monkeypatch.setattr(app_module, "upsert_conversation", _upsert_conversation)
+    monkeypatch.setattr(app_module, "get_conversations", _get_conversations)
+    monkeypatch.setattr(app, "push_screen", _push_screen)
+    monkeypatch.setattr(
+        ConversationListScreen,
+        "populate",
+        lambda self, conversations: populated.append(conversations),
+    )
+
+    await app._show_conversations()
+
+    assert synced_rows == [
+        {
+            "id": "conv-1",
+            "peer_id": "bob-id",
+            "peer_username": "bob",
+            "last_message_at": 123,
+            "unread_count": 2,
+        }
+    ]
+    assert app._peer_usernames == {"bob-id": "bob"}
+    assert len(pushed_screens) == 1
+    assert len(populated) == 1
+
+
+async def _async_value(value: object) -> object:
+    return value
+
+
 async def _async_noop(*_args, **_kwargs) -> None:
     return None
