@@ -13,13 +13,13 @@
 
 - `shared/protocol.py` — Pydantic wire models and protocol enums
 - `shared/__init__.py`
-- `001_init.sql` -> `server/migrations/001_init.sql` — full DB schema
+- `server/models/*` + `server/core/database.py` — authoritative ORM schema and startup initialization
 
 ### Server (Done)
 
 - `server/main.py` — FastAPI app, routers, WebSocket endpoint, TTL cleanup loop
 - `server/core/config.py` — pydantic-settings env config
-- `server/core/database.py` — aiosqlite, migration runner
+- `server/core/database.py` — aiosqlite, startup schema initialization
 - `server/core/security.py` — Argon2id, opaque bearer tokens, TOTP encryption, rate limiting
 - `server/api/auth.py` — R1 register, R2 login (password+TOTP), R3 logout
 - `server/api/keys.py` — R4 public key upload/fetch with self-signature verification

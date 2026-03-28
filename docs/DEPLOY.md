@@ -173,18 +173,12 @@ uv run python -m server.main
 
 ### Database initialization / import
 
-This project includes a database initialization artifact at:
-
-```text
-server/migrations/001_init.sql
-```
-
 For a normal first-time deployment, the application will initialize the local
 SQLite database automatically when the server starts.
 
-If your marker or teammate needs an explicit schema file for inspection or
-manual import, use `server/migrations/001_init.sql` as the authoritative
-database initialization file.
+The authoritative schema path is the ORM model set created by
+`server.core.database.init_db()` at startup. This repo does not rely on
+`server/migrations/001_init.sql` as the deployment authority.
 
 ---
 

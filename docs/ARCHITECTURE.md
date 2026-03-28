@@ -493,7 +493,7 @@ project/
 │   │   └── conversations.py       # R23–R25: list, unread counters, mark-read
 │   ├── core/
 │   │   ├── config.py              # pydantic-settings, lru_cache, dev auto-keygen
-│   │   ├── database.py            # aiosqlite, WAL+FK+secure_delete, migration runner
+│   │   ├── database.py            # aiosqlite, WAL+FK+secure_delete, startup schema init
 │   │   └── security.py            # Argon2id, opaque tokens, TOTP encryption, rate limiting
 │   ├── services/
 │   │   ├── auth_service.py        # auth/session workflow logic
@@ -501,8 +501,6 @@ project/
 │   │   └── message_service.py     # replay checks, persistence, ACK flow
 │   ├── ws/
 │   │   └── handler.py             # WebSocket connection manager, offline queue flush
-│   └── migrations/
-│       └── 001_init.sql
 ├── client/
 │   ├── main.py                    # CLI entrypoint (--server, --username flags)
 │   ├── crypto/
@@ -554,100 +552,11 @@ project/
 
 ## 12. Database Schema
 
-```sql
--- server/migrations/001_init.sql
+The authoritative schema is the SQLAlchemy ORM model set under `server/models/`
+and the startup initialization path in `server/core/database.py`.
 
-CREATE TABLE users (
-    id          TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
-    username    TEXT UNIQUE NOT NULL COLLATE NOCASE,
-    pw_hash     TEXT NOT NULL,          -- argon2id PHC string
-    totp_secret TEXT NOT NULL,          -- AES-256-GCM encrypted at rest
-    created_at  INTEGER NOT NULL DEFAULT (unixepoch()),
-    deleted_at  INTEGER
-);
-
-CREATE TABLE public_keys (
-    user_id         TEXT PRIMARY KEY REFERENCES users(id),
-    identity_pub    TEXT NOT NULL,      -- base64 Ed25519 public key
-    dh_pub          TEXT NOT NULL,      -- base64 X25519 public key
-    key_sig         TEXT NOT NULL,      -- Ed25519 sig over (identity_pub || dh_pub)
-    uploaded_at     INTEGER NOT NULL DEFAULT (unixepoch())
-);
-
-CREATE TABLE sessions (
-    id          TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
-    user_id     TEXT NOT NULL REFERENCES users(id),
-    token_hash  TEXT NOT NULL,          -- SHA256(raw_token) — raw never stored
-    expires_at  INTEGER NOT NULL,
-    created_at  INTEGER NOT NULL DEFAULT (unixepoch()),
-    revoked     INTEGER NOT NULL DEFAULT 0
-);
-
-CREATE TABLE friend_requests (
-    id              TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
-    sender_id       TEXT NOT NULL REFERENCES users(id),
-    recipient_id    TEXT NOT NULL REFERENCES users(id),
-    status          TEXT NOT NULL DEFAULT 'pending', -- pending/accepted/declined/cancelled
-    created_at      INTEGER NOT NULL DEFAULT (unixepoch()),
-    updated_at      INTEGER NOT NULL DEFAULT (unixepoch()),
-    UNIQUE(sender_id, recipient_id)
-);
-
-CREATE TABLE friendships (
-    user_a_id   TEXT NOT NULL REFERENCES users(id),
-    user_b_id   TEXT NOT NULL REFERENCES users(id),
-    created_at  INTEGER NOT NULL DEFAULT (unixepoch()),
-    PRIMARY KEY (user_a_id, user_b_id),
-    CHECK (user_a_id < user_b_id)       -- canonical order enforced
-);
-
-CREATE TABLE blocks (
-    blocker_id  TEXT NOT NULL REFERENCES users(id),
-    blocked_id  TEXT NOT NULL REFERENCES users(id),
-    created_at  INTEGER NOT NULL DEFAULT (unixepoch()),
-    PRIMARY KEY (blocker_id, blocked_id)
-);
-
-CREATE TABLE messages (
-    id              TEXT PRIMARY KEY,               -- client-generated UUID v4
-    conversation_id TEXT NOT NULL,
-    sender_id       TEXT NOT NULL REFERENCES users(id),
-    recipient_id    TEXT NOT NULL REFERENCES users(id),
-    counter         INTEGER NOT NULL,
-    nonce_b64       TEXT NOT NULL,
-    ciphertext_b64  TEXT NOT NULL,
-    eph_pub_b64     TEXT,                           -- non-null on first message only
-    ttl_seconds     INTEGER,
-    sent_at         INTEGER NOT NULL,
-    stored_at       INTEGER NOT NULL DEFAULT (unixepoch()),
-    delivered_at    INTEGER,
-    expires_at      INTEGER GENERATED ALWAYS AS (
-                        CASE WHEN ttl_seconds IS NOT NULL
-                        THEN stored_at + ttl_seconds
-                        ELSE NULL END
-                    ) VIRTUAL,
-    UNIQUE(conversation_id, sender_id, counter)     -- server-side replay prevention
-);
-
-CREATE INDEX idx_messages_recipient_delivered
-    ON messages(recipient_id, delivered_at)
-    WHERE delivered_at IS NULL;
-
-CREATE INDEX idx_messages_expires
-    ON messages(expires_at)
-    WHERE expires_at IS NOT NULL;
-
-CREATE TABLE conversations (
-    id                  TEXT PRIMARY KEY,
-    user_a_id           TEXT NOT NULL,
-    user_b_id           TEXT NOT NULL,
-    last_message_at     INTEGER,
-    unread_count_a      INTEGER NOT NULL DEFAULT 0,
-    unread_count_b      INTEGER NOT NULL DEFAULT 0,
-    UNIQUE(user_a_id, user_b_id),
-    CHECK (user_a_id < user_b_id)
-);
-```
+For submission and deployment purposes, a fresh local database is created by the
+application at startup rather than by applying `server/migrations/001_init.sql`.
 
 **Key design decisions:**
 

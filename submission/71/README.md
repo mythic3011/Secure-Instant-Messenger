@@ -28,9 +28,12 @@ Put only submission-required runnable project files inside `code/`.
 Include only what the project brief requires:
 
 - source code
-- database initialization or importable database file
+- database initialization path or importable database file
 - step-by-step deployment and usage document
 - only the helper scripts needed to deploy and run the project
+
+For this repo, database initialization is ORM-driven on first server startup.
+Do not treat `server/migrations/001_init.sql` as the submission authority.
 
 For `code/scripts/`, include only:
 

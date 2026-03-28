@@ -15,7 +15,7 @@ It is submission-facing and should stay aligned with `docs/Project.pdf`.
 
 - [ ] `TeamID/code` contains the project source code only
 - [ ] `TeamID/code` does not contain internal development-only context or tooling files
-- [ ] `TeamID/code` includes a database file or importable database initialization artifact
+- [ ] `TeamID/code` includes either an importable database artifact or a documented runtime database initialization path
 - [ ] `TeamID/code` includes a step-by-step deployment and usage document
 
 ## Functional / Security Coverage

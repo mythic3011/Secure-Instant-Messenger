@@ -59,7 +59,6 @@ for path in \
   shared \
   tests \
   docs/DEPLOY.md \
-  server/migrations/001_init.sql \
   pyproject.toml \
   uv.lock \
   docker-compose.yml \
