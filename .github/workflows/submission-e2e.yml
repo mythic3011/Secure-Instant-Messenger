@@ -129,8 +129,8 @@ jobs:
         shell: pwsh
         run: |
           if (Test-Path .ci-logs/server.pid) {
-            $pid = Get-Content .ci-logs/server.pid
-            Stop-Process -Id $pid -Force -ErrorAction SilentlyContinue
+            $serverPid = Get-Content .ci-logs/server.pid
+            Stop-Process -Id $serverPid -Force -ErrorAction SilentlyContinue
           }
 
       - name: Create placeholder report and video
