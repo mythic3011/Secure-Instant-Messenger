@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from types import SimpleNamespace
+from typing import Any, cast
 
 import httpx
 import pytest
@@ -24,6 +25,7 @@ from client.ui.contracts import (
 )
 from client.ui.screens.chat import ChatScreen
 from client.ui.screens.conversations import ConversationItem, ConversationListScreen
+from client.ui.screens.login import LoginScreen
 from client.ui.screens.settings import SettingsScreen
 from client.use_cases.login import LoginSucceeded
 
@@ -129,6 +131,14 @@ def _patch_settings_widgets(
 
 def _imclient_error(status_code: int, detail: str) -> IMClientError:
     return IMClientError(status_code, f'{{"detail":"{detail}"}}')
+
+
+def _as_any(value: object) -> Any:
+    return cast(Any, value)
+
+
+def _identity_cache_raw(value: dict[str, dict[str, object]]) -> dict[str, object]:
+    return cast(dict[str, object], value)
 
 
 @pytest.mark.asyncio
@@ -266,7 +276,7 @@ async def test_ensure_session_propagates_key_fetch_failure() -> None:
     async def _raise_get_keys(_username: str):
         raise _imclient_error(404, "Peer key unavailable")
 
-    app._client = SimpleNamespace(get_keys=_raise_get_keys)
+    app._client = _as_any(SimpleNamespace(get_keys=_raise_get_keys))
 
     with pytest.raises(IMClientError, match="Peer key unavailable"):
         await app._ensure_session("conv-1", "bob-id")
@@ -275,7 +285,7 @@ async def test_ensure_session_propagates_key_fetch_failure() -> None:
 @pytest.mark.asyncio
 async def test_security_ui_paths_do_not_silently_swallow(monkeypatch: pytest.MonkeyPatch) -> None:
     app = IMApp("https://example.test", "alice")
-    app._client = SimpleNamespace(send_message=None)  # type: ignore[assignment]
+    app._client = _as_any(SimpleNamespace(send_message=None))
     app._user_id = "alice"
     warnings: list[tuple[tuple, dict]] = []
 
@@ -346,9 +356,9 @@ async def test_friends_pending_load_failure_is_shown(
     async def _raise_pending(*_args, **_kwargs):
         raise exc_factory()
 
-    app._client = SimpleNamespace(
+    app._client = _as_any(SimpleNamespace(
         list_pending_requests=_raise_pending,
-    )
+    ))
 
     await app.on_friends_screen__load_pending(SimpleNamespace())
 
@@ -693,14 +703,16 @@ def test_verified_warning_persists_until_reverified() -> None:
     with pytest.raises(KeyChangeWarning):
         cache.check_and_update("bob", pub2)
 
-    restored = IdentityKeyCache.from_dict(cache.as_dict())
+    restored = IdentityKeyCache.from_dict(_identity_cache_raw(cache.as_dict()))
     trust = restored.get_trust_state("bob")
     assert trust is not None
     assert trust.verified is True
     assert trust.key_changed is True
 
     restored.mark_verified("bob", pub2)
-    reverified = IdentityKeyCache.from_dict(restored.as_dict()).get_trust_state("bob")
+    reverified = IdentityKeyCache.from_dict(
+        _identity_cache_raw(restored.as_dict())
+    ).get_trust_state("bob")
     assert reverified is not None
     assert reverified.verified is True
     assert reverified.key_changed is False
@@ -724,7 +736,7 @@ def test_settings_verify_does_not_optimistically_update_trust(
         )
     )
 
-    settings.on_button_pressed(SimpleNamespace(button=_FakeButton("btn_verify")))
+    settings.on_button_pressed(_as_any(SimpleNamespace(button=_FakeButton("btn_verify"))))
 
     assert widgets["#trust_badge"].value == "Action required"
     assert widgets["#trust_state"].value == "Not verified · Key changed"
@@ -742,10 +754,10 @@ async def test_friend_accept_server_error_is_shown(monkeypatch: pytest.MonkeyPat
     async def _raise_handle(*_args, **_kwargs):
         raise _imclient_error(409, "Already handled")
 
-    app._client = SimpleNamespace(
+    app._client = _as_any(SimpleNamespace(
         handle_friend_request=_raise_handle,
         list_pending_requests=None,
-    )
+    ))
 
     await app.on_friends_screen_accept_request(SimpleNamespace(request_id="req-1"))
 
@@ -762,7 +774,7 @@ async def test_friend_send_request_network_error_is_shown(monkeypatch: pytest.Mo
     async def _raise_send(*_args, **_kwargs):
         raise httpx.ConnectError("offline")
 
-    app._client = SimpleNamespace(send_friend_request=_raise_send)
+    app._client = _as_any(SimpleNamespace(send_friend_request=_raise_send))
 
     await app.on_friends_screen_send_request(SimpleNamespace(username="bob"))
 
@@ -779,10 +791,10 @@ async def test_friend_decline_network_error_is_shown(monkeypatch: pytest.MonkeyP
     async def _raise_handle(*_args, **_kwargs):
         raise httpx.ConnectError("offline")
 
-    app._client = SimpleNamespace(
+    app._client = _as_any(SimpleNamespace(
         handle_friend_request=_raise_handle,
         list_pending_requests=None,
-    )
+    ))
 
     await app.on_friends_screen_decline_request(SimpleNamespace(request_id="req-1"))
 
@@ -835,7 +847,7 @@ async def test_login_blocks_transition_on_initial_websocket_failure(
 
     password = "Password123!"  # noqa: S105,S106
     await app.on_login_screen_login_success(
-        SimpleNamespace(username="alice", password=password, totp_code="123456")
+        LoginScreen.LoginSuccess("alice", password, "123456")
     )
 
     assert login_screen.error.value == "Login failed: WebSocket authentication failed."
@@ -851,7 +863,7 @@ async def test_login_waits_for_initial_websocket_startup_before_showing_conversa
     login_screen = _FakeLoginScreen()
     app._screen_stack.append(login_screen)  # type: ignore[attr-defined]
     ready = asyncio.Event()
-    fake_client = object()
+    fake_client = _as_any(object())
 
     async def _execute_login_handshake(*_args, **_kwargs):
         await ready.wait()
@@ -876,10 +888,10 @@ async def test_login_waits_for_initial_websocket_startup_before_showing_conversa
 
     task = asyncio.create_task(
         app.on_login_screen_login_success(
-            SimpleNamespace(
-                username="alice",
-                password="Password123!",  # noqa: S105,S106
-                totp_code="123456",
+            LoginScreen.LoginSuccess(
+                "alice",
+                "Password123!",  # noqa: S105,S106
+                "123456",
             )
         )
     )
