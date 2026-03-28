@@ -528,3 +528,109 @@ async def test_online_push_does_not_mark_delivered_before_ack(
     resp = await client.get(f"/v1/messages?conversation_id={conv_id}", headers=_auth(bob_token))
     assert resp.status_code == 200, resp.text
     assert resp.json()["messages"][0]["delivery_status"] == "delivered"
+
+
+@pytest.mark.anyio
+@pytest.mark.asyncio
+async def test_fetch_messages_rejects_cursor_from_another_conversation(
+    app_client: AsyncClient,
+) -> None:
+    client = app_client
+    password = "CursorPass123!"  # noqa: S105
+
+    alice_id_kp, alice_dh_kp, alice_totp = await _register(client, "alice_cursor", password)
+    _bob_id_kp, _bob_dh_kp, bob_totp = await _register(client, "bob_cursor", password)
+    _carol_id_kp, _carol_dh_kp, carol_totp = await _register(client, "carol_cursor", password)
+
+    alice_token = await _login(client, "alice_cursor", password, alice_totp)
+    bob_token = await _login(client, "bob_cursor", password, bob_totp)
+    carol_token = await _login(client, "carol_cursor", password, carol_totp)
+
+    async def _accept_friendship(recipient_username: str, recipient_token: str) -> str:
+        resp = await client.post(
+            "/v1/friends/request",
+            json={"recipient_username": recipient_username},
+            headers=_auth(alice_token),
+        )
+        assert resp.status_code == 201, resp.text
+        request_id = resp.json()["id"]
+        resp = await client.put(
+            f"/v1/friends/request/{request_id}",
+            json={"action": "accept"},
+            headers=_auth(recipient_token),
+        )
+        assert resp.status_code == 204, resp.text
+        return request_id
+
+    await _accept_friendship("bob_cursor", bob_token)
+    await _accept_friendship("carol_cursor", carol_token)
+
+    alice_bundle = (await client.get("/v1/keys/alice_cursor", headers=_auth(alice_token))).json()
+    bob_bundle = (await client.get("/v1/keys/bob_cursor", headers=_auth(alice_token))).json()
+    carol_bundle = (await client.get("/v1/keys/carol_cursor", headers=_auth(alice_token))).json()
+
+    resp = await client.get("/v1/conversations", headers=_auth(alice_token))
+    assert resp.status_code == 200, resp.text
+    conversations = resp.json()["conversations"]
+    bob_conversation = next(conv for conv in conversations if conv["peer_username"] == "bob_cursor")
+    carol_conversation = next(
+        conv for conv in conversations if conv["peer_username"] == "carol_cursor"
+    )
+
+    async def _send_first_message(
+        *,
+        peer_bundle: dict[str, str],
+        peer_user_id: str,
+        conversation_id: str,
+        plaintext: str,
+    ) -> str:
+        session_key, eph_pub_bytes, conv_dh_pub_bytes = derive_session_key_as_initiator(
+            my_identity_kp=alice_id_kp,
+            my_dh_kp=alice_dh_kp,
+            peer_identity_pub_bytes=base64.b64decode(peer_bundle["identity_pub_b64"]),
+            peer_dh_pub_bytes=base64.b64decode(peer_bundle["dh_pub_b64"]),
+            my_user_id=alice_bundle["user_id"],
+            peer_user_id=peer_user_id,
+            conversation_id=conversation_id,
+        )
+        send_chain, _ = derive_ratchet_chains(session_key.raw, initiator=True)
+        envelope = build_and_encrypt(
+            send_chain=send_chain,
+            plaintext=plaintext,
+            sender_id=alice_bundle["user_id"],
+            recipient_id=peer_user_id,
+            conversation_id=conversation_id,
+            counter=0,
+            ttl_seconds=None,
+            sent_at=int(time.time()),
+        )
+        envelope.eph_pub_b64 = base64.b64encode(eph_pub_bytes).decode()
+        envelope.conv_dh_pub_b64 = base64.b64encode(conv_dh_pub_bytes).decode()
+        resp = await client.post(
+            "/v1/messages",
+            json={"envelope": envelope.model_dump()},
+            headers=_auth(alice_token),
+        )
+        assert resp.status_code == 201, resp.text
+        return resp.json()["id"]
+
+    await _send_first_message(
+        peer_bundle=bob_bundle,
+        peer_user_id=bob_bundle["user_id"],
+        conversation_id=bob_conversation["id"],
+        plaintext="hello bob",
+    )
+    carol_message_id = await _send_first_message(
+        peer_bundle=carol_bundle,
+        peer_user_id=carol_bundle["user_id"],
+        conversation_id=carol_conversation["id"],
+        plaintext="hello carol",
+    )
+
+    resp = await client.get(
+        "/v1/messages",
+        params={"conversation_id": bob_conversation["id"], "before_id": carol_message_id},
+        headers=_auth(alice_token),
+    )
+    assert resp.status_code == 404, resp.text
+    assert resp.json()["detail"] == "Cursor message not found"

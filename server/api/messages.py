@@ -287,7 +287,10 @@ async def fetch_messages(
         )
 
     if before_id:
-        stmt = select(Message.sent_at).where(Message.id == before_id)
+        stmt = select(Message.sent_at).where(
+            Message.id == before_id,
+            Message.conversation_id == conversation_id,
+        )
         result = await db.execute(stmt)
         cursor_row = result.scalar_one_or_none()
         if cursor_row is None:
