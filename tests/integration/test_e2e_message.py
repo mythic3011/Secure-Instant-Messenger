@@ -46,6 +46,7 @@ def anyio_backend():
 async def app_client():
     """Spin up the FastAPI app with a temp in-memory DB."""
     import server.core.database as db_mod
+    from server.core.config import clear_settings_cache
 
     # Patch settings to use temp SQLite and known secrets, with rate limiting disabled
     os.environ["TOKEN_SECRET_KEY"] = "a" * 64
@@ -53,6 +54,7 @@ async def app_client():
     os.environ["DATABASE_URL"] = "sqlite+aiosqlite:////tmp/test_e2e.db"
     os.environ["RATE_LIMIT_REGISTER_MAX"] = "1000"
     os.environ["RATE_LIMIT_LOGIN_MAX"] = "1000"
+    clear_settings_cache()
 
     # Clean up any leftover DB from previous runs to avoid UNIQUE constraint violations
     try:
@@ -69,6 +71,7 @@ async def app_client():
         yield client
 
     await db_mod.close_db()
+    clear_settings_cache()
     # Clean up test DB
     try:
         os.unlink("/tmp/test_e2e.db")
@@ -423,3 +426,105 @@ async def test_non_replay_db_failure_is_not_misclassified(
             json={"envelope": envelope.model_dump()},
             headers=_auth(alice_token),
         )
+
+
+@pytest.mark.anyio
+@pytest.mark.asyncio
+async def test_online_push_does_not_mark_delivered_before_ack(
+    app_client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    client = app_client
+
+    alice_id_kp, alice_dh_kp, alice_totp = await _register(
+        client, "alice_delivery", "AlicePassword123!"
+    )
+    bob_id_kp, bob_dh_kp, bob_totp = await _register(client, "bob_delivery", "BobPassword123!")
+
+    alice_token = await _login(client, "alice_delivery", "AlicePassword123!", alice_totp)
+    bob_token = await _login(client, "bob_delivery", "BobPassword123!", bob_totp)
+
+    resp = await client.post(
+        "/v1/friends/request",
+        json={"recipient_username": "bob_delivery"},
+        headers=_auth(alice_token),
+    )
+    assert resp.status_code == 201, resp.text
+    request_id = resp.json()["id"]
+
+    resp = await client.put(
+        f"/v1/friends/request/{request_id}",
+        json={"action": "accept"},
+        headers=_auth(bob_token),
+    )
+    assert resp.status_code == 204, resp.text
+
+    resp = await client.get("/v1/keys/bob_delivery", headers=_auth(alice_token))
+    assert resp.status_code == 200, resp.text
+    bob_bundle = resp.json()
+    bob_user_id = bob_bundle["user_id"]
+
+    resp = await client.get("/v1/keys/alice_delivery", headers=_auth(alice_token))
+    assert resp.status_code == 200, resp.text
+    alice_user_id = resp.json()["user_id"]
+
+    resp = await client.get("/v1/conversations", headers=_auth(alice_token))
+    assert resp.status_code == 200, resp.text
+    conv_id = resp.json()["conversations"][0]["id"]
+
+    alice_sk, eph_pub_bytes, conv_dh_pub_bytes = derive_session_key_as_initiator(
+        my_identity_kp=alice_id_kp,
+        my_dh_kp=alice_dh_kp,
+        peer_identity_pub_bytes=base64.b64decode(bob_bundle["identity_pub_b64"]),
+        peer_dh_pub_bytes=base64.b64decode(bob_bundle["dh_pub_b64"]),
+        my_user_id=alice_user_id,
+        peer_user_id=bob_user_id,
+        conversation_id=conv_id,
+    )
+    alice_send, _ = derive_ratchet_chains(alice_sk.raw, initiator=True)
+    envelope = build_and_encrypt(
+        send_chain=alice_send,
+        plaintext="delivery waits for ack",
+        sender_id=alice_user_id,
+        recipient_id=bob_user_id,
+        conversation_id=conv_id,
+        counter=0,
+        ttl_seconds=None,
+        sent_at=int(time.time()),
+    )
+    envelope.eph_pub_b64 = base64.b64encode(eph_pub_bytes).decode()
+    envelope.conv_dh_pub_b64 = base64.b64encode(conv_dh_pub_bytes).decode()
+
+    pushed_payloads: list[dict[str, object]] = []
+
+    async def _push_to_user(_user_id: str, payload: dict[str, object]) -> bool:
+        pushed_payloads.append(payload)
+        return True
+
+    import server.api.messages as messages_api
+
+    monkeypatch.setattr(messages_api, "push_to_user", _push_to_user)
+
+    resp = await client.post(
+        "/v1/messages",
+        json={"envelope": envelope.model_dump()},
+        headers=_auth(alice_token),
+    )
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["delivered_at"] is None
+    assert [payload["type"] for payload in pushed_payloads] == ["message"]
+
+    resp = await client.get(f"/v1/messages?conversation_id={conv_id}", headers=_auth(bob_token))
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["messages"][0]["delivery_status"] == "sent"
+
+    resp = await client.post(
+        "/v1/messages/ack",
+        json={"message_id": envelope.id, "conversation_id": conv_id},
+        headers=_auth(bob_token),
+    )
+    assert resp.status_code == 204, resp.text
+    assert [payload["type"] for payload in pushed_payloads] == ["message", "ack"]
+
+    resp = await client.get(f"/v1/messages?conversation_id={conv_id}", headers=_auth(bob_token))
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["messages"][0]["delivery_status"] == "delivered"

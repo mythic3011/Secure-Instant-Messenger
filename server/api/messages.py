@@ -8,17 +8,18 @@ from __future__ import annotations
 import base64
 import re
 import time
-from datetime import UTC, datetime
+from datetime import datetime
 
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import select, update
+from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from server.api.auth import require_auth
 from server.core.database import get_db
 from server.models import Conversation, Friendship, Message, User
+from server.services.delivery import mark_delivered_on_ack
 from server.ws.events import build_message_event
 from server.ws.handler import push_to_user
 from shared.protocol import (
@@ -243,11 +244,6 @@ async def send_message(
     # Push to recipient if online (WebSocket)
     delivered_at = None
     pushed = await push_to_user(env.recipient_id, build_message_event(env))
-    if pushed:
-        delivered_at = stored_at
-        stmt = update(Message).where(Message.id == env.id).values(delivered_at=delivered_at)
-        await db.execute(stmt)
-        await db.commit()
 
     log.info(
         "message_stored",
@@ -382,15 +378,17 @@ async def delivery_ack(
     """
     user_id = session["user_id"]
 
-    stmt = select(Message).where(Message.id == body.message_id)
-    result = await db.execute(stmt)
-    msg = result.scalar_one_or_none()
+    ack = await mark_delivered_on_ack(
+        db,
+        message_id=body.message_id,
+        actor_id=user_id,
+    )
 
-    if msg is None:
+    if ack.status == "not_found":
         log.debug("delivery_ack_ignored", message_id=body.message_id, reason="not_found")
         return  # silently ignore unknown message IDs
 
-    if msg.recipient_id != user_id:
+    if ack.status == "not_recipient":
         log.warning(
             "delivery_ack_rejected",
             message_id=body.message_id,
@@ -399,23 +397,17 @@ async def delivery_ack(
         )
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not your message")
 
-    if msg.delivered_at is None:
-        now_dt = datetime.now(UTC)
-        msg.delivered_at = now_dt
-        await db.commit()
-
-        # Notify sender of delivery (unix timestamp at API boundary)
-        delivered_at_ts = int(now_dt.timestamp())
+    if ack.status == "delivered" and ack.sender_id and ack.delivered_at_ts is not None:
         await push_to_user(
-            msg.sender_id,
+            ack.sender_id,
             {
                 "type": "ack",
-                "payload": {"message_id": body.message_id, "delivered_at": delivered_at_ts},
+                "payload": {"message_id": body.message_id, "delivered_at": ack.delivered_at_ts},
             },
         )
         log.info(
             "delivery_ack_processed",
             message_id=body.message_id,
             recipient=user_id,
-            sender=msg.sender_id,
+            sender=ack.sender_id,
         )

@@ -60,6 +60,8 @@ async def test_flush_offline_queue_uses_canonical_message_event_payload(
 ) -> None:
     sent_texts: list[str] = []
     message = _fake_message()
+    execute_calls = 0
+    commit_calls = 0
 
     class _FakeScalars:
         def all(self) -> list[Any]:
@@ -71,9 +73,13 @@ async def test_flush_offline_queue_uses_canonical_message_event_payload(
 
     class _FakeDb:
         async def execute(self, _stmt) -> _FakeResult:
+            nonlocal execute_calls
+            execute_calls += 1
             return _FakeResult()
 
         async def commit(self) -> None:
+            nonlocal commit_calls
+            commit_calls += 1
             return None
 
     @asynccontextmanager
@@ -93,3 +99,5 @@ async def test_flush_offline_queue_uses_canonical_message_event_payload(
 
     assert len(sent_texts) == 1
     assert json.loads(sent_texts[0]) == build_message_event(cast(Any, message))
+    assert execute_calls == 1
+    assert commit_calls == 0

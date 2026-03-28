@@ -11,10 +11,11 @@ from datetime import UTC, datetime
 
 import structlog
 from fastapi import WebSocket, WebSocketDisconnect
-from sqlalchemy import select, update
+from sqlalchemy import select
 
 from server.core.database import get_session
 from server.models.message import Message
+from server.services.delivery import mark_delivered_on_ack
 from server.ws.events import build_message_event
 
 log = structlog.get_logger()
@@ -127,12 +128,12 @@ async def _flush_offline_queue(websocket: WebSocket, user_id: str) -> None:
         result = await db.execute(stmt)
         messages = result.scalars().all()
 
-        delivered_ids = []
+        flushed_count = 0
         for msg in messages:
             payload = build_message_event(msg)
             try:
                 await websocket.send_text(json.dumps(payload))
-                delivered_ids.append(msg.id)
+                flushed_count += 1
             except Exception as exc:
                 log.warning(
                     "offline_queue_send_failed",
@@ -145,11 +146,8 @@ async def _flush_offline_queue(websocket: WebSocket, user_id: str) -> None:
                 )
                 break  # connection dropped mid-flush
 
-        if delivered_ids:
-            stmt = update(Message).where(Message.id.in_(delivered_ids)).values(delivered_at=now)
-            await db.execute(stmt)
-            await db.commit()
-            log.info("offline_queue_flushed", user_id=user_id, count=len(delivered_ids))
+        if flushed_count:
+            log.info("offline_queue_flushed", user_id=user_id, count=flushed_count)
 
 
 async def _handle_client_message(user_id: str, raw: str) -> None:
@@ -182,32 +180,35 @@ async def _handle_client_message(user_id: str, raw: str) -> None:
             log.warning("ws_ack_missing_message_id", user_id=user_id)
             return
         async with get_session() as db:
-            now_dt = datetime.now(UTC)
-            # Race condition fix: Use SELECT...FOR UPDATE to lock the message row
-            # This prevents concurrent ACK processing from multiple connections
-            stmt = (
-                select(Message.sender_id, Message.delivered_at)
-                .where(
-                    Message.id == message_id,
-                    Message.recipient_id == user_id,
-                )
-                .with_for_update()
+            ack = await mark_delivered_on_ack(
+                db,
+                message_id=message_id,
+                actor_id=user_id,
             )
-            result = await db.execute(stmt)
-            row = result.first()
-            if row and row.delivered_at is None:
-                stmt = update(Message).where(Message.id == message_id).values(delivered_at=now_dt)
-                await db.execute(stmt)
-                await db.commit()
-                # Notify sender (unix timestamp at API boundary)
-                delivered_at_ts = int(now_dt.timestamp())
+            if ack.status == "not_found":
+                log.debug(
+                    "ws_ack_ignored",
+                    message_id=message_id,
+                    user_id=user_id,
+                    reason="not_found",
+                )
+                return
+            if ack.status == "not_recipient":
+                log.warning(
+                    "ws_ack_rejected",
+                    message_id=message_id,
+                    user_id=user_id,
+                    reason="not_recipient",
+                )
+                return
+            if ack.status == "delivered" and ack.sender_id and ack.delivered_at_ts is not None:
                 await push_to_user(
-                    row.sender_id,
+                    ack.sender_id,
                     {
                         "type": "ack",
                         "payload": {
                             "message_id": message_id,
-                            "delivered_at": delivered_at_ts,
+                            "delivered_at": ack.delivered_at_ts,
                         },
                     },
                 )
@@ -215,7 +216,7 @@ async def _handle_client_message(user_id: str, raw: str) -> None:
                     "ws_ack_processed",
                     message_id=message_id,
                     recipient=user_id,
-                    sender=row.sender_id,
+                    sender=ack.sender_id,
                 )
     else:
         log.debug("ws_unknown_message_type", user_id=user_id, msg_type=msg.get("type"))
