@@ -103,7 +103,24 @@ cp "$VIDEO_ABS" "$STAGING_DIR/video.$VIDEO_EXT"
   mkdir -p "$ROOT_DIR/submission"
   cd "$TMP_ROOT"
   rm -f "$ZIP_PATH"
-  zip -rq "$ZIP_PATH" "$TEAM_ID"
+  if command -v zip >/dev/null 2>&1; then
+    zip -rq "$ZIP_PATH" "$TEAM_ID"
+  else
+    python3 - "$ZIP_PATH" "$TEAM_ID" <<'PY'
+from __future__ import annotations
+
+import sys
+import zipfile
+from pathlib import Path
+
+zip_path = Path(sys.argv[1])
+root = Path(sys.argv[2])
+
+with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+    for path in sorted(root.rglob("*")):
+        zf.write(path, path.as_posix())
+PY
+  fi
 )
 
 echo "[submission] built $ZIP_PATH"
