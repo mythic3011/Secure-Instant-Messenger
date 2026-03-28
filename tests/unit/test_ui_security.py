@@ -212,6 +212,65 @@ async def test_send_message_missing_storage_key_is_handled(monkeypatch: pytest.M
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("exc_factory", "expected_code", "expected_message"),
+    [
+        (
+            lambda: _imclient_error(409, "Peer key unavailable"),
+            "server_error",
+            "Peer key unavailable",
+        ),
+        (
+            lambda: httpx.ConnectError("offline"),
+            "network_unavailable",
+            "The server is unreachable. Retry when the connection recovers.",
+        ),
+    ],
+)
+async def test_send_message_session_failure_is_surfaces_truthfully(
+    monkeypatch: pytest.MonkeyPatch,
+    exc_factory,
+    expected_code: str,
+    expected_message: str,
+) -> None:
+    app = IMApp("https://example.test", "alice")
+    app._client = SimpleNamespace(send_message=None)  # type: ignore[assignment]
+    app._user_id = "alice"
+
+    async def _raise_session(*_args, **_kwargs):
+        raise exc_factory()
+
+    monkeypatch.setattr(app, "_ensure_session", _raise_session)
+
+    result = await app.send_message_state(
+        conversation_id="conv-1",
+        peer_id="bob",
+        plaintext="hello",
+    )
+
+    assert result.ok is False
+    assert result.state.primary_banner is not None
+    assert result.state.primary_banner.code == expected_code
+    assert result.state.primary_banner.message == expected_message
+    assert result.state.primary_banner.code != "message_send_failed"
+
+
+@pytest.mark.asyncio
+async def test_ensure_session_propagates_key_fetch_failure() -> None:
+    app = IMApp("https://example.test", "alice")
+    app._local_keys = SimpleNamespace(identity_kp=object(), dh_kp=object())  # type: ignore[assignment]
+    app._peer_usernames["bob-id"] = "bob"
+
+    async def _raise_get_keys(_username: str):
+        raise _imclient_error(404, "Peer key unavailable")
+
+    app._client = SimpleNamespace(get_keys=_raise_get_keys)
+
+    with pytest.raises(IMClientError, match="Peer key unavailable"):
+        await app._ensure_session("conv-1", "bob-id")
+
+
+@pytest.mark.asyncio
 async def test_security_ui_paths_do_not_silently_swallow(monkeypatch: pytest.MonkeyPatch) -> None:
     app = IMApp("https://example.test", "alice")
     app._client = SimpleNamespace(send_message=None)  # type: ignore[assignment]
@@ -257,6 +316,42 @@ async def test_security_ui_paths_do_not_silently_swallow(monkeypatch: pytest.Mon
     assert send_result.state.primary_banner is not None
     assert history_result.messages == ()
     assert send_result.state.kind == "blocked"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("exc_factory", "expected_error"),
+    [
+        (
+            lambda: _imclient_error(409, "Still pending"),
+            "Still pending",
+        ),
+        (
+            lambda: httpx.ConnectError("offline"),
+            "Cannot reach server. Pending requests unavailable.",
+        ),
+    ],
+)
+async def test_friends_pending_load_failure_is_shown(
+    monkeypatch: pytest.MonkeyPatch,
+    exc_factory,
+    expected_error: str,
+) -> None:
+    app = IMApp("https://example.test", "alice")
+    screen = _FakeFriendsScreen()
+    app._screen_stack.append(screen)  # type: ignore[attr-defined]
+
+    async def _raise_pending(*_args, **_kwargs):
+        raise exc_factory()
+
+    app._client = SimpleNamespace(
+        list_pending_requests=_raise_pending,
+    )
+
+    await app.on_friends_screen__load_pending(SimpleNamespace())
+
+    assert screen.pending_payloads == []
+    assert screen.error == expected_error
 
 
 def test_banner_priority_prefers_key_changed() -> None:

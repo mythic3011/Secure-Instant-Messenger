@@ -94,7 +94,9 @@ KEY_CHANGED_BANNER = UIBanner(
     code="key_changed",
     severity="error",
     title="Identity key changed",
-    message="This contact's identity key changed. Verify the fingerprint before trusting new messages.",
+    message=(
+        "This contact's identity key changed. Verify the fingerprint before trusting new messages."
+    ),
     persistent=True,
     dismissible=False,
 )
@@ -102,7 +104,10 @@ TRUST_UNVERIFIED_BANNER = UIBanner(
     code="trust_unverified",
     severity="warning",
     title="Contact not verified",
-    message="This contact is not verified yet. Compare the fingerprint before trusting sensitive messages.",
+    message=(
+        "This contact is not verified yet. Compare the fingerprint "
+        "before trusting sensitive messages."
+    ),
     persistent=True,
 )
 NETWORK_UNAVAILABLE_BANNER = UIBanner(
@@ -325,7 +330,18 @@ class IMApp(App):
         ttl = self._ttl_settings.get(conversation_id)
         counter = self._counters.get(conversation_id, 0)
         my_id = self._user_id or self._username
-        session_state = await self._ensure_session(conversation_id, peer_id)
+        try:
+            session_state = await self._ensure_session(conversation_id, peer_id)
+        except (
+            IMClientError,
+            httpx.ConnectError,
+            httpx.TimeoutException,
+            httpx.NetworkError,
+        ) as exc:
+            return SendResult(
+                ok=False,
+                state=self.build_screen_state("error", self.map_exception_to_banner(exc)),
+            )
         if session_state is None:
             return SendResult(
                 ok=False, state=self.build_screen_state("error", MESSAGE_SEND_FAILED_BANNER)
@@ -658,9 +674,13 @@ class IMApp(App):
         if self._client is None:
             return
         try:
+            friends = self.screen
+        except Exception as exc:  # allow-silent-except
+            log.warning("friends_screen_lookup_failed", err=str(exc))
+            return
+        try:
             requests = await self._client.list_pending_requests()
             try:
-                friends = self.screen
                 friends.populate_pending([r.model_dump() for r in requests])
             except Exception as exc:  # allow-silent-except
                 log.warning("friends_screen_update_failed", err=str(exc))
@@ -671,6 +691,10 @@ class IMApp(App):
             httpx.NetworkError,
         ) as exc:
             log.warning("friends_pending_load_failed", err=str(exc))
+            if isinstance(exc, IMClientError):
+                friends.show_error(exc.detail)
+            else:
+                friends.show_error("Cannot reach server. Pending requests unavailable.")
 
     async def on_friends_screen_send_request(self, msg: Any) -> None:
         if self._client is None:
@@ -1019,10 +1043,8 @@ class IMApp(App):
 
         try:
             peer_bundle = await self._client.get_keys(peer_username)
-        except IMClientError:
-            return None
-        except (httpx.ConnectError, httpx.TimeoutException, httpx.NetworkError):
-            return None
+        except (IMClientError, httpx.ConnectError, httpx.TimeoutException, httpx.NetworkError):
+            raise
 
         my_id = self._user_id or self._username
         peer_identity_pub = base64.b64decode(peer_bundle.identity_pub_b64)
