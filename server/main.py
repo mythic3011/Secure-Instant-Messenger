@@ -41,6 +41,25 @@ structlog.configure(
 
 log = structlog.get_logger()
 
+_WS_AUTH_CLOSE_CODE = 4001
+
+
+def _ws_client_label(websocket: WebSocket) -> str:
+    client = websocket.client
+    if client is None:
+        return "unknown"
+    return f"{client.host}:{client.port}"
+
+
+def _log_ws_auth_rejected(websocket: WebSocket, reason: str) -> None:
+    log.warning(
+        "ws_auth_rejected",
+        reason=reason,
+        client=_ws_client_label(websocket),
+        path=websocket.url.path,
+        close_code=_WS_AUTH_CLOSE_CODE,
+    )
+
 
 # ── Lifespan ──────────────────────────────────────────────────────────────────
 @asynccontextmanager
@@ -71,12 +90,14 @@ app = FastAPI(
 )
 
 if get_settings().app_env == "development":
+
     @app.get("/v1/scalar", include_in_schema=False)
     async def scalar_reference():
         return get_scalar_api_reference(
             openapi_url=app.openapi_url,
             title=app.title,
         )
+
 
 app.add_middleware(
     CORSMiddleware,
@@ -122,6 +143,7 @@ async def ready():
     except Exception as exc:
         log.warning("readiness_check_failed", error=str(exc))
         from fastapi.responses import JSONResponse
+
         return JSONResponse(
             status_code=503,
             content={"status": "not_ready", "error": "Service unavailable"},
@@ -153,18 +175,33 @@ async def ws_endpoint(websocket: WebSocket) -> None:
     # Wait for auth frame (5-second timeout to prevent idle connections)
     try:
         raw = await asyncio.wait_for(websocket.receive_text(), timeout=5.0)
-    except (TimeoutError, Exception):
-        await websocket.close(code=4001)
+    except TimeoutError:
+        _log_ws_auth_rejected(websocket, "auth_frame_timeout")
+        await websocket.close(code=_WS_AUTH_CLOSE_CODE)
+        return
+    except Exception as exc:
+        log.warning(
+            "ws_auth_error",
+            reason="auth_frame_receive_failed",
+            client=_ws_client_label(websocket),
+            path=websocket.url.path,
+            close_code=_WS_AUTH_CLOSE_CODE,
+            error=str(exc),
+            error_type=type(exc).__name__,
+        )
+        await websocket.close(code=_WS_AUTH_CLOSE_CODE)
         return
 
     try:
         auth_msg = json.loads(raw)
     except (ValueError, TypeError):
-        await websocket.close(code=4001)
+        _log_ws_auth_rejected(websocket, "invalid_auth_frame_json")
+        await websocket.close(code=_WS_AUTH_CLOSE_CODE)
         return
 
     if auth_msg.get("type") != "auth" or not auth_msg.get("token"):
-        await websocket.close(code=4001)
+        _log_ws_auth_rejected(websocket, "missing_auth_type_or_token")
+        await websocket.close(code=_WS_AUTH_CLOSE_CODE)
         return
 
     from server.core.security import hash_token
@@ -181,7 +218,8 @@ async def ws_endpoint(websocket: WebSocket) -> None:
         user_id = result.scalar_one_or_none()
 
     if user_id is None:
-        await websocket.close(code=4001)
+        _log_ws_auth_rejected(websocket, "invalid_or_expired_token")
+        await websocket.close(code=_WS_AUTH_CLOSE_CODE)
         return
 
     await websocket_endpoint(websocket, user_id)
@@ -239,7 +277,7 @@ if __name__ == "__main__":
     # Auto-detect TLS: use SSL if cert files exist.
     # Docker entrypoint (scripts/docker-entrypoint.sh) auto-generates them.
     cert = settings.tls_cert_file
-    key  = settings.tls_key_file
+    key = settings.tls_key_file
     use_tls = os.path.isfile(cert) and os.path.isfile(key)
 
     if use_tls:
@@ -258,5 +296,5 @@ if __name__ == "__main__":
         port=settings.port,
         log_level=settings.log_level,
         ssl_certfile=cert if use_tls else None,
-        ssl_keyfile=key  if use_tls else None,
+        ssl_keyfile=key if use_tls else None,
     )

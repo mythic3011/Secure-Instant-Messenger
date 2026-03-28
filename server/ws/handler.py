@@ -23,6 +23,13 @@ _connections: dict[str, WebSocket] = {}
 _lock = asyncio.Lock()
 
 
+def _ws_client_label(websocket: WebSocket) -> str:
+    client = websocket.client
+    if client is None:
+        return "unknown"
+    return f"{client.host}:{client.port}"
+
+
 async def push_to_user(user_id: str, payload: dict) -> bool:
     """
     Push a JSON payload to a connected user.
@@ -36,7 +43,14 @@ async def push_to_user(user_id: str, payload: dict) -> bool:
         await ws.send_text(json.dumps(payload))
         return True
     except Exception as exc:
-        log.warning("ws_push_failed", user_id=user_id, error=str(exc))
+        log.warning(
+            "ws_push_failed",
+            user_id=user_id,
+            phase="push_delivery",
+            client=_ws_client_label(ws),
+            error=str(exc),
+            error_type=type(exc).__name__,
+        )
         async with _lock:
             _connections.pop(user_id, None)
         return False
@@ -55,7 +69,7 @@ async def websocket_endpoint(websocket: WebSocket, user_id: str) -> None:
     async with _lock:
         _connections[user_id] = websocket
 
-    log.info("ws_connected", user_id=user_id)
+    log.info("ws_connected", user_id=user_id, client=_ws_client_label(websocket))
 
     try:
         # Deliver queued offline messages
@@ -70,14 +84,26 @@ async def websocket_endpoint(websocket: WebSocket, user_id: str) -> None:
                 # Send ping to keep connection alive
                 await websocket.send_text(json.dumps({"type": "ping"}))
 
-    except WebSocketDisconnect:
-        log.info("ws_disconnected_clean", user_id=user_id)
+    except WebSocketDisconnect as exc:
+        log.info(
+            "ws_disconnected_clean",
+            user_id=user_id,
+            client=_ws_client_label(websocket),
+            close_code=exc.code,
+        )
     except Exception as exc:  # allow-silent-except
-        log.warning("ws_error", user_id=user_id, error=str(exc))
+        log.warning(
+            "ws_error",
+            user_id=user_id,
+            phase="session_loop",
+            client=_ws_client_label(websocket),
+            error=str(exc),
+            error_type=type(exc).__name__,
+        )
     finally:
         async with _lock:
             _connections.pop(user_id, None)
-        log.info("ws_disconnected", user_id=user_id)
+        log.info("ws_disconnected", user_id=user_id, client=_ws_client_label(websocket))
 
 
 async def _flush_offline_queue(websocket: WebSocket, user_id: str) -> None:
@@ -87,11 +113,16 @@ async def _flush_offline_queue(websocket: WebSocket, user_id: str) -> None:
 
         # Race condition fix: Use SELECT...FOR UPDATE to lock rows being processed
         # This prevents concurrent delivery attempts from multiple connections
-        stmt = select(Message).where(
-            Message.recipient_id == user_id,
-            Message.delivered_at.is_(None),
-            (Message.expires_at.is_(None) | (Message.expires_at > now)),
-        ).order_by(Message.sent_at.asc()).with_for_update()
+        stmt = (
+            select(Message)
+            .where(
+                Message.recipient_id == user_id,
+                Message.delivered_at.is_(None),
+                (Message.expires_at.is_(None) | (Message.expires_at > now)),
+            )
+            .order_by(Message.sent_at.asc())
+            .with_for_update()
+        )
         result = await db.execute(stmt)
         messages = result.scalars().all()
 
@@ -100,17 +131,17 @@ async def _flush_offline_queue(websocket: WebSocket, user_id: str) -> None:
             payload = {
                 "type": "message",
                 "payload": {
-                    "id":              msg.id,
-                    "type":            "message",
-                    "sender_id":       msg.sender_id,
-                    "recipient_id":    msg.recipient_id,
+                    "id": msg.id,
+                    "type": "message",
+                    "sender_id": msg.sender_id,
+                    "recipient_id": msg.recipient_id,
                     "conversation_id": msg.conversation_id,
-                    "counter":         msg.counter,
-                    "nonce_b64":       msg.nonce_b64,
-                    "ciphertext_b64":  msg.ciphertext_b64,
-                    "eph_pub_b64":     msg.eph_pub_b64,
-                    "ttl_seconds":     msg.ttl_seconds,
-                    "sent_at":         msg.sent_at,
+                    "counter": msg.counter,
+                    "nonce_b64": msg.nonce_b64,
+                    "ciphertext_b64": msg.ciphertext_b64,
+                    "eph_pub_b64": msg.eph_pub_b64,
+                    "ttl_seconds": msg.ttl_seconds,
+                    "sent_at": msg.sent_at,
                     "delivery_status": "delivered",
                 },
             }
@@ -118,7 +149,15 @@ async def _flush_offline_queue(websocket: WebSocket, user_id: str) -> None:
                 await websocket.send_text(json.dumps(payload))
                 delivered_ids.append(msg.id)
             except Exception as exc:
-                log.warning("offline_queue_send_failed", user_id=user_id, msg_id=msg.id, error=str(exc))
+                log.warning(
+                    "offline_queue_send_failed",
+                    user_id=user_id,
+                    msg_id=msg.id,
+                    phase="offline_queue_flush",
+                    client=_ws_client_label(websocket),
+                    error=str(exc),
+                    error_type=type(exc).__name__,
+                )
                 break  # connection dropped mid-flush
 
         if delivered_ids:
@@ -161,10 +200,14 @@ async def _handle_client_message(user_id: str, raw: str) -> None:
             now_dt = datetime.now(UTC)
             # Race condition fix: Use SELECT...FOR UPDATE to lock the message row
             # This prevents concurrent ACK processing from multiple connections
-            stmt = select(Message.sender_id, Message.delivered_at).where(
-                Message.id == message_id,
-                Message.recipient_id == user_id,
-            ).with_for_update()
+            stmt = (
+                select(Message.sender_id, Message.delivered_at)
+                .where(
+                    Message.id == message_id,
+                    Message.recipient_id == user_id,
+                )
+                .with_for_update()
+            )
             result = await db.execute(stmt)
             row = result.first()
             if row and row.delivered_at is None:
@@ -175,8 +218,19 @@ async def _handle_client_message(user_id: str, raw: str) -> None:
                 delivered_at_ts = int(now_dt.timestamp())
                 await push_to_user(
                     row.sender_id,
-                    {"type": "ack", "payload": {"message_id": message_id, "delivered_at": delivered_at_ts}},
+                    {
+                        "type": "ack",
+                        "payload": {
+                            "message_id": message_id,
+                            "delivered_at": delivered_at_ts,
+                        },
+                    },
                 )
-                log.info("ws_ack_processed", message_id=message_id, recipient=user_id, sender=row.sender_id)
+                log.info(
+                    "ws_ack_processed",
+                    message_id=message_id,
+                    recipient=user_id,
+                    sender=row.sender_id,
+                )
     else:
         log.debug("ws_unknown_message_type", user_id=user_id, msg_type=msg.get("type"))
