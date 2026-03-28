@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import base64
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol, cast, runtime_checkable
 
 import httpx
 import structlog
@@ -139,6 +139,13 @@ MESSAGE_SEND_FAILED_BANNER = UIBanner(
     title="Send failed",
     message="The message could not be sent.",
 )
+
+
+@runtime_checkable
+class FriendsScreenActions(Protocol):
+    def populate_pending(self, requests: list[dict[str, Any]]) -> None: ...
+    def show_status(self, msg: str) -> None: ...
+    def show_error(self, msg: str) -> None: ...
 
 
 class IMApp(App):
@@ -380,6 +387,12 @@ class IMApp(App):
     def _friends_context(self) -> FriendsContext:
         return FriendsContext(client=self._client)
 
+    def _current_friends_screen(self) -> FriendsScreenActions | None:
+        screen = self.screen
+        if not isinstance(screen, FriendsScreenActions):
+            return None
+        return cast(FriendsScreenActions, screen)
+
     def _login_context(self) -> LoginContext:
         return LoginContext(
             server_url=self._server_url,
@@ -436,7 +449,7 @@ class IMApp(App):
             self._client = None
             return False
 
-        self._client = result.client
+        self._client = cast(IMClient, result.client)
         self._password = result.password
         self._username = result.username
         self._local_keys = result.local_keys
@@ -676,10 +689,9 @@ class IMApp(App):
     async def on_friends_screen_send_request(self, msg: Any) -> None:
         if self._client is None:
             return
-        try:
-            friends = self.screen
-        except Exception as exc:  # allow-silent-except
-            log.warning("friends_screen_lookup_failed", err=str(exc))
+        friends = self._current_friends_screen()
+        if friends is None:
+            log.warning("friends_screen_lookup_failed", err="FriendsScreen not active")
             return
         try:
             await self._client.send_friend_request(msg.username)
@@ -690,7 +702,10 @@ class IMApp(App):
     async def on_friends_screen_accept_request(self, msg: Any) -> None:
         if self._client is None:
             return
-        friends = self.screen
+        friends = self._current_friends_screen()
+        if friends is None:
+            log.warning("friends_screen_lookup_failed", err="FriendsScreen not active")
+            return
         result = await execute_handle_friend_request(
             self._friends_context(),
             request_id=msg.request_id,
@@ -707,7 +722,10 @@ class IMApp(App):
     async def on_friends_screen_decline_request(self, msg: Any) -> None:
         if self._client is None:
             return
-        friends = self.screen
+        friends = self._current_friends_screen()
+        if friends is None:
+            log.warning("friends_screen_lookup_failed", err="FriendsScreen not active")
+            return
         result = await execute_handle_friend_request(
             self._friends_context(),
             request_id=msg.request_id,

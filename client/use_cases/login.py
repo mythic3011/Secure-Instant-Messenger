@@ -30,7 +30,7 @@ class LoginContext:
     load_keystore_fn: Callable[[str, str], Any]
     derive_storage_key_fn: Callable[[str, str], None]
     init_store_fn: Callable[[str], Awaitable[None]]
-    sweep_expired_fn: Callable[[], Awaitable[None]]
+    sweep_expired_fn: Callable[[], Awaitable[object]]
     load_sessions_fn: Callable[[str, str], dict[str, Any]]
 
 
