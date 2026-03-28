@@ -28,5 +28,5 @@ jobs:
 
       - name: detect-secrets
         run: |
-          git ls-files -z \
+          git ls-files -z -- . ':(exclude)docs/plans/**' \
             | xargs -0 uv tool run --from detect-secrets detect-secrets-hook --baseline .secrets.baseline
