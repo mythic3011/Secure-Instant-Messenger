@@ -70,6 +70,7 @@ from client.use_cases import (
     FriendsContext,
     LoginContext,
     LoginFailed,
+    LoginSucceeded,
     NetworkFailure,
     PendingRequestsLoaded,
     SendMessageBlocked,
@@ -206,6 +207,15 @@ class IMApp(App):
         }
         return priorities.get(code, 99)
 
+    @staticmethod
+    def _server_error_banner(message: str) -> UIBanner:
+        return UIBanner(
+            code="server_error",
+            severity="error",
+            title="Server error",
+            message=message,
+        )
+
     def build_screen_state(
         self,
         kind: str,
@@ -243,12 +253,7 @@ class IMApp(App):
                 message="A security policy blocked this action.",
             )
         if isinstance(exc, IMClientError):
-            return UIBanner(
-                code="server_error",
-                severity="error",
-                title="Server error",
-                message=exc.detail,
-            )
+            return self._server_error_banner(exc.detail)
         return MESSAGE_SEND_FAILED_BANNER
 
     def trust_state_to_view_model(self, conversation_id: str) -> TrustViewModel | None:
@@ -372,6 +377,25 @@ class IMApp(App):
             persist_sessions=self._persist_sessions,
         )
 
+    def _friends_context(self) -> FriendsContext:
+        return FriendsContext(client=self._client)
+
+    def _login_context(self) -> LoginContext:
+        return LoginContext(
+            server_url=self._server_url,
+            verify_tls=self._verify_tls,
+            ca_cert=self._ca_cert,
+            pin_sha256=self._pin_sha256,
+            on_ws_message=self._on_ws_message,
+            client_factory=IMClient,
+            keystore_exists_fn=keystore_exists,
+            load_keystore_fn=load_keystore,
+            derive_storage_key_fn=self._derive_and_set_storage_key,
+            init_store_fn=init_store,
+            sweep_expired_fn=sweep_expired,
+            load_sessions_fn=load_sessions,
+        )
+
     def _map_send_message_result(
         self,
         result: SendMessageSucceeded | SendMessageBlocked | NetworkFailure | ServerFailure,
@@ -397,14 +421,51 @@ class IMApp(App):
             ok=False,
             state=self.build_screen_state(
                 "error",
-                UIBanner(
-                    code="server_error",
-                    severity="error",
-                    title="Server error",
-                    message=result.message,
-                ),
+                self._server_error_banner(result.message),
             ),
         )
+
+    def _apply_login_result(
+        self,
+        *,
+        result: LoginSucceeded | LoginFailed,
+        login_screen: Any,
+    ) -> bool:
+        if isinstance(result, LoginFailed):
+            login_screen.query_one("#error", Static).update(result.message)
+            self._client = None
+            return False
+
+        self._client = result.client
+        self._password = result.password
+        self._username = result.username
+        self._local_keys = result.local_keys
+        self._user_id = result.user_id
+        self._sessions = result.sessions
+        return True
+
+    @staticmethod
+    def _apply_pending_requests_result(
+        *,
+        friends: Any,
+        result: PendingRequestsLoaded | NetworkFailure | ServerFailure,
+    ) -> None:
+        if isinstance(result, PendingRequestsLoaded):
+            friends.populate_pending(result.requests)
+            return
+        friends.show_error(result.message)
+
+    @staticmethod
+    def _apply_friend_request_result(
+        *,
+        friends: Any,
+        result: FriendRequestHandled | NetworkFailure | ServerFailure,
+    ) -> None:
+        if isinstance(result, FriendRequestHandled):
+            friends.populate_pending(result.requests)
+            friends.show_status(result.status_message)
+            return
+        friends.show_error(result.message)
 
     def compose(self) -> ComposeResult:
         yield from []  # app has no persistent widgets; screens handle layout
@@ -429,35 +490,13 @@ class IMApp(App):
         login_screen = self.screen  # LoginScreen is current screen at this point
 
         result = await execute_login_handshake(
-            LoginContext(
-                server_url=self._server_url,
-                verify_tls=self._verify_tls,
-                ca_cert=self._ca_cert,
-                pin_sha256=self._pin_sha256,
-                on_ws_message=self._on_ws_message,
-                client_factory=IMClient,
-                keystore_exists_fn=keystore_exists,
-                load_keystore_fn=load_keystore,
-                derive_storage_key_fn=self._derive_and_set_storage_key,
-                init_store_fn=init_store,
-                sweep_expired_fn=sweep_expired,
-                load_sessions_fn=load_sessions,
-            ),
+            self._login_context(),
             username=username,
             password=password,
             totp_code=totp_code,
         )
-        if isinstance(result, LoginFailed):
-            login_screen.query_one("#error", Static).update(result.message)
-            self._client = None
+        if not self._apply_login_result(result=result, login_screen=login_screen):
             return
-
-        self._client = result.client
-        self._password = result.password
-        self._username = result.username
-        self._local_keys = result.local_keys
-        self._user_id = result.user_id
-        self._sessions = result.sessions
 
         await self._show_conversations()
 
@@ -625,15 +664,14 @@ class IMApp(App):
         except Exception as exc:  # allow-silent-except
             log.warning("friends_screen_lookup_failed", err=str(exc))
             return
-        result = await execute_load_pending_requests(FriendsContext(client=self._client))
-        if isinstance(result, PendingRequestsLoaded):
-            try:
-                friends.populate_pending(result.requests)
-            except Exception as exc:  # allow-silent-except
-                log.warning("friends_screen_update_failed", err=str(exc))
+        result = await execute_load_pending_requests(self._friends_context())
+        try:
+            self._apply_pending_requests_result(friends=friends, result=result)
+        except Exception as exc:  # allow-silent-except
+            log.warning("friends_screen_update_failed", err=str(exc))
             return
-        log.warning("friends_pending_load_failed", err=result.message)
-        friends.show_error(result.message)
+        if not isinstance(result, PendingRequestsLoaded):
+            log.warning("friends_pending_load_failed", err=result.message)
 
     async def on_friends_screen_send_request(self, msg: Any) -> None:
         if self._client is None:
@@ -654,32 +692,34 @@ class IMApp(App):
             return
         friends = self.screen
         result = await execute_handle_friend_request(
-            FriendsContext(client=self._client),
+            self._friends_context(),
             request_id=msg.request_id,
             action="accept",
         )
-        if isinstance(result, FriendRequestHandled):
-            friends.populate_pending(result.requests)
-            friends.show_status(result.status_message)
-            return
-        log.warning("friend_request_accept_failed", request_id=msg.request_id, err=result.message)
-        friends.show_error(result.message)
+        self._apply_friend_request_result(friends=friends, result=result)
+        if not isinstance(result, FriendRequestHandled):
+            log.warning(
+                "friend_request_accept_failed",
+                request_id=msg.request_id,
+                err=result.message,
+            )
 
     async def on_friends_screen_decline_request(self, msg: Any) -> None:
         if self._client is None:
             return
         friends = self.screen
         result = await execute_handle_friend_request(
-            FriendsContext(client=self._client),
+            self._friends_context(),
             request_id=msg.request_id,
             action="decline",
         )
-        if isinstance(result, FriendRequestHandled):
-            friends.populate_pending(result.requests)
-            friends.show_status(result.status_message)
-            return
-        log.warning("friend_request_decline_failed", request_id=msg.request_id, err=result.message)
-        friends.show_error(result.message)
+        self._apply_friend_request_result(friends=friends, result=result)
+        if not isinstance(result, FriendRequestHandled):
+            log.warning(
+                "friend_request_decline_failed",
+                request_id=msg.request_id,
+                err=result.message,
+            )
 
     async def on_chat_screen_request_history(self, msg: Any) -> None:
         from client.ui.screens.chat import ChatScreen
