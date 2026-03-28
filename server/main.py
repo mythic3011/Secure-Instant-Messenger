@@ -227,6 +227,7 @@ async def ws_endpoint(websocket: WebSocket) -> None:
         await websocket.close(code=_WS_AUTH_CLOSE_CODE)
         return
 
+    await websocket.send_text(json.dumps({"type": "auth_ok"}))
     await websocket_endpoint(websocket, user_id)
 
 

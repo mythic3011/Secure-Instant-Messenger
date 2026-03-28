@@ -314,6 +314,8 @@ class IMClient:
             if code in {4001, 1006}:
                 return "WebSocket authentication failed."
             return f"WebSocket closed during startup (code={code})."
+        if isinstance(exc, TimeoutError):
+            return "WebSocket authentication confirmation timed out."
         if isinstance(exc, (httpx.ConnectError, httpx.TimeoutException, httpx.NetworkError)):
             return "Cannot reach server."
         return f"WebSocket startup failed: {type(exc).__name__}"
@@ -332,13 +334,13 @@ class IMClient:
         self,
         ws: ClientConnection,
     ) -> list[str]:
-        try:
-            raw = await asyncio.wait_for(ws.recv(), timeout=0.2)
-        except TimeoutError:
-            return []
+        raw = await asyncio.wait_for(ws.recv(), timeout=5.0)
         if isinstance(raw, bytes):
             raw = raw.decode()
-        return [raw]
+        msg = json.loads(raw)
+        if msg.get("type") != "auth_ok":
+            raise RuntimeError("WebSocket startup missing auth confirmation.")
+        return []
 
     async def _ws_loop(self, ready: asyncio.Future[None] | None = None) -> None:
         """WebSocket listener with automatic reconnect."""
