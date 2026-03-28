@@ -1,0 +1,43 @@
+ui:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "client/ui/**"
+
+client:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "client/**"
+
+server:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "server/**"
+
+security:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "client/crypto/**"
+          - "server/core/security.py"
+          - "tests/security/**"
+          - ".secrets.baseline"
+
+docs:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "docs/**"
+          - "README.md"
+
+tests:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "tests/**"
+
+ci:
+  - changed-files:
+      - any-glob-to-any-file:
+          - ".github/**"
+          - "scripts/check_silent_excepts.py"
+          - "scripts/check_stale_security_claims.py"
+          - ".pre-commit-config.yaml"
+          - ".gitattributes"
+
