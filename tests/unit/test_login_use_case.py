@@ -2,21 +2,32 @@ from __future__ import annotations
 
 import asyncio
 from types import SimpleNamespace
+from typing import Any, cast
 
 import httpx
 import pytest
 
 from client.api.client import IMClientConnectionError, IMClientError
 from client.use_cases.login import (
+    LoginClientProtocol,
     LoginContext,
     LoginFailed,
     LoginSucceeded,
     execute_login_handshake,
 )
+from shared.protocol import LoginRequest
 
 
 def _imclient_error(status_code: int, detail: str) -> IMClientError:
     return IMClientError(status_code, f'{{"detail":"{detail}"}}')
+
+
+async def _on_ws_message(_payload: dict[Any, Any]) -> None:
+    return None
+
+
+def _client_factory(fake_client: _FakeClient) -> LoginClientProtocol:
+    return cast(LoginClientProtocol, fake_client)
 
 
 class _FakeClient:
@@ -31,13 +42,14 @@ class _FakeClient:
     async def __aexit__(self, *_args) -> None:
         self.closed = True
 
-    async def login(self, _body) -> None:
+    async def login(self, _body: LoginRequest) -> object:
         self.logged_in = True
+        return object()
 
-    async def get_keys(self, _username):
+    async def get_keys(self, _username: str) -> Any:
         return SimpleNamespace(user_id="alice-id")
 
-    async def connect_ws(self, _on_message) -> None:
+    async def connect_ws(self, _on_message: Any) -> None:
         self.connected = True
 
 
@@ -54,8 +66,8 @@ async def test_execute_login_handshake_returns_success() -> None:
         verify_tls=True,
         ca_cert=None,
         pin_sha256=None,
-        on_ws_message=lambda _payload: None,
-        client_factory=lambda **_kwargs: fake_client,
+        on_ws_message=_on_ws_message,
+        client_factory=lambda **_kwargs: _client_factory(fake_client),
         keystore_exists_fn=lambda username: username == "alice",
         load_keystore_fn=lambda *_args, **_kwargs: object(),
         derive_storage_key_fn=lambda username, password: derived.append((username, password)),
@@ -91,15 +103,15 @@ async def test_execute_login_handshake_returns_failure_on_initial_websocket_erro
     async def _connect_ws(_on_message) -> None:
         raise IMClientConnectionError("WebSocket authentication failed.")
 
-    fake_client.connect_ws = _connect_ws  # type: ignore[method-assign]
+    fake_client.connect_ws = cast(Any, _connect_ws)
 
     context = LoginContext(
         server_url="https://example.test",
         verify_tls=True,
         ca_cert=None,
         pin_sha256=None,
-        on_ws_message=lambda _payload: None,
-        client_factory=lambda **_kwargs: fake_client,
+        on_ws_message=_on_ws_message,
+        client_factory=lambda **_kwargs: _client_factory(fake_client),
         keystore_exists_fn=lambda _username: True,
         load_keystore_fn=lambda *_args, **_kwargs: object(),
         derive_storage_key_fn=lambda *_args, **_kwargs: None,
@@ -127,15 +139,15 @@ async def test_execute_login_handshake_returns_network_failure_message() -> None
     async def _login(_body) -> None:
         raise httpx.ConnectError("offline")
 
-    fake_client.login = _login  # type: ignore[method-assign]
+    fake_client.login = cast(Any, _login)
 
     context = LoginContext(
         server_url="https://example.test",
         verify_tls=True,
         ca_cert=None,
         pin_sha256=None,
-        on_ws_message=lambda _payload: None,
-        client_factory=lambda **_kwargs: fake_client,
+        on_ws_message=_on_ws_message,
+        client_factory=lambda **_kwargs: _client_factory(fake_client),
         keystore_exists_fn=lambda _username: True,
         load_keystore_fn=lambda *_args, **_kwargs: object(),
         derive_storage_key_fn=lambda *_args, **_kwargs: None,
@@ -165,8 +177,8 @@ async def test_execute_login_handshake_closes_client_when_keystore_is_missing() 
         verify_tls=True,
         ca_cert=None,
         pin_sha256=None,
-        on_ws_message=lambda _payload: None,
-        client_factory=lambda **_kwargs: fake_client,
+        on_ws_message=_on_ws_message,
+        client_factory=lambda **_kwargs: _client_factory(fake_client),
         keystore_exists_fn=lambda _username: False,
         load_keystore_fn=lambda *_args, **_kwargs: object(),
         derive_storage_key_fn=lambda *_args, **_kwargs: None,
@@ -199,8 +211,8 @@ async def test_execute_login_handshake_closes_client_when_keystore_load_fails() 
         verify_tls=True,
         ca_cert=None,
         pin_sha256=None,
-        on_ws_message=lambda _payload: None,
-        client_factory=lambda **_kwargs: fake_client,
+        on_ws_message=_on_ws_message,
+        client_factory=lambda **_kwargs: _client_factory(fake_client),
         keystore_exists_fn=lambda _username: True,
         load_keystore_fn=_raise_value_error,
         derive_storage_key_fn=lambda *_args, **_kwargs: None,
@@ -230,15 +242,15 @@ async def test_execute_login_handshake_waits_for_initial_websocket_startup_outco
         await ready.wait()
         fake_client.connected = True
 
-    fake_client.connect_ws = _connect_ws  # type: ignore[method-assign]
+    fake_client.connect_ws = cast(Any, _connect_ws)
 
     context = LoginContext(
         server_url="https://example.test",
         verify_tls=True,
         ca_cert=None,
         pin_sha256=None,
-        on_ws_message=lambda _payload: None,
-        client_factory=lambda **_kwargs: fake_client,
+        on_ws_message=_on_ws_message,
+        client_factory=lambda **_kwargs: _client_factory(fake_client),
         keystore_exists_fn=lambda _username: True,
         load_keystore_fn=lambda *_args, **_kwargs: object(),
         derive_storage_key_fn=lambda *_args, **_kwargs: None,

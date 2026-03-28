@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
+from typing import cast
 
 import httpx
 import pytest
 
 from client.api.client import IMClientError
 from client.crypto.session import LocalStorageSecurityError
+from client.crypto.storage import SessionState
 from client.use_cases.results import LocalSecurityFailure, NetworkFailure, ServerFailure
 from client.use_cases.send_message import (
     SendMessageBlocked,
@@ -20,6 +22,10 @@ def _imclient_error(status_code: int, detail: str) -> IMClientError:
     return IMClientError(status_code, f'{{"detail":"{detail}"}}')
 
 
+def _session_state() -> SessionState:
+    return cast(SessionState, SimpleNamespace(send_chain=object()))
+
+
 @pytest.mark.asyncio
 async def test_execute_send_message_returns_success_and_updates_state() -> None:
     sent_envelopes: list[object] = []
@@ -31,7 +37,7 @@ async def test_execute_send_message_returns_success_and_updates_state() -> None:
         sent_envelopes.append(envelope)
 
     async def _ensure_session(*_args, **_kwargs):
-        return SimpleNamespace(send_chain=object())
+        return _session_state()
 
     async def _save_message(**kwargs) -> None:
         saved_messages.append(kwargs)
@@ -141,7 +147,7 @@ async def test_execute_send_message_returns_local_security_block_with_sent_at() 
         return None
 
     async def _ensure_session(*_args, **_kwargs):
-        return SimpleNamespace(send_chain=object())
+        return _session_state()
 
     async def _raise_save_message(**_kwargs) -> None:
         raise LocalStorageSecurityError("no storage key")
