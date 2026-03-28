@@ -13,6 +13,7 @@ from datetime import UTC, datetime
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from server.api.auth import require_auth
@@ -33,7 +34,13 @@ router = APIRouter(prefix="/v1/messages", tags=["messages"])
 log = structlog.get_logger()
 
 _UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$")
-_MAX_CIPHERTEXT_B64_LEN = 88_000   # ~64 KB plaintext + GCM overhead + base64
+_MAX_CIPHERTEXT_B64_LEN = 88_000  # ~64 KB plaintext + GCM overhead + base64
+_REPLAY_CONSTRAINT_NAME = "uq_message_replay"
+_REPLAY_UNIQUE_MARKERS = (
+    "messages.conversation_id",
+    "messages.sender_id",
+    "messages.counter",
+)
 
 
 def _validate_envelope(env: MessageEnvelope) -> None:
@@ -44,8 +51,11 @@ def _validate_envelope(env: MessageEnvelope) -> None:
         nonce = base64.b64decode(env.nonce_b64, validate=True)
         if len(nonce) != 12:
             raise ValueError
-    except Exception:
-        raise HTTPException(status_code=422, detail="nonce_b64 must decode to exactly 12 bytes")
+    except Exception as exc:
+        raise HTTPException(
+            status_code=422,
+            detail="nonce_b64 must decode to exactly 12 bytes",
+        ) from exc
     if len(env.ciphertext_b64) > _MAX_CIPHERTEXT_B64_LEN:
         raise HTTPException(status_code=422, detail="Message too large")
     if env.eph_pub_b64 is not None:
@@ -53,24 +63,47 @@ def _validate_envelope(env: MessageEnvelope) -> None:
             eph = base64.b64decode(env.eph_pub_b64, validate=True)
             if len(eph) != 32:
                 raise ValueError
-        except Exception:
-            raise HTTPException(status_code=422, detail="eph_pub_b64 must decode to exactly 32 bytes")
+        except Exception as exc:
+            raise HTTPException(
+                status_code=422,
+                detail="eph_pub_b64 must decode to exactly 32 bytes",
+            ) from exc
     if env.conv_dh_pub_b64 is not None:
         try:
             cdh = base64.b64decode(env.conv_dh_pub_b64, validate=True)
             if len(cdh) != 32:
                 raise ValueError
-        except Exception:
-            raise HTTPException(status_code=422, detail="conv_dh_pub_b64 must decode to exactly 32 bytes")
+        except Exception as exc:
+            raise HTTPException(
+                status_code=422,
+                detail="conv_dh_pub_b64 must decode to exactly 32 bytes",
+            ) from exc
     if env.ttl_seconds is not None and not (1 <= env.ttl_seconds <= 604800):
         raise HTTPException(status_code=422, detail="ttl_seconds must be 1–604800")
     if env.counter < 0:
         raise HTTPException(status_code=422, detail="counter must be non-negative")
 
 
+def _is_replay_unique_violation(exc: IntegrityError) -> bool:
+    """Return True only for the replay-prevention unique constraint."""
+    orig = getattr(exc, "orig", None)
+    constraint_name = getattr(getattr(orig, "diag", None), "constraint_name", None)
+    if constraint_name == _REPLAY_CONSTRAINT_NAME:
+        return True
+
+    text = " ".join(str(part).lower() for part in (exc, orig) if part is not None)
+    if _REPLAY_CONSTRAINT_NAME in text:
+        return True
+
+    return "unique constraint failed" in text and all(
+        marker in text for marker in _REPLAY_UNIQUE_MARKERS
+    )
+
+
 # ---------------------------------------------------------------------------
 # R8, R16, R20 — Send message
 # ---------------------------------------------------------------------------
+
 
 @router.post("", response_model=SendMessageResponse, status_code=status.HTTP_201_CREATED)
 async def send_message(
@@ -89,27 +122,46 @@ async def send_message(
     _validate_envelope(env)
 
     if env.sender_id != session["user_id"]:
-        log.warning("send_message_rejected", reason="sender_id_mismatch", claimed_sender=env.sender_id, actual_user=session["user_id"])
+        log.warning(
+            "send_message_rejected",
+            reason="sender_id_mismatch",
+            claimed_sender=env.sender_id,
+            actual_user=session["user_id"],
+        )
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="sender_id mismatch")
 
     # R16 — verify friendship before accepting message
     # Race condition fix: Use SELECT...FOR UPDATE to lock the friendship row
     # and prevent concurrent modifications (e.g., unfriending) during message insertion
     a, b = sorted([env.sender_id, env.recipient_id])
-    stmt = select(Friendship).where(
-        Friendship.user_a_id == a,
-        Friendship.user_b_id == b,
-    ).with_for_update()
+    stmt = (
+        select(Friendship)
+        .where(
+            Friendship.user_a_id == a,
+            Friendship.user_b_id == b,
+        )
+        .with_for_update()
+    )
     result = await db.execute(stmt)
     if result.scalar_one_or_none() is None:
-        log.warning("send_message_rejected", reason="not_friends", sender=env.sender_id, recipient=env.recipient_id)
+        log.warning(
+            "send_message_rejected",
+            reason="not_friends",
+            sender=env.sender_id,
+            recipient=env.recipient_id,
+        )
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not friends")
 
     # Verify recipient exists
     stmt = select(User).where(User.id == env.recipient_id, User.deleted_at.is_(None))
     result = await db.execute(stmt)
     if result.scalar_one_or_none() is None:
-        log.warning("send_message_rejected", reason="recipient_not_found", sender=env.sender_id, recipient=env.recipient_id)
+        log.warning(
+            "send_message_rejected",
+            reason="recipient_not_found",
+            sender=env.sender_id,
+            recipient=env.recipient_id,
+        )
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Recipient not found")
 
     # Ensure conversation row exists — look up by participants
@@ -121,7 +173,10 @@ async def send_message(
     result = await db.execute(stmt)
     conv = result.scalar_one_or_none()
     if conv is None:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="No conversation exists (add friend first)")
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="No conversation exists (add friend first)",
+        )
     conv_id = conv.id
     if conv_id != env.conversation_id:
         raise HTTPException(status_code=422, detail="conversation_id mismatch")
@@ -139,27 +194,39 @@ async def send_message(
     # metadata to route messages and track delivery. Plaintext content remains
     # encrypted and invisible to the server.
     sent_at_dt = datetime.fromtimestamp(env.sent_at)
+    message = Message(
+        id=env.id,
+        conversation_id=conv_id,
+        sender_id=env.sender_id,
+        recipient_id=env.recipient_id,
+        counter=env.counter,
+        nonce_b64=env.nonce_b64,
+        ciphertext_b64=env.ciphertext_b64,
+        eph_pub_b64=env.eph_pub_b64,
+        conv_dh_pub_b64=env.conv_dh_pub_b64,
+        chain_index=env.chain_index,
+        ttl_seconds=env.ttl_seconds,
+        sent_at=sent_at_dt,
+    )
+    db.add(message)
     try:
-        message = Message(
-            id=env.id,
-            conversation_id=conv_id,
-            sender_id=env.sender_id,
-            recipient_id=env.recipient_id,
-            counter=env.counter,
-            nonce_b64=env.nonce_b64,
-            ciphertext_b64=env.ciphertext_b64,
-            eph_pub_b64=env.eph_pub_b64,
-            conv_dh_pub_b64=env.conv_dh_pub_b64,
-            chain_index=env.chain_index,
-            ttl_seconds=env.ttl_seconds,
-            sent_at=sent_at_dt,
-        )
-        db.add(message)
         await db.flush()
-    except Exception as exc:
-        # UNIQUE constraint violation = replay attempt
-        log.warning("replay_rejected", msg_id=env.id, sender=env.sender_id, counter=env.counter, error=str(exc), error_type=type(exc).__name__)
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Duplicate message (replay rejected)")
+    except IntegrityError as exc:
+        await db.rollback()
+        if _is_replay_unique_violation(exc):
+            log.warning(
+                "replay_rejected",
+                msg_id=env.id,
+                sender=env.sender_id,
+                counter=env.counter,
+                error=str(exc),
+                error_type=type(exc).__name__,
+            )
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Duplicate message (replay rejected)",
+            ) from exc
+        raise
 
     # Update conversation metadata
     is_a = env.recipient_id == a
@@ -196,6 +263,7 @@ async def send_message(
 # R25 — Fetch messages (paginated, cursor-based)
 # ---------------------------------------------------------------------------
 
+
 @router.get("", response_model=FetchMessagesResponse)
 async def fetch_messages(
     conversation_id: str,
@@ -217,14 +285,18 @@ async def fetch_messages(
     )
     result = await db.execute(stmt)
     if result.scalar_one_or_none() is None:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not part of this conversation")
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail="Not part of this conversation"
+        )
 
     if before_id:
         stmt = select(Message.sent_at).where(Message.id == before_id)
         result = await db.execute(stmt)
         cursor_row = result.scalar_one_or_none()
         if cursor_row is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Cursor message not found")
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="Cursor message not found"
+            )
         cursor_ts = cursor_row
 
         stmt = (
@@ -269,7 +341,9 @@ async def fetch_messages(
             conv_dh_pub_b64=msg.conv_dh_pub_b64,
             chain_index=msg.chain_index if msg.chain_index is not None else 0,
             ttl_seconds=msg.ttl_seconds,
-            sent_at=int(msg.sent_at.timestamp()) if isinstance(msg.sent_at, datetime) else msg.sent_at,
+            sent_at=int(msg.sent_at.timestamp())
+            if isinstance(msg.sent_at, datetime)
+            else msg.sent_at,
             delivery_status=DeliveryStatus.DELIVERED if msg.delivered_at else DeliveryStatus.SENT,
         )
         for msg in rows
@@ -294,6 +368,7 @@ async def fetch_messages(
 # R18 — Delivery ACK (Option B: recipient sends ACK after decryption)
 # ---------------------------------------------------------------------------
 
+
 @router.post("/ack", status_code=status.HTTP_204_NO_CONTENT)
 async def delivery_ack(
     body: DeliveryAck,
@@ -315,7 +390,12 @@ async def delivery_ack(
         return  # silently ignore unknown message IDs
 
     if msg.recipient_id != user_id:
-        log.warning("delivery_ack_rejected", message_id=body.message_id, user_id=user_id, reason="not_recipient")
+        log.warning(
+            "delivery_ack_rejected",
+            message_id=body.message_id,
+            user_id=user_id,
+            reason="not_recipient",
+        )
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not your message")
 
     if msg.delivered_at is None:
@@ -327,6 +407,14 @@ async def delivery_ack(
         delivered_at_ts = int(now_dt.timestamp())
         await push_to_user(
             msg.sender_id,
-            {"type": "ack", "payload": {"message_id": body.message_id, "delivered_at": delivered_at_ts}},
+            {
+                "type": "ack",
+                "payload": {"message_id": body.message_id, "delivered_at": delivered_at_ts},
+            },
         )
-        log.info("delivery_ack_processed", message_id=body.message_id, recipient=user_id, sender=msg.sender_id)
+        log.info(
+            "delivery_ack_processed",
+            message_id=body.message_id,
+            recipient=user_id,
+            sender=msg.sender_id,
+        )
