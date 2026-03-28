@@ -7,6 +7,11 @@ from typing import Any, Protocol
 import httpx
 
 from client.api.client import IMClientConnectionError, IMClientError
+from client.use_cases.bootstrap import (
+    BootstrapContext,
+    BootstrapFailed,
+    run_post_login_bootstrap,
+)
 from shared.protocol import LoginRequest
 
 
@@ -93,15 +98,18 @@ async def execute_login_handshake(
     except ValueError:
         return await _close_and_fail(client, "Wrong password or corrupted keystore.")
 
-    await context.init_store_fn(username)
-    await context.sweep_expired_fn()
-    sessions = context.load_sessions_fn(username, password)
-
-    try:
-        bundle = await client.get_keys(username)
-        user_id = bundle.user_id
-    except (IMClientError, httpx.ConnectError, httpx.TimeoutException, httpx.NetworkError):
-        user_id = username
+    bootstrap = await run_post_login_bootstrap(
+        BootstrapContext(
+            init_store_fn=context.init_store_fn,
+            sweep_expired_fn=context.sweep_expired_fn,
+            load_sessions_fn=context.load_sessions_fn,
+        ),
+        client=client,
+        username=username,
+        password=password,
+    )
+    if isinstance(bootstrap, BootstrapFailed):
+        return await _close_and_fail(client, bootstrap.message)
 
     try:
         await client.connect_ws(context.on_ws_message)
@@ -114,7 +122,7 @@ async def execute_login_handshake(
         client=client,
         username=username,
         password=password,
-        user_id=user_id,
+        user_id=bootstrap.user_id,
         local_keys=local_keys,
-        sessions=sessions,
+        sessions=bootstrap.sessions,
     )

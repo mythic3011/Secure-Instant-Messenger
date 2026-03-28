@@ -279,5 +279,75 @@ async def test_execute_login_handshake_waits_for_initial_websocket_startup_outco
     assert fake_client.connected is True
 
 
+@pytest.mark.asyncio
+async def test_execute_login_handshake_fails_closed_when_canonical_user_lookup_fails() -> None:
+    fake_client = _FakeClient()
+    password = "Password123!"  # noqa: S105,S106
+
+    async def _get_keys(_username: str) -> Any:
+        raise _imclient_error(404, "User not found")
+
+    fake_client.get_keys = cast(Any, _get_keys)
+
+    context = LoginContext(
+        server_url="https://example.test",
+        verify_tls=True,
+        ca_cert=None,
+        pin_sha256=None,
+        on_ws_message=_on_ws_message,
+        client_factory=lambda **_kwargs: _client_factory(fake_client),
+        keystore_exists_fn=lambda _username: True,
+        load_keystore_fn=lambda *_args, **_kwargs: object(),
+        derive_storage_key_fn=lambda *_args, **_kwargs: None,
+        init_store_fn=lambda *_args, **_kwargs: _async_noop(),
+        sweep_expired_fn=lambda: _async_noop(),
+        load_sessions_fn=lambda *_args, **_kwargs: {},
+    )
+
+    result = await execute_login_handshake(
+        context,
+        username="alice",
+        password=password,
+        totp_code="123456",
+    )
+
+    assert result == LoginFailed(message="Login failed: User not found")
+    assert fake_client.closed is True
+
+
+@pytest.mark.asyncio
+async def test_execute_login_handshake_fails_closed_when_local_store_bootstrap_fails() -> None:
+    fake_client = _FakeClient()
+    password = "Password123!"  # noqa: S105,S106
+
+    async def _init_store(_username: str) -> None:
+        raise RuntimeError("storage init exploded")
+
+    context = LoginContext(
+        server_url="https://example.test",
+        verify_tls=True,
+        ca_cert=None,
+        pin_sha256=None,
+        on_ws_message=_on_ws_message,
+        client_factory=lambda **_kwargs: _client_factory(fake_client),
+        keystore_exists_fn=lambda _username: True,
+        load_keystore_fn=lambda *_args, **_kwargs: object(),
+        derive_storage_key_fn=lambda *_args, **_kwargs: None,
+        init_store_fn=_init_store,
+        sweep_expired_fn=lambda: _async_noop(),
+        load_sessions_fn=lambda *_args, **_kwargs: {},
+    )
+
+    result = await execute_login_handshake(
+        context,
+        username="alice",
+        password=password,
+        totp_code="123456",
+    )
+
+    assert result == LoginFailed(message="Login failed: Local storage unavailable.")
+    assert fake_client.closed is True
+
+
 async def _async_noop(*_args, **_kwargs) -> None:
     return None
