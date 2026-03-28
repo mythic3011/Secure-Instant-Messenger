@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import os
 import secrets
+from typing import cast
 
 import pytest
 from cryptography.exceptions import InvalidTag
@@ -406,11 +407,13 @@ def test_truststate_tofu_created_on_first_contact():
     pub = os.urandom(32)
 
     warned = cache.check_and_update("alice", pub)
+    trust = cache.get_trust_state("alice")
 
     assert warned is False
+    assert trust is not None
     assert cache.get("alice") == pub
-    assert cache.get_trust_state("alice") == TrustState(
-        fingerprint=cache.get_trust_state("alice").fingerprint,
+    assert trust == TrustState(
+        fingerprint=trust.fingerprint,
         verified=False,
         key_changed=False,
     )
@@ -422,7 +425,7 @@ def test_truststate_mark_verified_persists_after_reload():
     cache.check_and_update("alice", pub)
     cache.mark_verified("alice", pub)
 
-    restored = IdentityKeyCache.from_dict(cache.as_dict())
+    restored = IdentityKeyCache.from_dict(cast(dict[str, object], cache.as_dict()))
     trust = restored.get_trust_state("alice")
 
     assert trust is not None

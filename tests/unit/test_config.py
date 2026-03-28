@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+from typing import Any
 from unittest.mock import patch
 
 from server.core.config import Settings
@@ -9,7 +10,7 @@ from server.core.config import Settings
 
 def _make_settings(**overrides):
     """Build a Settings instance with required secrets filled in."""
-    defaults = {
+    defaults: dict[str, Any] = {
         "token_secret_key": "a" * 64,
         "totp_encryption_key": "b" * 64,
     }

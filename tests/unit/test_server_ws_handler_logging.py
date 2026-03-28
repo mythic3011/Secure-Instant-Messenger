@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Any, cast
+
 import pytest
 
 import server.ws.handler as ws_handler
@@ -35,7 +37,7 @@ async def test_push_to_user_logs_runtime_context_on_send_failure(
         lambda *args, **kwargs: warnings.append((args, kwargs)),
     )
     async with ws_handler._lock:
-        ws_handler._connections["user-1"] = _FailingSendWebSocket()
+        ws_handler._connections["user-1"] = cast(Any, _FailingSendWebSocket())
 
     delivered = await ws_handler.push_to_user("user-1", {"type": "message"})
 
@@ -85,7 +87,7 @@ async def test_websocket_endpoint_logs_runtime_loop_failure_with_context(
 
     websocket = _LoopFailureWebSocket()
 
-    await ws_handler.websocket_endpoint(websocket, "user-2")
+    await ws_handler.websocket_endpoint(cast(Any, websocket), "user-2")
 
     assert warnings == [
         (
