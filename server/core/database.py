@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import logging
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Any
 
 from sqlalchemy import event
@@ -61,12 +62,29 @@ def get_engine_kwargs() -> dict[str, Any]:
     return kwargs
 
 
+def ensure_sqlite_parent_dir(url: str) -> None:
+    """Create the parent directory for local SQLite databases when needed."""
+    if not url.startswith("sqlite"):
+        return
+    marker = "///"
+    idx = url.find(marker)
+    if idx == -1:
+        return
+    db_path = url[idx + len(marker):]
+    if db_path in {":memory:", ""}:
+        return
+    target = Path(db_path)
+    if target.parent != Path():
+        target.parent.mkdir(parents=True, exist_ok=True)
+
+
 async def init_db() -> None:
     """Initialize the database engine and session factory."""
     global _engine, _session_factory
 
     url = get_database_url()
     kwargs = get_engine_kwargs()
+    ensure_sqlite_parent_dir(url)
 
     _engine = create_async_engine(url, **kwargs)
     _session_factory = async_sessionmaker(_engine, class_=AsyncSession, expire_on_commit=False)

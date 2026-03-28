@@ -36,6 +36,7 @@ For `code/scripts/`, include only:
 
 - `scripts/bootstrap-env.sh`
 - `scripts/bootstrap-env.bat`
+- `scripts/bootstrap_env.py`
 - `scripts/run-server.sh`
 - `scripts/run-server.bat`
 - `scripts/run-client.sh`
