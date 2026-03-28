@@ -44,6 +44,11 @@ class LoginFailed:
 type LoginHandshakeResult = LoginSucceeded | LoginFailed
 
 
+async def _close_and_fail(client: IMClient | Any, message: str) -> LoginFailed:
+    await client.__aexit__(None, None, None)
+    return LoginFailed(message=message)
+
+
 async def execute_login_handshake(
     context: LoginContext,
     *,
@@ -62,23 +67,23 @@ async def execute_login_handshake(
     try:
         await client.login(LoginRequest(username=username, password=password, totp_code=totp_code))
     except IMClientError as exc:
-        await client.__aexit__(None, None, None)
-        return LoginFailed(message=f"Login failed: {exc.detail}")
+        return await _close_and_fail(client, f"Login failed: {exc.detail}")
     except (httpx.ConnectError, httpx.TimeoutException, httpx.NetworkError) as exc:
-        await client.__aexit__(None, None, None)
-        return LoginFailed(message=f"Cannot reach server — is it running? ({type(exc).__name__})")
+        return await _close_and_fail(
+            client,
+            f"Cannot reach server — is it running? ({type(exc).__name__})",
+        )
     except Exception as exc:
-        await client.__aexit__(None, None, None)
-        return LoginFailed(message=f"Unexpected error: {exc}")
+        return await _close_and_fail(client, f"Unexpected error: {exc}")
 
     if not context.keystore_exists_fn(username):
-        return LoginFailed(message="No local keys found. Register first.")
+        return await _close_and_fail(client, "No local keys found. Register first.")
 
     try:
         local_keys = context.load_keystore_fn(username, password)
         context.derive_storage_key_fn(username, password)
     except ValueError:
-        return LoginFailed(message="Wrong password or corrupted keystore.")
+        return await _close_and_fail(client, "Wrong password or corrupted keystore.")
 
     await context.init_store_fn(username)
     await context.sweep_expired_fn()
@@ -93,11 +98,9 @@ async def execute_login_handshake(
     try:
         await client.connect_ws(context.on_ws_message)
     except IMClientConnectionError as exc:
-        await client.__aexit__(None, None, None)
-        return LoginFailed(message=f"Login failed: {exc.detail}")
+        return await _close_and_fail(client, f"Login failed: {exc.detail}")
     except (httpx.ConnectError, httpx.TimeoutException, httpx.NetworkError):
-        await client.__aexit__(None, None, None)
-        return LoginFailed(message="Login failed: Cannot reach server.")
+        return await _close_and_fail(client, "Login failed: Cannot reach server.")
 
     return LoginSucceeded(
         client=client,

@@ -156,6 +156,71 @@ async def test_execute_login_handshake_returns_network_failure_message() -> None
 
 
 @pytest.mark.asyncio
+async def test_execute_login_handshake_closes_client_when_keystore_is_missing() -> None:
+    fake_client = _FakeClient()
+    password = "Password123!"  # noqa: S105,S106
+
+    context = LoginContext(
+        server_url="https://example.test",
+        verify_tls=True,
+        ca_cert=None,
+        pin_sha256=None,
+        on_ws_message=lambda _payload: None,
+        client_factory=lambda **_kwargs: fake_client,
+        keystore_exists_fn=lambda _username: False,
+        load_keystore_fn=lambda *_args, **_kwargs: object(),
+        derive_storage_key_fn=lambda *_args, **_kwargs: None,
+        init_store_fn=lambda *_args, **_kwargs: _async_noop(),
+        sweep_expired_fn=lambda: _async_noop(),
+        load_sessions_fn=lambda *_args, **_kwargs: {},
+    )
+
+    result = await execute_login_handshake(
+        context,
+        username="alice",
+        password=password,
+        totp_code="123456",
+    )
+
+    assert result == LoginFailed(message="No local keys found. Register first.")
+    assert fake_client.closed is True
+
+
+@pytest.mark.asyncio
+async def test_execute_login_handshake_closes_client_when_keystore_load_fails() -> None:
+    fake_client = _FakeClient()
+    password = "Password123!"  # noqa: S105,S106
+
+    def _raise_value_error(*_args, **_kwargs):
+        raise ValueError("bad keystore")
+
+    context = LoginContext(
+        server_url="https://example.test",
+        verify_tls=True,
+        ca_cert=None,
+        pin_sha256=None,
+        on_ws_message=lambda _payload: None,
+        client_factory=lambda **_kwargs: fake_client,
+        keystore_exists_fn=lambda _username: True,
+        load_keystore_fn=_raise_value_error,
+        derive_storage_key_fn=lambda *_args, **_kwargs: None,
+        init_store_fn=lambda *_args, **_kwargs: _async_noop(),
+        sweep_expired_fn=lambda: _async_noop(),
+        load_sessions_fn=lambda *_args, **_kwargs: {},
+    )
+
+    result = await execute_login_handshake(
+        context,
+        username="alice",
+        password=password,
+        totp_code="123456",
+    )
+
+    assert result == LoginFailed(message="Wrong password or corrupted keystore.")
+    assert fake_client.closed is True
+
+
+@pytest.mark.asyncio
 async def test_execute_login_handshake_waits_for_initial_websocket_startup_outcome() -> None:
     fake_client = _FakeClient()
     password = "Password123!"  # noqa: S105,S106
