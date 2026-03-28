@@ -8,7 +8,6 @@ Handles all message events from screens and dispatches WebSocket pushes.
 from __future__ import annotations
 
 import base64
-import time
 from pathlib import Path
 from typing import Any
 
@@ -32,7 +31,6 @@ from client.crypto.session import (
     compute_fingerprint,
     decrypt_envelope,
     derive_ratchet_chains,
-    derive_session_key_as_initiator,
     derive_session_key_as_responder,
     make_key_signature,
 )
@@ -67,6 +65,17 @@ from client.ui.contracts import (
 )
 from client.ui.screens.conversations import ConversationListScreen
 from client.ui.screens.login import LoginScreen
+from client.use_cases import (
+    NetworkFailure,
+    SendMessageBlocked,
+    SendMessageContext,
+    SendMessageSucceeded,
+    ServerFailure,
+    execute_send_message,
+)
+from client.use_cases import (
+    ensure_session as ensure_send_session,
+)
 from shared.protocol import (
     DeliveryAck,
     LoginRequest,
@@ -322,88 +331,73 @@ class IMApp(App):
         peer_id: str,
         plaintext: str,
     ) -> SendResult:
-        if self._client is None:
-            return SendResult(
-                ok=False, state=self.build_screen_state("error", MESSAGE_SEND_FAILED_BANNER)
-            )
-
-        ttl = self._ttl_settings.get(conversation_id)
-        counter = self._counters.get(conversation_id, 0)
-        my_id = self._user_id or self._username
-        try:
-            session_state = await self._ensure_session(conversation_id, peer_id)
-        except (
-            IMClientError,
-            httpx.ConnectError,
-            httpx.TimeoutException,
-            httpx.NetworkError,
-        ) as exc:
-            return SendResult(
-                ok=False,
-                state=self.build_screen_state("error", self.map_exception_to_banner(exc)),
-            )
-        if session_state is None:
-            return SendResult(
-                ok=False, state=self.build_screen_state("error", MESSAGE_SEND_FAILED_BANNER)
-            )
-
-        sent_at = int(time.time())
-        envelope = build_and_encrypt(
-            send_chain=session_state.send_chain,
-            plaintext=plaintext,
-            sender_id=my_id,
-            recipient_id=peer_id,
+        result = await execute_send_message(
+            self._send_message_context(),
             conversation_id=conversation_id,
-            counter=counter,
-            ttl_seconds=ttl,
-            sent_at=sent_at,
+            peer_id=peer_id,
+            plaintext=plaintext,
+            ensure_session_fn=lambda context, conv_id, target_peer_id: self._ensure_session(
+                conv_id, target_peer_id
+            ),
+            build_and_encrypt_fn=build_and_encrypt,
+            save_message_fn=save_message,
+            upsert_conversation_fn=upsert_conversation,
         )
-        if counter == 0 and hasattr(session_state, "_eph_pub_b64"):
-            envelope.eph_pub_b64 = session_state._eph_pub_b64  # type: ignore[attr-defined]
-        if counter == 0 and hasattr(session_state, "_conv_dh_pub_b64"):
-            envelope.conv_dh_pub_b64 = session_state._conv_dh_pub_b64  # type: ignore[attr-defined]
-
-        try:
-            await self._client.send_message(envelope)
-            await save_message(
-                id=envelope.id,
-                conversation_id=conversation_id,
-                sender_id=my_id,
-                recipient_id=peer_id,
-                counter=counter,
-                plaintext=plaintext,
-                sent_at=sent_at,
-                ttl_seconds=ttl,
-                delivery_status="sent",
-            )
-        except (LocalStorageSecurityError, SecurityError) as exc:
+        if isinstance(result, SendMessageBlocked):
             log.warning(
                 "send_message_blocked",
                 conversation_id=conversation_id,
                 peer_id=peer_id,
-                error=type(exc).__name__,
+                error=result.reason.code,
             )
+        return self._map_send_message_result(result)
+
+    def _send_message_context(self) -> SendMessageContext:
+        return SendMessageContext(
+            client=self._client,
+            local_keys=self._local_keys,
+            username=self._username,
+            user_id=self._user_id,
+            sessions=self._sessions,
+            peer_usernames=self._peer_usernames,
+            ttl_settings=self._ttl_settings,
+            counters=self._counters,
+            persist_sessions=self._persist_sessions,
+        )
+
+    def _map_send_message_result(
+        self,
+        result: SendMessageSucceeded | SendMessageBlocked | NetworkFailure | ServerFailure,
+    ) -> SendResult:
+        if isinstance(result, SendMessageSucceeded):
+            return SendResult(ok=True, state=self.build_screen_state("ok"), sent_at=result.sent_at)
+        if isinstance(result, SendMessageBlocked):
             return SendResult(
                 ok=False,
                 state=self.build_screen_state(
                     "blocked",
                     LOCAL_STORAGE_UNAVAILABLE,
-                    disabled_actions=("send",),
+                    disabled_actions=("send",) if result.disable_send else (),
                 ),
-                sent_at=sent_at,
+                sent_at=result.sent_at,
             )
-        except IMClientError:
-            raise
-
-        self._counters[conversation_id] = counter + 1
-        await upsert_conversation(
-            id=conversation_id,
-            peer_id=peer_id,
-            peer_username=self._peer_usernames.get(peer_id, peer_id),
-            last_message_at=sent_at,
-            unread_count=0,
+        if isinstance(result, NetworkFailure):
+            return SendResult(
+                ok=False,
+                state=self.build_screen_state("error", NETWORK_UNAVAILABLE_BANNER),
+            )
+        return SendResult(
+            ok=False,
+            state=self.build_screen_state(
+                "error",
+                UIBanner(
+                    code="server_error",
+                    severity="error",
+                    title="Server error",
+                    message=result.message,
+                ),
+            ),
         )
-        return SendResult(ok=True, state=self.build_screen_state("ok"), sent_at=sent_at)
 
     def compose(self) -> ComposeResult:
         yield from []  # app has no persistent widgets; screens handle layout
@@ -1031,52 +1025,7 @@ class IMApp(App):
     # ------------------------------------------------------------------
 
     async def _ensure_session(self, conv_id: str, peer_id: str) -> SessionState | None:
-        if conv_id in self._sessions:
-            return self._sessions[conv_id]
-
-        if self._local_keys is None or self._client is None:
-            return None
-
-        peer_username = self._peer_usernames.get(peer_id)
-        if peer_username is None:
-            return None
-
-        try:
-            peer_bundle = await self._client.get_keys(peer_username)
-        except (IMClientError, httpx.ConnectError, httpx.TimeoutException, httpx.NetworkError):
-            raise
-
-        my_id = self._user_id or self._username
-        peer_identity_pub = base64.b64decode(peer_bundle.identity_pub_b64)
-        peer_dh_pub = base64.b64decode(peer_bundle.dh_pub_b64)
-
-        session_key, eph_pub_bytes, conv_dh_pub_bytes = derive_session_key_as_initiator(
-            my_identity_kp=self._local_keys.identity_kp,
-            my_dh_kp=self._local_keys.dh_kp,
-            peer_identity_pub_bytes=peer_identity_pub,
-            peer_dh_pub_bytes=peer_dh_pub,
-            my_user_id=my_id,
-            peer_user_id=peer_id,
-            conversation_id=conv_id,
-        )
-
-        send_chain, recv_chain = derive_ratchet_chains(session_key.raw, initiator=True)
-        cache = IdentityKeyCache()
-        cache.check_and_update(peer_id, peer_identity_pub)
-
-        state = SessionState(
-            session_key=session_key,
-            send_chain=send_chain,
-            recv_chain=recv_chain,
-            replay_protector=ReplayProtector(),
-            identity_key_cache=cache,
-        )
-        state._eph_pub_b64 = base64.b64encode(eph_pub_bytes).decode()  # type: ignore[attr-defined]
-        state._conv_dh_pub_b64 = base64.b64encode(conv_dh_pub_bytes).decode()  # type: ignore[attr-defined]
-
-        self._sessions[conv_id] = state
-        self._persist_sessions()
-        return state
+        return await ensure_send_session(self._send_message_context(), conv_id, peer_id)
 
     # ------------------------------------------------------------------
     # Cleanup on exit

@@ -8,6 +8,14 @@ from client.use_cases.results import (
     UseCaseFailure,
     UseCaseResult,
 )
+from client.use_cases.send_message import (
+    SendMessageBlocked,
+    SendMessageContext,
+    SendMessageResult,
+    SendMessageSucceeded,
+    ensure_session,
+    execute_send_message,
+)
 
 __all__ = [
     "LocalSecurityFailure",
@@ -18,4 +26,10 @@ __all__ = [
     "UnexpectedFailure",
     "UseCaseFailure",
     "UseCaseResult",
+    "SendMessageBlocked",
+    "SendMessageContext",
+    "SendMessageResult",
+    "SendMessageSucceeded",
+    "ensure_session",
+    "execute_send_message",
 ]
