@@ -63,10 +63,32 @@ class _FakeWs:
         raise StopAsyncIteration
 
 
+class _BlockingStartupWs:
+    def __init__(self, ready_to_fail: asyncio.Event) -> None:
+        self.sent: list[str] = []
+        self._ready_to_fail = ready_to_fail
+
+    async def send(self, raw: str) -> None:
+        self.sent.append(raw)
+
+    async def recv(self):
+        await self._ready_to_fail.wait()
+        raise websockets.exceptions.ConnectionClosedError(
+            None,
+            SimpleNamespace(code=4001, reason="unauthorized"),
+        )
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        raise StopAsyncIteration
+
+
 @pytest.mark.asyncio
 async def test_connect_ws_raises_when_initial_auth_fails(monkeypatch) -> None:
     client = client_module.IMClient("https://example.test")
-    client._token = "token"
+    client._token = "token"  # noqa: S105
     fake_ws = _FakeWs()
 
     async with client:
@@ -81,5 +103,37 @@ async def test_connect_ws_raises_when_initial_auth_fails(monkeypatch) -> None:
             match="WebSocket authentication failed.",
         ):
             await client.connect_ws(lambda _msg: asyncio.sleep(0))
+
+        assert client._ws_task is None
+
+
+@pytest.mark.asyncio
+async def test_connect_ws_waits_for_initial_startup_outcome_before_returning(
+    monkeypatch,
+) -> None:
+    client = client_module.IMClient("https://example.test")
+    client._token = "token"  # noqa: S105
+    ready_to_fail = asyncio.Event()
+    fake_ws = _BlockingStartupWs(ready_to_fail)
+
+    async with client:
+        monkeypatch.setattr(
+            client_module.websockets,
+            "connect",
+            lambda *_args, **_kwargs: _FakeWsContext(fake_ws),
+        )
+
+        task = asyncio.create_task(client.connect_ws(lambda _msg: asyncio.sleep(0)))
+        await asyncio.sleep(0)
+
+        assert task.done() is False
+
+        ready_to_fail.set()
+
+        with pytest.raises(
+            client_module.IMClientConnectionError,
+            match="WebSocket authentication failed.",
+        ):
+            await task
 
         assert client._ws_task is None

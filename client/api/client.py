@@ -308,12 +308,23 @@ class IMClient:
     @staticmethod
     def _initial_ws_failure_message(exc: Exception) -> str:
         if isinstance(exc, websockets.exceptions.ConnectionClosed):
-            if exc.code in {4001, 1006}:
+            code = IMClient._connection_closed_code(exc)
+            if code in {4001, 1006}:
                 return "WebSocket authentication failed."
-            return f"WebSocket closed during startup (code={exc.code})."
+            return f"WebSocket closed during startup (code={code})."
         if isinstance(exc, (httpx.ConnectError, httpx.TimeoutException, httpx.NetworkError)):
             return "Cannot reach server."
         return f"WebSocket startup failed: {type(exc).__name__}"
+
+    @staticmethod
+    def _connection_closed_code(exc: websockets.exceptions.ConnectionClosed) -> int | None:
+        received = getattr(exc, "rcvd", None)
+        if received is not None and getattr(received, "code", None) is not None:
+            return int(received.code)
+        sent = getattr(exc, "sent", None)
+        if sent is not None and getattr(sent, "code", None) is not None:
+            return int(sent.code)
+        return getattr(exc, "code", None)
 
     async def _complete_initial_ws_handshake(
         self,
@@ -351,7 +362,8 @@ class IMClient:
                             cert_hash = hashlib.sha256(ssl_obj).hexdigest()
                             if cert_hash != self._pin_sha256:
                                 raise ssl.SSLError(
-                                    f"Certificate pin mismatch: expected {self._pin_sha256}, got {cert_hash}"
+                                    "Certificate pin mismatch: expected "
+                                    f"{self._pin_sha256}, got {cert_hash}"
                                 )
                     # First-frame auth: send token in the WebSocket payload,
                     # not the URL, to keep it out of server/proxy access logs.
@@ -372,7 +384,10 @@ class IMClient:
                         IMClientConnectionError(self._initial_ws_failure_message(exc))
                     )
                     return
-                log.info("WS closed (code=%s), reconnecting in 3s…", exc.code)
+                log.info(
+                    "WS closed (code=%s), reconnecting in 3s…",
+                    self._connection_closed_code(exc),
+                )
             except asyncio.CancelledError:
                 return
             except Exception as exc:  # allow-silent-except

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from types import SimpleNamespace
 
 import httpx
@@ -24,6 +25,7 @@ from client.ui.contracts import (
 from client.ui.screens.chat import ChatScreen
 from client.ui.screens.conversations import ConversationItem, ConversationListScreen
 from client.ui.screens.settings import SettingsScreen
+from client.use_cases.login import LoginSucceeded
 
 
 class _FakeStatic:
@@ -822,6 +824,58 @@ async def test_login_blocks_transition_on_initial_websocket_failure(
     assert login_screen.error.value == "Login failed: WebSocket authentication failed."
     assert showed_conversations is False
     assert app._client is None
+
+
+@pytest.mark.asyncio
+async def test_login_waits_for_initial_websocket_startup_before_showing_conversations(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app = IMApp("https://example.test", "alice")
+    login_screen = _FakeLoginScreen()
+    app._screen_stack.append(login_screen)  # type: ignore[attr-defined]
+    ready = asyncio.Event()
+    fake_client = object()
+
+    async def _execute_login_handshake(*_args, **_kwargs):
+        await ready.wait()
+        return LoginSucceeded(
+            client=fake_client,
+            username="alice",
+            password="Password123!",  # noqa: S105,S106
+            user_id="alice-id",
+            local_keys=object(),
+            sessions={},
+        )
+
+    monkeypatch.setattr(app_module, "execute_login_handshake", _execute_login_handshake)
+
+    showed_conversations = False
+
+    async def _show_conversations() -> None:
+        nonlocal showed_conversations
+        showed_conversations = True
+
+    monkeypatch.setattr(app, "_show_conversations", _show_conversations)
+
+    task = asyncio.create_task(
+        app.on_login_screen_login_success(
+            SimpleNamespace(
+                username="alice",
+                password="Password123!",  # noqa: S105,S106
+                totp_code="123456",
+            )
+        )
+    )
+    await asyncio.sleep(0)
+
+    assert task.done() is False
+    assert showed_conversations is False
+
+    ready.set()
+    await task
+
+    assert showed_conversations is True
+    assert app._client is fake_client
 
 
 async def _async_noop(*_args, **_kwargs) -> None:
