@@ -2,8 +2,10 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import httpx
 import pytest
 
+from client.api.client import IMClientConnectionError, IMClientError
 from client.crypto.session import (
     IdentityKeyCache,
     KeyChangeWarning,
@@ -61,6 +63,35 @@ class _FakeListView:
         self.scrolled = True
 
 
+class _FakeFriendsScreen:
+    def __init__(self) -> None:
+        self.pending_payloads: list[list[dict]] = []
+        self.error = ""
+        self.status = ""
+
+    def populate_pending(self, requests: list[dict]) -> None:
+        self.pending_payloads.append(requests)
+
+    def show_error(self, msg: str) -> None:
+        self.error = msg
+        self.status = ""
+
+    def show_status(self, msg: str) -> None:
+        self.status = msg
+        self.error = ""
+
+
+class _FakeLoginScreen:
+    def __init__(self) -> None:
+        self.error = _FakeStatic()
+
+    def query_one(self, selector: str, *_args, **_kwargs):
+        if selector == "#error":
+            return self.error
+        msg = f"unexpected selector: {selector}"
+        raise KeyError(msg)
+
+
 def _patch_chat_widgets(
     monkeypatch: pytest.MonkeyPatch,
     chat: ChatScreen,
@@ -77,7 +108,9 @@ def _patch_chat_widgets(
     return warning, messages, send_button
 
 
-def _patch_settings_widgets(monkeypatch: pytest.MonkeyPatch, settings: SettingsScreen) -> dict[str, _FakeStatic]:
+def _patch_settings_widgets(
+    monkeypatch: pytest.MonkeyPatch, settings: SettingsScreen
+) -> dict[str, _FakeStatic]:
     widgets = {
         "#fingerprint": _FakeStatic(),
         "#trust_state": _FakeStatic(),
@@ -86,12 +119,20 @@ def _patch_settings_widgets(monkeypatch: pytest.MonkeyPatch, settings: SettingsS
         "#action_hint": _FakeStatic(),
         "#status": _FakeStatic(),
     }
-    monkeypatch.setattr(settings, "query_one", lambda selector, *_args, **_kwargs: widgets[selector])
+    monkeypatch.setattr(
+        settings, "query_one", lambda selector, *_args, **_kwargs: widgets[selector]
+    )
     return widgets
 
 
+def _imclient_error(status_code: int, detail: str) -> IMClientError:
+    return IMClientError(status_code, f'{{"detail":"{detail}"}}')
+
+
 @pytest.mark.asyncio
-async def test_chat_history_local_decrypt_failure_is_handled(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_chat_history_local_decrypt_failure_is_handled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     app = IMApp("https://example.test", "alice")
     warning_events: list[tuple[tuple, dict]] = []
 
@@ -372,7 +413,9 @@ def test_chat_render_empty_history_shows_placeholder(monkeypatch: pytest.MonkeyP
     assert send_button.disabled is False
 
 
-def test_chat_render_degraded_history_keeps_banner_and_placeholder(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_chat_render_degraded_history_keeps_banner_and_placeholder(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     warning = _FakeStatic()
     messages = _FakeListView()
     send_button = _FakeButton("btn_send")
@@ -416,7 +459,10 @@ def test_settings_shows_verified_state(monkeypatch: pytest.MonkeyPatch) -> None:
     assert widgets["#fingerprint"].value == "fp"
     assert widgets["#trust_badge"].value == "Verified"
     assert widgets["#trust_state"].value == "Key stable"
-    assert widgets["#trust_hint"].value == "This contact is verified. Compare fingerprints again after any key change."
+    assert (
+        widgets["#trust_hint"].value
+        == "This contact is verified. Compare fingerprints again after any key change."
+    )
     assert widgets["#action_hint"].value == "No action required."
 
 
@@ -563,7 +609,9 @@ def test_verified_warning_persists_until_reverified() -> None:
     assert reverified.key_changed is False
 
 
-def test_settings_verify_does_not_optimistically_update_trust(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_settings_verify_does_not_optimistically_update_trust(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     settings = SettingsScreen("conv-1", "bob")
     widgets = _patch_settings_widgets(monkeypatch, settings)
     posted: list[object] = []
@@ -586,3 +634,100 @@ def test_settings_verify_does_not_optimistically_update_trust(monkeypatch: pytes
     assert widgets["#action_hint"].value == "Re-verify this contact before trusting new messages."
     assert widgets["#status"].value == "Verification requested."
     assert len(posted) == 1
+
+
+@pytest.mark.asyncio
+async def test_friend_accept_server_error_is_shown(monkeypatch: pytest.MonkeyPatch) -> None:
+    app = IMApp("https://example.test", "alice")
+    screen = _FakeFriendsScreen()
+    app._screen_stack.append(screen)  # type: ignore[attr-defined]
+
+    async def _raise_handle(*_args, **_kwargs):
+        raise _imclient_error(409, "Already handled")
+
+    app._client = SimpleNamespace(
+        handle_friend_request=_raise_handle,
+        list_pending_requests=None,
+    )
+
+    await app.on_friends_screen_accept_request(SimpleNamespace(request_id="req-1"))
+
+    assert screen.error == "Already handled"
+    assert screen.pending_payloads == []
+
+
+@pytest.mark.asyncio
+async def test_friend_decline_network_error_is_shown(monkeypatch: pytest.MonkeyPatch) -> None:
+    app = IMApp("https://example.test", "alice")
+    screen = _FakeFriendsScreen()
+    app._screen_stack.append(screen)  # type: ignore[attr-defined]
+
+    async def _raise_handle(*_args, **_kwargs):
+        raise httpx.ConnectError("offline")
+
+    app._client = SimpleNamespace(
+        handle_friend_request=_raise_handle,
+        list_pending_requests=None,
+    )
+
+    await app.on_friends_screen_decline_request(SimpleNamespace(request_id="req-1"))
+
+    assert screen.error == "Cannot reach server. Pending request unchanged."
+    assert screen.pending_payloads == []
+
+
+@pytest.mark.asyncio
+async def test_login_blocks_transition_on_initial_websocket_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app = IMApp("https://example.test", "alice")
+    login_screen = _FakeLoginScreen()
+    app._screen_stack.append(login_screen)  # type: ignore[attr-defined]
+
+    class _FakeClient:
+        def __init__(self, *_args, **_kwargs) -> None:
+            self.closed = False
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args) -> None:
+            self.closed = True
+
+        async def login(self, _body) -> None:
+            return None
+
+        async def get_keys(self, _username):
+            return SimpleNamespace(user_id="alice-id")
+
+        async def connect_ws(self, _on_message) -> None:
+            raise IMClientConnectionError("WebSocket authentication failed.")
+
+    monkeypatch.setattr(app_module, "IMClient", _FakeClient)
+    monkeypatch.setattr(app_module, "keystore_exists", lambda _username: True)
+    monkeypatch.setattr(app_module, "load_keystore", lambda *_args, **_kwargs: object())
+    monkeypatch.setattr(app_module, "init_store", lambda *_args, **_kwargs: _async_noop())
+    monkeypatch.setattr(app_module, "sweep_expired", lambda *_args, **_kwargs: _async_noop())
+    monkeypatch.setattr(app_module, "load_sessions", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr(app, "_derive_and_set_storage_key", lambda *_args, **_kwargs: None)
+
+    showed_conversations = False
+
+    async def _show_conversations() -> None:
+        nonlocal showed_conversations
+        showed_conversations = True
+
+    monkeypatch.setattr(app, "_show_conversations", _show_conversations)
+
+    password = "Password123!"  # noqa: S105,S106
+    await app.on_login_screen_login_success(
+        SimpleNamespace(username="alice", password=password, totp_code="123456")
+    )
+
+    assert login_screen.error.value == "Login failed: WebSocket authentication failed."
+    assert showed_conversations is False
+    assert app._client is None
+
+
+async def _async_noop(*_args, **_kwargs) -> None:
+    return None

@@ -18,7 +18,7 @@ from pydantic import ValidationError
 from textual.app import App, ComposeResult
 from textual.widgets import Static
 
-from client.api.client import IMClient, IMClientError
+from client.api.client import IMClient, IMClientConnectionError, IMClientError
 from client.crypto.session import (
     DHKeypair,
     IdentityKeyCache,
@@ -139,9 +139,9 @@ class IMApp(App):
     ) -> None:
         super().__init__()
         self._server_url = server_url
-        self._username   = username
+        self._username = username
         self._verify_tls = verify_tls
-        self._ca_cert    = ca_cert
+        self._ca_cert = ca_cert
         self._pin_sha256 = pin_sha256
         self._client: IMClient | None = None
         self._local_keys: LocalKeys | None = None
@@ -284,7 +284,9 @@ class IMApp(App):
                     peer_id=conversation["peer_id"],
                     peer_username=conversation["peer_username"],
                     unread_count=conversation.get("unread_count", 0),
-                    requires_action=(trust_view_model.requires_action if trust_view_model else False),
+                    requires_action=(
+                        trust_view_model.requires_action if trust_view_model else False
+                    ),
                     primary_banner=(trust_view_model.banner if trust_view_model else None),
                 )
             )
@@ -316,14 +318,18 @@ class IMApp(App):
         plaintext: str,
     ) -> SendResult:
         if self._client is None:
-            return SendResult(ok=False, state=self.build_screen_state("error", MESSAGE_SEND_FAILED_BANNER))
+            return SendResult(
+                ok=False, state=self.build_screen_state("error", MESSAGE_SEND_FAILED_BANNER)
+            )
 
         ttl = self._ttl_settings.get(conversation_id)
         counter = self._counters.get(conversation_id, 0)
         my_id = self._user_id or self._username
         session_state = await self._ensure_session(conversation_id, peer_id)
         if session_state is None:
-            return SendResult(ok=False, state=self.build_screen_state("error", MESSAGE_SEND_FAILED_BANNER))
+            return SendResult(
+                ok=False, state=self.build_screen_state("error", MESSAGE_SEND_FAILED_BANNER)
+            )
 
         sent_at = int(time.time())
         envelope = build_and_encrypt(
@@ -398,14 +404,19 @@ class IMApp(App):
 
     async def on_login_screen_login_success(self, msg: LoginScreen.LoginSuccess) -> None:
         """User submitted login form — attempt login."""
-        username  = msg.username
-        password  = msg.password
+        username = msg.username
+        password = msg.password
         totp_code = msg.totp_code
 
         # Capture screen reference NOW before any await displaces it
         login_screen = self.screen  # LoginScreen is current screen at this point
 
-        self._client = IMClient(self._server_url, verify_tls=self._verify_tls, ca_cert=self._ca_cert, pin_sha256=self._pin_sha256)
+        self._client = IMClient(
+            self._server_url,
+            verify_tls=self._verify_tls,
+            ca_cert=self._ca_cert,
+            pin_sha256=self._pin_sha256,
+        )
         await self._client.__aenter__()
 
         try:
@@ -419,7 +430,9 @@ class IMApp(App):
             return
         except (httpx.ConnectError, httpx.TimeoutException, httpx.NetworkError) as e:
             log.warning("login_network_error", username=username, err=str(e))
-            login_screen.query_one("#error", Static).update(f"Cannot reach server — is it running? ({type(e).__name__})")
+            login_screen.query_one("#error", Static).update(
+                f"Cannot reach server — is it running? ({type(e).__name__})"
+            )
             await self._client.__aexit__(None, None, None)
             self._client = None
             return
@@ -435,9 +448,7 @@ class IMApp(App):
 
         # Load local keys
         if not keystore_exists(username):
-            login_screen.query_one("#error", Static).update(
-                "No local keys found. Register first."
-            )
+            login_screen.query_one("#error", Static).update("No local keys found. Register first.")
             return
 
         try:
@@ -462,16 +473,25 @@ class IMApp(App):
         # Connect WebSocket
         try:
             await self._client.connect_ws(self._on_ws_message)
-        except (httpx.ConnectError, httpx.TimeoutException, httpx.NetworkError, Exception) as e:
+        except IMClientConnectionError as e:
+            log.warning(
+                "websocket_connect_failed",
+                username=username,
+                error=type(e).__name__,
+                err=e.detail,
+            )
+            login_screen.query_one("#error", Static).update(f"Login failed: {e.detail}")
+            await self._client.__aexit__(None, None, None)
+            self._client = None
+            return
+        except (httpx.ConnectError, httpx.TimeoutException, httpx.NetworkError) as e:
             log.warning(
                 "websocket_connect_failed",
                 username=username,
                 error=type(e).__name__,
                 err=str(e),
             )
-            login_screen.query_one("#error", Static).update(
-                f"WebSocket connection failed: {type(e).__name__} — is server running?"
-            )
+            login_screen.query_one("#error", Static).update("Login failed: Cannot reach server.")
             await self._client.__aexit__(None, None, None)
             self._client = None
             return
@@ -493,20 +513,27 @@ class IMApp(App):
         password = msg.password
 
         identity_kp = IdentityKeypair.generate()
-        dh_kp       = DHKeypair.generate()
-        key_sig     = make_key_signature(identity_kp, dh_kp)
-        local_keys  = LocalKeys(identity_kp=identity_kp, dh_kp=dh_kp, key_sig=key_sig)
+        dh_kp = DHKeypair.generate()
+        key_sig = make_key_signature(identity_kp, dh_kp)
+        local_keys = LocalKeys(identity_kp=identity_kp, dh_kp=dh_kp, key_sig=key_sig)
 
-        client = IMClient(self._server_url, verify_tls=self._verify_tls, ca_cert=self._ca_cert, pin_sha256=self._pin_sha256)
+        client = IMClient(
+            self._server_url,
+            verify_tls=self._verify_tls,
+            ca_cert=self._ca_cert,
+            pin_sha256=self._pin_sha256,
+        )
         async with client:
             try:
-                resp = await client.register(RegisterRequest(
-                    username=username,
-                    password=password,
-                    identity_pub_b64=identity_kp.public_b64(),
-                    dh_pub_b64=dh_kp.public_b64(),
-                    key_sig_b64=base64.b64encode(key_sig).decode(),
-                ))
+                resp = await client.register(
+                    RegisterRequest(
+                        username=username,
+                        password=password,
+                        identity_pub_b64=identity_kp.public_b64(),
+                        dh_pub_b64=dh_kp.public_b64(),
+                        key_sig_b64=base64.b64encode(key_sig).decode(),
+                    )
+                )
             except (httpx.ConnectError, httpx.TimeoutException, httpx.NetworkError) as e:
                 try:
                     self.screen.query_one("#error", Static).update(
@@ -525,9 +552,7 @@ class IMApp(App):
                 return
             except Exception as e:
                 try:
-                    self.screen.query_one("#error", Static).update(
-                        f"Unexpected error: {e}"
-                    )
+                    self.screen.query_one("#error", Static).update(f"Unexpected error: {e}")
                 except Exception as exc:  # allow-silent-except
                     log.warning("register_error_render_failed", err=str(exc))
                 return
@@ -536,6 +561,7 @@ class IMApp(App):
 
         # Show QR + OTP verify step on the same screen instead of a fleeting toast
         from client.ui.screens.register import RegisterScreen
+
         if isinstance(self.screen, RegisterScreen):
             self.screen.show_totp_setup(resp.totp_provisioning_uri)
 
@@ -555,6 +581,7 @@ class IMApp(App):
             await self._client.mark_read(msg.conv_id)
         self._peer_usernames[msg.peer_id] = msg.peer_username
         from client.ui.screens.chat import ChatScreen
+
         screen = ChatScreen(
             conversation_id=msg.conv_id,
             peer_id=msg.peer_id,
@@ -567,11 +594,10 @@ class IMApp(App):
         self, msg: ConversationListScreen.OpenFriends
     ) -> None:
         from client.ui.screens.friends import FriendsScreen
+
         await self.push_screen(FriendsScreen())
 
-    async def on_conversation_list_screen_logout(
-        self, msg: ConversationListScreen.Logout
-    ) -> None:
+    async def on_conversation_list_screen_logout(self, msg: ConversationListScreen.Logout) -> None:
         if self._client:
             try:
                 await self._client.logout()
@@ -588,6 +614,7 @@ class IMApp(App):
 
     async def on_chat_screen_send_message(self, msg: Any) -> None:
         from client.ui.screens.chat import ChatScreen
+
         chat = self.screen
         if not isinstance(chat, ChatScreen):
             return
@@ -618,7 +645,9 @@ class IMApp(App):
         if result.sent_at is None:
             return
         ttl = self._ttl_settings.get(conv_id)
-        chat.add_message(self._user_id or self._username, msg.text, result.sent_at, "sent", ttl, is_mine=True)
+        chat.add_message(
+            self._user_id or self._username, msg.text, result.sent_at, "sent", ttl, is_mine=True
+        )
 
     # ------------------------------------------------------------------
     # Friends screen events
@@ -635,7 +664,12 @@ class IMApp(App):
                 friends.populate_pending([r.model_dump() for r in requests])
             except Exception as exc:  # allow-silent-except
                 log.warning("friends_screen_update_failed", err=str(exc))
-        except (IMClientError, httpx.ConnectError, httpx.TimeoutException, httpx.NetworkError) as exc:
+        except (
+            IMClientError,
+            httpx.ConnectError,
+            httpx.TimeoutException,
+            httpx.NetworkError,
+        ) as exc:
             log.warning("friends_pending_load_failed", err=str(exc))
 
     async def on_friends_screen_send_request(self, msg: Any) -> None:
@@ -655,28 +689,34 @@ class IMApp(App):
     async def on_friends_screen_accept_request(self, msg: Any) -> None:
         if self._client is None:
             return
+        friends = self.screen
         try:
-            friends = self.screen
-            if friends is None:
-                return
             await self._client.handle_friend_request(msg.request_id, "accept")
             requests = await self._client.list_pending_requests()
             friends.populate_pending([r.model_dump() for r in requests])
-        except (IMClientError, httpx.ConnectError, httpx.TimeoutException, httpx.NetworkError) as exc:
+            friends.show_status("Friend request accepted.")
+        except IMClientError as exc:
             log.warning("friend_request_accept_failed", request_id=msg.request_id, err=str(exc))
+            friends.show_error(exc.detail)
+        except (httpx.ConnectError, httpx.TimeoutException, httpx.NetworkError) as exc:
+            log.warning("friend_request_accept_failed", request_id=msg.request_id, err=str(exc))
+            friends.show_error("Cannot reach server. Pending request unchanged.")
 
     async def on_friends_screen_decline_request(self, msg: Any) -> None:
         if self._client is None:
             return
+        friends = self.screen
         try:
-            friends = self.screen
-            if friends is None:
-                return
             await self._client.handle_friend_request(msg.request_id, "decline")
             requests = await self._client.list_pending_requests()
             friends.populate_pending([r.model_dump() for r in requests])
-        except (IMClientError, httpx.ConnectError, httpx.TimeoutException, httpx.NetworkError) as exc:
+            friends.show_status("Friend request declined.")
+        except IMClientError as exc:
             log.warning("friend_request_decline_failed", request_id=msg.request_id, err=str(exc))
+            friends.show_error(exc.detail)
+        except (httpx.ConnectError, httpx.TimeoutException, httpx.NetworkError) as exc:
+            log.warning("friend_request_decline_failed", request_id=msg.request_id, err=str(exc))
+            friends.show_error("Cannot reach server. Pending request unchanged.")
 
     async def on_chat_screen_request_history(self, msg: Any) -> None:
         from client.ui.screens.chat import ChatScreen
@@ -688,7 +728,9 @@ class IMApp(App):
         trust_state = self.trust_state_to_view_model(msg.conversation_id)
         if trust_state and trust_state.banner is not None:
             result = ChatHistoryResult(
-                state=self.build_screen_state(result.state.kind, *(result.state.banners + (trust_state.banner,))),
+                state=self.build_screen_state(
+                    result.state.kind, *(result.state.banners + (trust_state.banner,))
+                ),
                 messages=result.messages,
             )
         chat.render_history_result(result)
@@ -699,6 +741,7 @@ class IMApp(App):
 
     async def on_settings_screen_set_ttl(self, msg: Any) -> None:
         from client.ui.screens.chat import ChatScreen
+
         # Settings is pushed on top of chat — chat is second from top
         stack = self.screen_stack
         chat = stack[-2] if len(stack) >= 2 else None
@@ -708,6 +751,7 @@ class IMApp(App):
     async def on_settings_screen__request_fingerprint(self, msg: Any) -> None:
         """Handler for SettingsScreen._RequestFingerprint."""
         from client.ui.screens.settings import SettingsScreen
+
         settings_screen = self.screen
         if not isinstance(settings_screen, SettingsScreen):
             return
@@ -731,7 +775,9 @@ class IMApp(App):
                     self._persist_sessions()
                     chat.clear_key_warning()
                     if isinstance(settings_screen, SettingsScreen):
-                        trust_view_model = self._trust_view_model_with_fingerprint(chat.conversation_id)
+                        trust_view_model = self._trust_view_model_with_fingerprint(
+                            chat.conversation_id
+                        )
                         if trust_view_model is not None:
                             settings_screen.set_trust_view_model(trust_view_model)
 
@@ -759,12 +805,16 @@ class IMApp(App):
 
         conv_id = envelope.conversation_id
         peer_id = envelope.sender_id
-        my_id   = self._user_id or self._username
+        my_id = self._user_id or self._username
 
         # Derive session if we don't have one yet (first message from this peer)
         state = self._sessions.get(conv_id)
         if state is None:
-            if envelope.eph_pub_b64 is None or envelope.conv_dh_pub_b64 is None or self._local_keys is None:
+            if (
+                envelope.eph_pub_b64 is None
+                or envelope.conv_dh_pub_b64 is None
+                or self._local_keys is None
+            ):
                 return
 
             # Look up peer keys by username if we have it, else by user_id
@@ -782,9 +832,9 @@ class IMApp(App):
                 return
 
             peer_identity_pub = base64.b64decode(peer_bundle.identity_pub_b64)
-            peer_dh_pub       = base64.b64decode(peer_bundle.dh_pub_b64)
-            eph_pub           = base64.b64decode(envelope.eph_pub_b64)
-            conv_dh_pub       = base64.b64decode(envelope.conv_dh_pub_b64)
+            peer_dh_pub = base64.b64decode(peer_bundle.dh_pub_b64)
+            eph_pub = base64.b64decode(envelope.eph_pub_b64)
+            conv_dh_pub = base64.b64decode(envelope.conv_dh_pub_b64)
 
             session_key = derive_session_key_as_responder(
                 my_identity_kp=self._local_keys.identity_kp,
@@ -829,7 +879,9 @@ class IMApp(App):
                 except IMClientError as exc:
                     log.warning("key_bundle_refresh_failed", peer=peer_username, err=str(exc))
                 except (httpx.ConnectError, httpx.TimeoutException, httpx.NetworkError) as exc:
-                    log.warning("key_bundle_refresh_network_error", peer=peer_username, err=str(exc))
+                    log.warning(
+                        "key_bundle_refresh_network_error", peer=peer_username, err=str(exc)
+                    )
 
         try:
             plaintext = decrypt_envelope(
@@ -855,6 +907,7 @@ class IMApp(App):
             return
 
         from client.ui.screens.chat import ChatScreen
+
         active_chat = self.screen if isinstance(self.screen, ChatScreen) else None
 
         # Persist locally
@@ -894,8 +947,12 @@ class IMApp(App):
         # Route to active chat or increment unread
         if active_chat and active_chat.conversation_id == conv_id:
             active_chat.add_message(
-                peer_id, plaintext, envelope.sent_at, "delivered",
-                envelope.ttl_seconds, is_mine=False,
+                peer_id,
+                plaintext,
+                envelope.sent_at,
+                "delivered",
+                envelope.ttl_seconds,
+                is_mine=False,
             )
             if key_changed:
                 active_chat.apply_send_result(
@@ -915,7 +972,9 @@ class IMApp(App):
                         screen.refresh_conversation(
                             conv_id,
                             conv["unread_count"],
-                            requires_action=(trust_view_model.requires_action if trust_view_model else False),
+                            requires_action=(
+                                trust_view_model.requires_action if trust_view_model else False
+                            ),
                             primary_banner=(trust_view_model.banner if trust_view_model else None),
                         )
 
@@ -965,9 +1024,9 @@ class IMApp(App):
         except (httpx.ConnectError, httpx.TimeoutException, httpx.NetworkError):
             return None
 
-        my_id             = self._user_id or self._username
+        my_id = self._user_id or self._username
         peer_identity_pub = base64.b64decode(peer_bundle.identity_pub_b64)
-        peer_dh_pub       = base64.b64decode(peer_bundle.dh_pub_b64)
+        peer_dh_pub = base64.b64decode(peer_bundle.dh_pub_b64)
 
         session_key, eph_pub_bytes, conv_dh_pub_bytes = derive_session_key_as_initiator(
             my_identity_kp=self._local_keys.identity_kp,
