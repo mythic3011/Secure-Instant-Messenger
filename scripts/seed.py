@@ -37,10 +37,17 @@ log = logging.getLogger(__name__)
 # friends:  list of usernames this user should be friends with (mutual)
 # messages: list of (recipient_username, message_text) tuples
 
+DEMO_PASSWORDS = {
+    "alice": "DEMO_PASSWORD_ALICE_CHANGE_ME",
+    "bob": "DEMO_PASSWORD_BOB_CHANGE_ME",
+    "charlie": "DEMO_PASSWORD_CHARLIE_CHANGE_ME",
+    "dave": "DEMO_PASSWORD_DAVE_CHANGE_ME",
+}
+
 SEED_USERS: list[dict] = [
     {
         "username": "alice",
-        "password": "Alice@12345",
+        "password": DEMO_PASSWORDS["alice"],
         "display_name": "Alice Wong",
         "friends": ["bob", "charlie"],
         "messages_to": [
@@ -51,7 +58,7 @@ SEED_USERS: list[dict] = [
     },
     {
         "username": "bob",
-        "password": "Bob@12345",
+        "password": DEMO_PASSWORDS["bob"],
         "display_name": "Bob Chan",
         "friends": ["alice", "charlie"],
         "messages_to": [
@@ -61,7 +68,7 @@ SEED_USERS: list[dict] = [
     },
     {
         "username": "charlie",
-        "password": "Charlie@12345",
+        "password": DEMO_PASSWORDS["charlie"],
         "display_name": "Charlie Lee",
         "friends": ["alice", "bob"],
         "messages_to": [
@@ -71,7 +78,7 @@ SEED_USERS: list[dict] = [
     },
     {
         "username": "dave",
-        "password": "Dave@12345",
+        "password": DEMO_PASSWORDS["dave"],
         "display_name": "Dave Ng",
         "friends": ["alice"],
         "messages_to": [
