@@ -7,7 +7,7 @@ Covers: R5 (fingerprint), R10/R11 (TTL display + deletion), R17 (delivery status
 from __future__ import annotations
 
 import time
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, cast
 
 from textual.app import ComposeResult
 from textual.containers import Horizontal, Vertical
@@ -36,12 +36,12 @@ class MessageItem(ListItem):
         is_mine: bool,
     ) -> None:
         super().__init__()
-        self._sender     = sender
-        self._text       = text
-        self._sent_at    = sent_at
-        self._status     = status
-        self._ttl        = ttl_seconds
-        self._is_mine    = is_mine
+        self._sender = sender
+        self._text = text
+        self._sent_at = sent_at
+        self._status = status
+        self._ttl = ttl_seconds
+        self._is_mine = is_mine
         # Pre-compute expiry so _sweep_ttl() can compare without re-parsing
         self._expires_at: int | None = (sent_at + ttl_seconds) if ttl_seconds else None
 
@@ -50,6 +50,7 @@ class MessageItem(ListItem):
 
     def compose(self) -> ComposeResult:
         import datetime
+
         ts = datetime.datetime.fromtimestamp(self._sent_at).strftime("%H:%M")
         # READ status is reserved for future UX/protocol extension and not currently implemented.
         # For now, treat "read" identically to "delivered" in the UI.
@@ -96,7 +97,8 @@ class ChatScreen(Screen):
     Receives new messages via the app's WebSocket callback.
     """
 
-    CSS = """
+    CSS = (
+        """
     ChatScreen {
         layout: vertical;
         background: __APP_BACKGROUND__;
@@ -189,23 +191,19 @@ class ChatScreen(Screen):
         color: __ACCENT_ALT__;
         border: tall #1a1a3e;
     }
-    """.replace("__APP_BACKGROUND__", Theme.APP_BACKGROUND).replace(
-        "__SURFACE__", Theme.SURFACE
-    ).replace(
-        "__ERROR__", Theme.ERROR
-    ).replace(
-        "__ACCENT__", Theme.ACCENT
-    ).replace(
-        "__SURFACE_ALT__", Theme.SURFACE_ALT
-    ).replace(
-        "__ACCENT_ALT__", Theme.ACCENT_ALT
+    """.replace("__APP_BACKGROUND__", Theme.APP_BACKGROUND)
+        .replace("__SURFACE__", Theme.SURFACE)
+        .replace("__ERROR__", Theme.ERROR)
+        .replace("__ACCENT__", Theme.ACCENT)
+        .replace("__SURFACE_ALT__", Theme.SURFACE_ALT)
+        .replace("__ACCENT_ALT__", Theme.ACCENT_ALT)
     )
 
     class SendMessage(Message):
         def __init__(self, text: str, ttl: int | None) -> None:
             super().__init__()
             self.text = text
-            self.ttl  = ttl
+            self.ttl = ttl
 
     class RequestHistory(Message):
         def __init__(self, conversation_id: str) -> None:
@@ -221,9 +219,9 @@ class ChatScreen(Screen):
     ) -> None:
         super().__init__()
         self.conversation_id = conversation_id
-        self.peer_id         = peer_id
-        self.peer_username   = peer_username
-        self.my_user_id      = my_user_id
+        self.peer_id = peer_id
+        self.peer_username = peer_username
+        self.my_user_id = my_user_id
         self._banner: UIBanner | None = None
 
     def _render_placeholder(self, state_kind: str) -> PlaceholderItem:
@@ -264,10 +262,12 @@ class ChatScreen(Screen):
 
     def _refresh_warning(self) -> None:
         warning = self.query_one("#warning")
-        if hasattr(warning, "show_banner"):
+        if isinstance(warning, Banner):
             warning.show_banner(self._banner)
             return
-        warning.update("" if self._banner is None else f"{self._banner.title}\n{self._banner.message}")
+        cast(Any, warning).update(
+            "" if self._banner is None else f"{self._banner.title}\n{self._banner.message}"
+        )
 
     def set_banner(self, banner: UIBanner | None) -> None:
         self._banner = banner
@@ -278,14 +278,16 @@ class ChatScreen(Screen):
         lv.clear()
         if result.messages:
             for m in reversed(result.messages):
-                lv.append(MessageItem(
-                    sender=m["sender_id"],
-                    text=m["plaintext"],
-                    sent_at=m["sent_at"],
-                    status=m["delivery_status"],
-                    ttl_seconds=m["ttl_seconds"],
-                    is_mine=(m["sender_id"] == self.my_user_id),
-                ))
+                lv.append(
+                    MessageItem(
+                        sender=m["sender_id"],
+                        text=m["plaintext"],
+                        sent_at=m["sent_at"],
+                        status=m["delivery_status"],
+                        ttl_seconds=m["ttl_seconds"],
+                        is_mine=(m["sender_id"] == self.my_user_id),
+                    )
+                )
         else:
             lv.append(self._render_placeholder(result.state.kind))
         self.set_banner(result.state.primary_banner)
@@ -305,6 +307,7 @@ class ChatScreen(Screen):
         Also called on startup via app.py sweep_expired() (local DB layer).
         """
         from client.state.store import sweep_expired
+
         # Purge expired rows from local SQLite first
         await sweep_expired()
 
@@ -312,7 +315,8 @@ class ChatScreen(Screen):
         now = int(time.time())
         lv = self.query_one("#messages", ListView)
         expired = [
-            item for item in lv.children
+            item
+            for item in lv.children
             if isinstance(item, MessageItem)
             and item._expires_at is not None
             and item._expires_at <= now
@@ -358,6 +362,7 @@ class ChatScreen(Screen):
             self._send()
         elif event.button.id == "btn_settings":
             from client.ui.screens.settings import SettingsScreen
+
             self.app.push_screen(
                 SettingsScreen(
                     conversation_id=self.conversation_id,

@@ -12,7 +12,7 @@ import logging
 import ssl
 import warnings
 from collections.abc import Awaitable, Callable
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 import httpx
 import websockets
@@ -122,8 +122,8 @@ def _make_ssl_ctx(
                     return 0
             return preverify_ok
 
-        # Use setattr to avoid Pylance type errors (verify_callback exists at runtime)
-        ctx.verify_callback = _verify_pin_callback
+        # Use setattr through Any to avoid Pylance complaints about dynamic SSLContext attrs.
+        cast(Any, ctx).verify_callback = _verify_pin_callback
 
     return ctx
 
@@ -295,8 +295,10 @@ class IMClient:
                 f"Certificate pin mismatch: expected {self._pin_sha256}, got {cert_hash}"
             )
 
-    async def _handle_ws_raw(self, raw: str) -> None:
+    async def _handle_ws_raw(self, raw: str | bytes) -> None:
         try:
+            if isinstance(raw, bytes):
+                raw = raw.decode()
             msg = json.loads(raw)
             if msg.get("type") != "ping" and self._on_message:
                 await self._on_message(msg)

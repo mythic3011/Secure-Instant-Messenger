@@ -23,7 +23,8 @@ class SettingsScreen(Screen):
       - Set default TTL for self-destruct messages (R10)
     """
 
-    CSS = """
+    CSS = (
+        """
     SettingsScreen {
         align: center middle;
         background: __APP_BACKGROUND__;
@@ -91,16 +92,12 @@ class SettingsScreen(Screen):
         color: #e0e0ff;
         margin: 0 0 1 0;
     }
-    """.replace("__APP_BACKGROUND__", Theme.APP_BACKGROUND).replace(
-        "__ACCENT_ALT__", Theme.ACCENT_ALT
-    ).replace(
-        "__SURFACE__", Theme.SURFACE
-    ).replace(
-        "__TEXT_MUTED__", Theme.TEXT_MUTED
-    ).replace(
-        "__ACCENT__", Theme.ACCENT
-    ).replace(
-        "__SURFACE_ALT__", Theme.SURFACE_ALT
+    """.replace("__APP_BACKGROUND__", Theme.APP_BACKGROUND)
+        .replace("__ACCENT_ALT__", Theme.ACCENT_ALT)
+        .replace("__SURFACE__", Theme.SURFACE)
+        .replace("__TEXT_MUTED__", Theme.TEXT_MUTED)
+        .replace("__ACCENT__", Theme.ACCENT)
+        .replace("__SURFACE_ALT__", Theme.SURFACE_ALT)
     )
 
     class SetTTL(Message):
@@ -114,7 +111,7 @@ class SettingsScreen(Screen):
     def __init__(self, conversation_id: str, peer_username: str) -> None:
         super().__init__()
         self.conversation_id = conversation_id
-        self.peer_username   = peer_username
+        self.peer_username = peer_username
         self._trust_view_model = TrustViewModel(
             fingerprint="Loading…",
             verified=False,
@@ -159,8 +156,10 @@ class SettingsScreen(Screen):
     def set_trust_view_model(self, trust_view_model: TrustViewModel) -> None:
         self._trust_view_model = trust_view_model
         self.query_one("#fingerprint", Static).update(trust_view_model.fingerprint)
-        badge = "Action required" if trust_view_model.requires_action else (
-            "Verified" if trust_view_model.verified else "Not verified"
+        badge = (
+            "Action required"
+            if trust_view_model.requires_action
+            else ("Verified" if trust_view_model.verified else "Not verified")
         )
         trust_parts = ["Key changed" if trust_view_model.key_changed else "Key stable"]
         if not trust_view_model.verified or trust_view_model.key_changed:
@@ -168,22 +167,25 @@ class SettingsScreen(Screen):
         hint = (
             trust_view_model.banner.message
             if trust_view_model.banner is not None
-            else "This contact is verified. Compare fingerprints again after any key change."
+            else ("This contact is verified. Compare fingerprints again after any key change.")
             if trust_view_model.verified
-            else "This contact is not verified yet. Compare fingerprints before trusting sensitive messages."
+            else (
+                "This contact is not verified yet. Compare fingerprints before trusting "
+                "sensitive messages."
+            )
         )
         action_hint = (
             "Re-verify this contact before trusting new messages."
             if trust_view_model.requires_action
             else "No action required."
         )
-        badge_widget = self.query_one("#trust_badge")
+        badge_widget = self.query_one("#trust_badge", SecurityBadge)
         if hasattr(badge_widget, "set_badge"):
             badge_widget.set_badge(
                 badge,
-                tone="error" if trust_view_model.requires_action else (
-                    "success" if trust_view_model.verified else "warning"
-                ),
+                tone="error"
+                if trust_view_model.requires_action
+                else ("success" if trust_view_model.verified else "warning"),
             )
         else:
             badge_widget.update(badge)
