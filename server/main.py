@@ -61,6 +61,11 @@ def _log_ws_auth_rejected(websocket: WebSocket, reason: str) -> None:
     )
 
 
+def _result_rowcount(result: object) -> int | None:
+    rowcount = getattr(result, "rowcount", None)
+    return None if rowcount is None else int(rowcount)
+
+
 # ── Lifespan ──────────────────────────────────────────────────────────────────
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -249,11 +254,11 @@ async def _ttl_cleanup_loop() -> None:
                     Message.expires_at <= now_dt,
                 )
                 result = await db.execute(stmt)
-                ttl_deleted = result.rowcount
+                ttl_deleted = _result_rowcount(result)
 
                 stmt = delete(Message).where(Message.stored_at < cutoff_dt)
                 result = await db.execute(stmt)
-                age_deleted = result.rowcount
+                age_deleted = _result_rowcount(result)
 
                 await db.commit()
 

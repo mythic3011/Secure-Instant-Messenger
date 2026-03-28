@@ -14,11 +14,23 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from server.api.auth import require_auth
 from server.core.database import get_db
-from server.models import Block, Conversation, FriendRequest, FriendRequestStatus, Friendship, User
+from server.models import (
+    Block,
+    Conversation,
+    FriendRequest,
+    Friendship,
+    User,
+)
+from server.models import (
+    FriendRequestStatus as DBFriendRequestStatus,
+)
 from shared.protocol import (
     FriendRequestAction,
     FriendRequestCreate,
     FriendRequestOut,
+)
+from shared.protocol import (
+    FriendRequestStatus as WireFriendRequestStatus,
 )
 
 router = APIRouter(prefix="/v1/friends", tags=["friends"])
@@ -72,10 +84,13 @@ async def send_friend_request(
     existing_request = result.scalar_one_or_none()
 
     if existing_request is not None:
-        if existing_request.status in (FriendRequestStatus.ACCEPTED, FriendRequestStatus.PENDING):
+        if existing_request.status in (
+            DBFriendRequestStatus.ACCEPTED,
+            DBFriendRequestStatus.PENDING,
+        ):
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Request already pending or accepted")
         # Re-send if previously declined/cancelled
-        existing_request.status = FriendRequestStatus.PENDING
+        existing_request.status = DBFriendRequestStatus.PENDING
         await db.commit()
         request_id = existing_request.id
         created_at = existing_request.created_at
@@ -86,7 +101,7 @@ async def send_friend_request(
             id=request_id,
             sender_id=sender_id,
             recipient_id=recipient_id,
-            status=FriendRequestStatus.PENDING,
+            status=DBFriendRequestStatus.PENDING,
         )
         db.add(friend_request)
         await db.commit()
@@ -99,7 +114,7 @@ async def send_friend_request(
         sender_id=sender_id,
         sender_name=session["username"],
         recipient_id=recipient_id,
-        status=FriendRequestStatus.PENDING,
+        status=WireFriendRequestStatus.PENDING,
         created_at=int(created_at.timestamp()),
     )
 
@@ -119,7 +134,7 @@ async def list_pending(
         .join(User, User.id == FriendRequest.sender_id)
         .where(
             FriendRequest.recipient_id == session["user_id"],
-            FriendRequest.status == FriendRequestStatus.PENDING,
+            FriendRequest.status == DBFriendRequestStatus.PENDING,
         )
         .order_by(FriendRequest.created_at.desc())
     )
@@ -133,7 +148,7 @@ async def list_pending(
             sender_id=fr.sender_id,
             sender_name=username,
             recipient_id=fr.recipient_id,
-            status=fr.status,
+            status=WireFriendRequestStatus(fr.status.value),
             created_at=int(fr.created_at.timestamp()),
         )
         for fr, username in rows
@@ -161,7 +176,7 @@ async def handle_request(
     if req is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Request not found")
 
-    if req.status != FriendRequestStatus.PENDING:
+    if req.status != DBFriendRequestStatus.PENDING:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Request is not pending")
 
     action = body.action
@@ -170,7 +185,11 @@ async def handle_request(
     if action in ("accept", "decline") and req.recipient_id != user_id:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only recipient can accept/decline")
 
-    status_map = {"accept": FriendRequestStatus.ACCEPTED, "decline": FriendRequestStatus.DECLINED, "cancel": FriendRequestStatus.CANCELLED}
+    status_map = {
+        "accept": DBFriendRequestStatus.ACCEPTED,
+        "decline": DBFriendRequestStatus.DECLINED,
+        "cancel": DBFriendRequestStatus.CANCELLED,
+    }
     req.status = status_map[action]
 
     if action == "accept":
@@ -247,13 +266,13 @@ async def block_user(
     stmt = (
         update(FriendRequest)
         .where(
-            FriendRequest.status == FriendRequestStatus.PENDING,
+            FriendRequest.status == DBFriendRequestStatus.PENDING,
             or_(
                 and_(FriendRequest.sender_id == user_id, FriendRequest.recipient_id == peer_id),
                 and_(FriendRequest.sender_id == peer_id, FriendRequest.recipient_id == user_id),
             ),
         )
-        .values(status=FriendRequestStatus.CANCELLED)
+        .values(status=DBFriendRequestStatus.CANCELLED)
     )
     await db.execute(stmt)
     await db.commit()
