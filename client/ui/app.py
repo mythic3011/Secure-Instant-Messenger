@@ -17,7 +17,7 @@ from pydantic import ValidationError
 from textual.app import App, ComposeResult
 from textual.widgets import Static
 
-from client.api.client import IMClient, IMClientConnectionError, IMClientError
+from client.api.client import IMClient, IMClientError
 from client.crypto.session import (
     DHKeypair,
     IdentityKeyCache,
@@ -68,6 +68,8 @@ from client.ui.screens.login import LoginScreen
 from client.use_cases import (
     FriendRequestHandled,
     FriendsContext,
+    LoginContext,
+    LoginFailed,
     NetworkFailure,
     PendingRequestsLoaded,
     SendMessageBlocked,
@@ -76,6 +78,7 @@ from client.use_cases import (
     ServerFailure,
     execute_handle_friend_request,
     execute_load_pending_requests,
+    execute_login_handshake,
     execute_send_message,
 )
 from client.use_cases import (
@@ -83,7 +86,6 @@ from client.use_cases import (
 )
 from shared.protocol import (
     DeliveryAck,
-    LoginRequest,
     MessageEnvelope,
     RegisterRequest,
 )
@@ -426,90 +428,36 @@ class IMApp(App):
         # Capture screen reference NOW before any await displaces it
         login_screen = self.screen  # LoginScreen is current screen at this point
 
-        self._client = IMClient(
-            self._server_url,
-            verify_tls=self._verify_tls,
-            ca_cert=self._ca_cert,
-            pin_sha256=self._pin_sha256,
+        result = await execute_login_handshake(
+            LoginContext(
+                server_url=self._server_url,
+                verify_tls=self._verify_tls,
+                ca_cert=self._ca_cert,
+                pin_sha256=self._pin_sha256,
+                on_ws_message=self._on_ws_message,
+                client_factory=IMClient,
+                keystore_exists_fn=keystore_exists,
+                load_keystore_fn=load_keystore,
+                derive_storage_key_fn=self._derive_and_set_storage_key,
+                init_store_fn=init_store,
+                sweep_expired_fn=sweep_expired,
+                load_sessions_fn=load_sessions,
+            ),
+            username=username,
+            password=password,
+            totp_code=totp_code,
         )
-        await self._client.__aenter__()
-
-        try:
-            await self._client.login(
-                LoginRequest(username=username, password=password, totp_code=totp_code)
-            )
-        except IMClientError as e:
-            login_screen.query_one("#error", Static).update(f"Login failed: {e.detail}")
-            await self._client.__aexit__(None, None, None)
-            self._client = None
-            return
-        except (httpx.ConnectError, httpx.TimeoutException, httpx.NetworkError) as e:
-            log.warning("login_network_error", username=username, err=str(e))
-            login_screen.query_one("#error", Static).update(
-                f"Cannot reach server — is it running? ({type(e).__name__})"
-            )
-            await self._client.__aexit__(None, None, None)
-            self._client = None
-            return
-        except Exception as e:
-            log.warning("login_unexpected_error", username=username, err=str(e))
-            login_screen.query_one("#error", Static).update(f"Unexpected error: {e}")
-            await self._client.__aexit__(None, None, None)
+        if isinstance(result, LoginFailed):
+            login_screen.query_one("#error", Static).update(result.message)
             self._client = None
             return
 
-        self._password = password
-        self._username = username
-
-        # Load local keys
-        if not keystore_exists(username):
-            login_screen.query_one("#error", Static).update("No local keys found. Register first.")
-            return
-
-        try:
-            self._local_keys = load_keystore(username, password)
-            self._derive_and_set_storage_key(username, password)
-        except ValueError:
-            login_screen.query_one("#error", Static).update("Wrong password or corrupted keystore.")
-            return
-
-        # Init local store and sweep expired messages (R11)
-        await init_store(username)
-        await sweep_expired()
-        self._sessions = load_sessions(username, password)
-
-        # Fetch own user_id
-        try:
-            bundle = await self._client.get_keys(username)
-            self._user_id = bundle.user_id
-        except (IMClientError, httpx.ConnectError, httpx.TimeoutException, httpx.NetworkError):
-            self._user_id = username
-
-        # Connect WebSocket
-        try:
-            await self._client.connect_ws(self._on_ws_message)
-        except IMClientConnectionError as e:
-            log.warning(
-                "websocket_connect_failed",
-                username=username,
-                error=type(e).__name__,
-                err=e.detail,
-            )
-            login_screen.query_one("#error", Static).update(f"Login failed: {e.detail}")
-            await self._client.__aexit__(None, None, None)
-            self._client = None
-            return
-        except (httpx.ConnectError, httpx.TimeoutException, httpx.NetworkError) as e:
-            log.warning(
-                "websocket_connect_failed",
-                username=username,
-                error=type(e).__name__,
-                err=str(e),
-            )
-            login_screen.query_one("#error", Static).update("Login failed: Cannot reach server.")
-            await self._client.__aexit__(None, None, None)
-            self._client = None
-            return
+        self._client = result.client
+        self._password = result.password
+        self._username = result.username
+        self._local_keys = result.local_keys
+        self._user_id = result.user_id
+        self._sessions = result.sessions
 
         await self._show_conversations()
 

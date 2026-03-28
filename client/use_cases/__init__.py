@@ -7,6 +7,13 @@ from client.use_cases.friends import (
     execute_handle_friend_request,
     execute_load_pending_requests,
 )
+from client.use_cases.login import (
+    LoginContext,
+    LoginFailed,
+    LoginHandshakeResult,
+    LoginSucceeded,
+    execute_login_handshake,
+)
 from client.use_cases.results import (
     LocalSecurityFailure,
     NetworkFailure,
@@ -38,9 +45,14 @@ __all__ = [
     "FriendRequestHandled",
     "FriendsContext",
     "HandleFriendRequestResult",
+    "LoginContext",
+    "LoginFailed",
+    "LoginHandshakeResult",
+    "LoginSucceeded",
     "LoadPendingResult",
     "PendingRequestsLoaded",
     "execute_handle_friend_request",
+    "execute_login_handshake",
     "execute_load_pending_requests",
     "SendMessageBlocked",
     "SendMessageContext",
