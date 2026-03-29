@@ -171,7 +171,8 @@ class IMClient:
         return {}
 
     async def _request(self, method: str, path: str, **kwargs: Any) -> httpx.Response:
-        assert self._http is not None, "Use IMClient as async context manager"
+        if self._http is None:
+            raise RuntimeError("Use IMClient as async context manager")
         log.debug("-> %s %s", method.upper(), path)
         resp = await self._http.request(method, path, headers=self._headers(), **kwargs)
         log.debug(
@@ -378,10 +379,10 @@ class IMClient:
                         ready.set_result(None)
                     retry_count = 0
                     log.info("WebSocket connected")
-                    for raw in initial_messages:
-                        await self._handle_ws_raw(raw)
-                    async for raw in ws:
-                        await self._handle_ws_raw(raw)
+                    for initial_raw in initial_messages:
+                        await self._handle_ws_raw(initial_raw)
+                    async for ws_raw in ws:
+                        await self._handle_ws_raw(ws_raw)
             except websockets.exceptions.ConnectionClosed as exc:
                 if ready is not None and not ready.done():
                     ready.set_exception(

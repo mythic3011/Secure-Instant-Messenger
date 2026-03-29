@@ -45,7 +45,7 @@ class Settings(BaseSettings):
 
     # Server
     app_env: str = "development"
-    host: str = "0.0.0.0"
+    host: str = "0.0.0.0"  # noqa: S104  # nosec B104 - expected listen address for container/local server runtime
     port: int = 8443
     log_level: str = "info"
 
