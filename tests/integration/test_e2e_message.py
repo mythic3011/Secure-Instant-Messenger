@@ -542,7 +542,7 @@ async def test_fetch_messages_rejects_cursor_from_another_conversation(
     app_client: AsyncClient,
 ) -> None:
     client = app_client
-    password = "CursorPass123!"  # noqa: S105
+    password = "CursorPass123!"  # noqa: S105  # pragma: allowlist secret
 
     alice_id_kp, alice_dh_kp, alice_totp = await _register(client, "alice_cursor", password)
     _bob_id_kp, _bob_dh_kp, bob_totp = await _register(client, "bob_cursor", password)

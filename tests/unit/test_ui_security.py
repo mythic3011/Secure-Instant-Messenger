@@ -851,7 +851,7 @@ async def test_login_blocks_transition_on_initial_websocket_failure(
 
     monkeypatch.setattr(app, "_show_conversations", _show_conversations)
 
-    password = "Password123!"  # noqa: S105,S106
+    password = "Password123!"  # noqa: S105,S106  # pragma: allowlist secret
     await app.on_login_screen_login_success(LoginScreen.LoginSuccess("alice", password, "123456"))
 
     assert login_screen.error.value == "Login failed: WebSocket authentication failed."

@@ -58,7 +58,7 @@ async def test_execute_login_handshake_returns_success() -> None:
     fake_client = _FakeClient()
     derived: list[tuple[str, str]] = []
     init_calls: list[str] = []
-    password = "Password123!"  # noqa: S105,S106
+    password = "Password123!"  # noqa: S105,S106  # pragma: allowlist secret
     sessions = {"conv-1": object()}
 
     context = LoginContext(
