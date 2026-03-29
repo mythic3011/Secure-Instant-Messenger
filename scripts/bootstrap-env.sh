@@ -23,6 +23,7 @@ MODE=${1:-dev}
 readonly ENV_EXAMPLE=.env.example
 readonly ENV_LOCAL=.env.local
 readonly CERT_DIR=./certs
+readonly DATA_DIR=./data
 # Local DB path for dev (Docker uses /app/data/im.db via volume)
 readonly DEV_DB_URL="sqlite+aiosqlite:///./data/im.db"
 readonly CERT_FILE=$CERT_DIR/server.crt
@@ -122,6 +123,7 @@ echo
 echo "── TLS certificates ──"
 
 mkdir -p "$CERT_DIR"
+mkdir -p "$DATA_DIR"
 
 if [[ $MODE == production || ! -f $CERT_FILE || ! -f $KEY_FILE ]]; then
     if ! command -v openssl >/dev/null 2>&1; then

@@ -1,0 +1,52 @@
+name: Submission Package
+
+on:
+  workflow_dispatch:
+    inputs:
+      report_path:
+        description: "Path to the final report file, relative to repo root"
+        required: true
+        type: string
+      video_path:
+        description: "Path to the final video file, relative to repo root"
+        required: true
+        type: string
+
+jobs:
+  build-submission:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Validate required repo files
+        run: |
+          test -d client
+          test -d server
+          test -d shared
+          test -f docs/DEPLOY.md
+          test -f server/migrations/001_init.sql
+          test -f scripts/build_submission_zip.sh
+          test -f scripts/bootstrap-env.bat
+          test -f scripts/bootstrap_env.py
+          test -f scripts/run-server.bat
+          test -f scripts/run-client.bat
+
+      - name: Build Team 71 submission zip
+        run: |
+          bash scripts/build_submission_zip.sh \
+            71 \
+            "${{ inputs.report_path }}" \
+            "${{ inputs.video_path }}"
+
+      - name: Validate packaged bootstrap/runtime helpers
+        run: |
+          unzip -l submission/71.zip | grep '71/code/scripts/bootstrap-env.bat'
+          unzip -l submission/71.zip | grep '71/code/scripts/bootstrap_env.py'
+          unzip -l submission/71.zip | grep '71/code/scripts/run-server.bat'
+          unzip -l submission/71.zip | grep '71/code/scripts/run-client.bat'
+
+      - name: Upload submission zip
+        uses: actions/upload-artifact@v6
+        with:
+          name: submission-71
+          path: submission/71.zip

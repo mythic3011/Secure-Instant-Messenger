@@ -1,0 +1,50 @@
+name: Package
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Check required files
+        run: |
+          test -f README.md
+          test -f docs/DEPLOY.md
+          test -d client
+          test -d server
+          test -d shared
+          test -d tests
+
+      - name: Create release archive
+        run: |
+          git archive --format=tar HEAD \
+            --prefix=comp3334_project/ \
+            client \
+            server \
+            shared \
+            tests \
+            scripts \
+            docs/ARCHITECTURE.md \
+            docs/BUG_REPORT.md \
+            docs/DEPLOY.md \
+            docs/Project.pdf \
+            docs/TASKS.md \
+            docs/Tutorial \
+            README.md \
+            pyproject.toml \
+            uv.lock \
+            docker-compose.yml \
+            Dockerfile.server \
+            | gzip -9 > project.tar.gz
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v6
+        with:
+          name: project-zip
+          path: project.tar.gz

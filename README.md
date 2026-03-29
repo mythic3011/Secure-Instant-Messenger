@@ -2,7 +2,7 @@
 
 End-to-end encrypted instant messaging application built for COMP3334. Demonstrates strong cryptographic practices, replay protection, and an honest-but-curious server model.
 
-**Team:** 5 people | **Deadline:** April 8, 2026 07:50 | **Tests:** 53/53 passing ✅
+**Team:** 5 people | **Deadline:** April 8, 2026 07:50
 
 ## Security
 
@@ -45,6 +45,11 @@ All 19 identified security vulnerabilities have been fixed. See [`docs/SECURITY_
 ```
 
 ## Getting started
+
+Note:
+Course tutorial materials such as `docs/Tutorial/Tutorial.pdf` are not used as
+the deployment baseline for this project. This repository standardizes on
+Python 3.12 + `uv` for reproducible setup.
 
 1. **Install dependencies** (requires [uv](https://docs.astral.sh/uv/)):
 
@@ -92,17 +97,20 @@ uv run --extra dev pytest tests/security/ -v
 uv run --extra dev pytest tests/integration/ -v
 ```
 
+Avoid hard-coding a test total in submission docs. Use fresh `pytest` output as
+the evidence source because the suite evolves during fixes/refactors.
+
 ## Docker
 
 ```bash
 # Start server
 docker compose up --build
 
-# Start client (separate terminal) — use --no-verify-tls since the container auto-generates a self-signed cert
-uv run python -m client.main --server https://localhost:8443 --no-verify-tls
+# Start client (separate terminal) — prefer trusting the dev cert explicitly
+uv run python -m client.main --server https://localhost:8443 --ca-cert ./certs/dev/server.crt
 ```
 
-> **Note:** The client defaults to HTTP in `main.py`. Always pass `--server https://localhost:8443` when connecting to the Docker server. Without `--no-verify-tls`, you'll get a `ConnectionError` because the container's self-signed cert isn't trusted by the host.
+> **Note:** The client defaults to `https://localhost:8443` in `main.py`. Keep TLS verification enabled by default. If Docker is using a self-signed development certificate, prefer `--ca-cert <path>` to trust that certificate. Use `--no-verify-tls` only as a dev-only exception.
 
 ## Architecture & Protocol
 
@@ -122,7 +130,7 @@ See `docs/DEPLOY.md` for step-by-step instructions for Windows 11 and Ubuntu.
 | ----------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `PermissionError: '/app/data'`                        | Stale `.env.local` with container path. Delete it or remove the `DATABASE_URL` line and restart.                                                                   |
 | TLS cert not found                                    | Run `bash scripts/bootstrap-env.sh dev`, or ignore — server falls back to HTTP in dev mode.                                                                        |
-| `ConnectionError` / "Cannot reach server" with Docker | The container auto-generates a self-signed cert the host doesn't trust. Use `--no-verify-tls` and make sure you pass `--server https://localhost:8443` (not HTTP). |
+| `ConnectionError` / "Cannot reach server" with Docker | The container may use a self-signed cert the host does not trust. Pass `--server https://localhost:8443` and prefer `--ca-cert <path-to-cert>`. Use `--no-verify-tls` only for local development exceptions. |
 
 **Data directory contract:**
 
