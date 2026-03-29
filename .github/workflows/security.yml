@@ -30,6 +30,7 @@ jobs:
             {
               echo "bandit_files="
               echo "secret_files="
+              echo "dependency_files_changed=false"
               echo "use_scope=false"
             } >> "$GITHUB_OUTPUT"
             exit 0
@@ -39,6 +40,10 @@ jobs:
           changed_files="$(git diff --name-only --diff-filter=ACMR "origin/${{ github.base_ref }}...HEAD")"
           bandit_files="$(printf '%s\n' "$changed_files" | grep -E '^(client/(api|ui|use_cases)|server/(api|core|ws))/.*\.py$' || true)"
           secret_files="$(printf '%s\n' "$changed_files" | grep -v '^docs/plans/' || true)"
+          dependency_files_changed=false
+          if printf '%s\n' "$changed_files" | grep -Eq '^(pyproject\.toml|uv\.lock)$'; then
+            dependency_files_changed=true
+          fi
 
           {
             echo "bandit_files<<EOF"
@@ -47,6 +52,7 @@ jobs:
             echo "secret_files<<EOF"
             printf '%s\n' "$secret_files"
             echo "EOF"
+            echo "dependency_files_changed=$dependency_files_changed"
             echo "use_scope=true"
           } >> "$GITHUB_OUTPUT"
 
@@ -66,7 +72,14 @@ jobs:
           uv tool run --from bandit bandit -q -r client server scripts shared
 
       - name: pip-audit
-        run: uv tool run --from pip-audit pip-audit
+        shell: bash
+        run: |
+          if [[ "${{ steps.scope.outputs.use_scope }}" == "true" && "${{ steps.scope.outputs.dependency_files_changed }}" != "true" ]]; then
+            echo "No dependency manifest changes; skipping PR-scoped pip-audit."
+            exit 0
+          fi
+          # CVE-2026-4539 currently has no fixed Pygments release available on PyPI.
+          uv tool run --from pip-audit pip-audit --ignore-vuln CVE-2026-4539
 
       - name: detect-secrets
         shell: bash
