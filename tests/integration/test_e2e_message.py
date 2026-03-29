@@ -28,6 +28,11 @@ from client.crypto.session import (
     derive_session_key_as_responder,
     make_key_signature,
 )
+from tests.secrets import (
+    TEST_ACCOUNT_PASSWORD,
+    TEST_TOKEN_SECRET_KEY,
+    TEST_TOTP_ENCRYPTION_KEY,
+)
 
 pytestmark = pytest.mark.asyncio
 
@@ -49,8 +54,8 @@ async def app_client():
     from server.core.config import clear_settings_cache
 
     # Patch settings to use temp SQLite and known secrets, with rate limiting disabled
-    os.environ["TOKEN_SECRET_KEY"] = "a" * 64
-    os.environ["TOTP_ENCRYPTION_KEY"] = "b" * 64
+    os.environ["TOKEN_SECRET_KEY"] = TEST_TOKEN_SECRET_KEY
+    os.environ["TOTP_ENCRYPTION_KEY"] = TEST_TOTP_ENCRYPTION_KEY
     os.environ["DATABASE_URL"] = "sqlite+aiosqlite:////tmp/test_e2e.db"
     os.environ["RATE_LIMIT_REGISTER_MAX"] = "1000"
     os.environ["RATE_LIMIT_LOGIN_MAX"] = "1000"
@@ -146,12 +151,14 @@ async def test_full_e2e_message_flow(app_client: AsyncClient):
     client = app_client
 
     # 1. Register Alice and Bob
-    alice_id_kp, alice_dh_kp, alice_totp = await _register(client, "alice_e2e", "AlicePassword123!")
-    bob_id_kp, bob_dh_kp, bob_totp = await _register(client, "bob_e2e", "BobPassword123!")
+    alice_id_kp, alice_dh_kp, alice_totp = await _register(
+        client, "alice_e2e", TEST_ACCOUNT_PASSWORD
+    )
+    bob_id_kp, bob_dh_kp, bob_totp = await _register(client, "bob_e2e", TEST_ACCOUNT_PASSWORD)
 
     # 2. Login
-    alice_token = await _login(client, "alice_e2e", "AlicePassword123!", alice_totp)
-    bob_token = await _login(client, "bob_e2e", "BobPassword123!", bob_totp)
+    alice_token = await _login(client, "alice_e2e", TEST_ACCOUNT_PASSWORD, alice_totp)
+    bob_token = await _login(client, "bob_e2e", TEST_ACCOUNT_PASSWORD, bob_totp)
 
     # 3. Alice sends Bob a friend request; Bob accepts
     resp = await client.post(
@@ -285,12 +292,12 @@ async def test_replay_rejection(app_client: AsyncClient):
     client = app_client
 
     alice_id_kp, alice_dh_kp, alice_totp = await _register(
-        client, "alice_replay", "AlicePassword123!"
+        client, "alice_replay", TEST_ACCOUNT_PASSWORD
     )
-    bob_id_kp, bob_dh_kp, bob_totp = await _register(client, "bob_replay", "BobPassword123!")
+    bob_id_kp, bob_dh_kp, bob_totp = await _register(client, "bob_replay", TEST_ACCOUNT_PASSWORD)
 
-    alice_token = await _login(client, "alice_replay", "AlicePassword123!", alice_totp)
-    bob_token = await _login(client, "bob_replay", "BobPassword123!", bob_totp)
+    alice_token = await _login(client, "alice_replay", TEST_ACCOUNT_PASSWORD, alice_totp)
+    bob_token = await _login(client, "bob_replay", TEST_ACCOUNT_PASSWORD, bob_totp)
 
     # Friend request
     resp = await client.post(
@@ -362,7 +369,7 @@ async def test_non_replay_db_failure_is_not_misclassified(
     app_client: AsyncClient, monkeypatch: pytest.MonkeyPatch
 ):
     client = app_client
-    pw = "Passw0rd!123"
+    pw = TEST_ACCOUNT_PASSWORD
 
     alice_id_kp, alice_dh_kp, a_sec = await _register(client, "dbfail_alice", pw)
     bob_id_kp, bob_dh_kp, b_sec = await _register(client, "dbfail_bob", pw)
@@ -442,12 +449,12 @@ async def test_online_push_does_not_mark_delivered_before_ack(
     client = app_client
 
     alice_id_kp, alice_dh_kp, alice_totp = await _register(
-        client, "alice_delivery", "AlicePassword123!"
+        client, "alice_delivery", TEST_ACCOUNT_PASSWORD
     )
-    bob_id_kp, bob_dh_kp, bob_totp = await _register(client, "bob_delivery", "BobPassword123!")
+    bob_id_kp, bob_dh_kp, bob_totp = await _register(client, "bob_delivery", TEST_ACCOUNT_PASSWORD)
 
-    alice_token = await _login(client, "alice_delivery", "AlicePassword123!", alice_totp)
-    bob_token = await _login(client, "bob_delivery", "BobPassword123!", bob_totp)
+    alice_token = await _login(client, "alice_delivery", TEST_ACCOUNT_PASSWORD, alice_totp)
+    bob_token = await _login(client, "bob_delivery", TEST_ACCOUNT_PASSWORD, bob_totp)
 
     resp = await client.post(
         "/v1/friends/request",
@@ -542,7 +549,7 @@ async def test_fetch_messages_rejects_cursor_from_another_conversation(
     app_client: AsyncClient,
 ) -> None:
     client = app_client
-    password = "CursorPass123!"  # noqa: S105  # pragma: allowlist secret
+    password = TEST_ACCOUNT_PASSWORD
 
     alice_id_kp, alice_dh_kp, alice_totp = await _register(client, "alice_cursor", password)
     _bob_id_kp, _bob_dh_kp, bob_totp = await _register(client, "bob_cursor", password)

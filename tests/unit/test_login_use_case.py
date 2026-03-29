@@ -16,6 +16,7 @@ from client.use_cases.login import (
     execute_login_handshake,
 )
 from shared.protocol import LoginRequest
+from tests.secrets import TEST_ACCOUNT_PASSWORD
 
 
 def _imclient_error(status_code: int, detail: str) -> IMClientError:
@@ -58,7 +59,7 @@ async def test_execute_login_handshake_returns_success() -> None:
     fake_client = _FakeClient()
     derived: list[tuple[str, str]] = []
     init_calls: list[str] = []
-    password = "Password123!"  # noqa: S105,S106  # pragma: allowlist secret
+    password = TEST_ACCOUNT_PASSWORD
     sessions = {"conv-1": object()}
 
     context = LoginContext(
@@ -98,7 +99,7 @@ async def test_execute_login_handshake_returns_success() -> None:
 @pytest.mark.asyncio
 async def test_execute_login_handshake_returns_failure_on_initial_websocket_error() -> None:
     fake_client = _FakeClient()
-    password = "Password123!"  # noqa: S105,S106
+    password = TEST_ACCOUNT_PASSWORD
 
     async def _connect_ws(_on_message) -> None:
         raise IMClientConnectionError("WebSocket authentication failed.")
@@ -134,7 +135,7 @@ async def test_execute_login_handshake_returns_failure_on_initial_websocket_erro
 @pytest.mark.asyncio
 async def test_execute_login_handshake_returns_network_failure_message() -> None:
     fake_client = _FakeClient()
-    password = "Password123!"  # noqa: S105,S106
+    password = TEST_ACCOUNT_PASSWORD
 
     async def _login(_body) -> None:
         raise httpx.ConnectError("offline")
@@ -170,7 +171,7 @@ async def test_execute_login_handshake_returns_network_failure_message() -> None
 @pytest.mark.asyncio
 async def test_execute_login_handshake_closes_client_when_keystore_is_missing() -> None:
     fake_client = _FakeClient()
-    password = "Password123!"  # noqa: S105,S106
+    password = TEST_ACCOUNT_PASSWORD
 
     context = LoginContext(
         server_url="https://example.test",
@@ -201,7 +202,7 @@ async def test_execute_login_handshake_closes_client_when_keystore_is_missing() 
 @pytest.mark.asyncio
 async def test_execute_login_handshake_closes_client_when_keystore_load_fails() -> None:
     fake_client = _FakeClient()
-    password = "Password123!"  # noqa: S105,S106
+    password = TEST_ACCOUNT_PASSWORD
 
     def _raise_value_error(*_args, **_kwargs):
         raise ValueError("bad keystore")
@@ -235,7 +236,7 @@ async def test_execute_login_handshake_closes_client_when_keystore_load_fails() 
 @pytest.mark.asyncio
 async def test_execute_login_handshake_waits_for_initial_websocket_startup_outcome() -> None:
     fake_client = _FakeClient()
-    password = "Password123!"  # noqa: S105,S106
+    password = TEST_ACCOUNT_PASSWORD
     ready = asyncio.Event()
 
     async def _connect_ws(_on_message) -> None:
@@ -282,7 +283,7 @@ async def test_execute_login_handshake_waits_for_initial_websocket_startup_outco
 @pytest.mark.asyncio
 async def test_execute_login_handshake_fails_closed_when_canonical_user_lookup_fails() -> None:
     fake_client = _FakeClient()
-    password = "Password123!"  # noqa: S105,S106
+    password = TEST_ACCOUNT_PASSWORD
 
     async def _get_keys(_username: str) -> Any:
         raise _imclient_error(404, "User not found")
@@ -318,7 +319,7 @@ async def test_execute_login_handshake_fails_closed_when_canonical_user_lookup_f
 @pytest.mark.asyncio
 async def test_execute_login_handshake_fails_closed_when_local_store_bootstrap_fails() -> None:
     fake_client = _FakeClient()
-    password = "Password123!"  # noqa: S105,S106
+    password = TEST_ACCOUNT_PASSWORD
 
     async def _init_store(_username: str) -> None:
         raise RuntimeError("storage init exploded")

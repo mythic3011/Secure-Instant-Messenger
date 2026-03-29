@@ -7,13 +7,14 @@ from typing import Any
 from unittest.mock import patch
 
 from server.core.config import Settings
+from tests.secrets import TEST_TOKEN_SECRET_KEY, TEST_TOTP_ENCRYPTION_KEY
 
 
 def _make_settings(**overrides):
     """Build a Settings instance with required secrets filled in."""
     defaults: dict[str, Any] = {
-        "token_secret_key": "a" * 64,
-        "totp_encryption_key": "b" * 64,
+        "token_secret_key": TEST_TOKEN_SECRET_KEY,
+        "totp_encryption_key": TEST_TOTP_ENCRYPTION_KEY,
     }
     defaults.update(overrides)
     return Settings(**defaults)

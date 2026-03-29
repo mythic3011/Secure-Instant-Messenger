@@ -28,6 +28,7 @@ from client.ui.screens.conversations import ConversationItem, ConversationListSc
 from client.ui.screens.login import LoginScreen
 from client.ui.screens.settings import SettingsScreen
 from client.use_cases.login import LoginSucceeded
+from tests.secrets import TEST_ACCOUNT_PASSWORD
 
 
 class _FakeStatic:
@@ -851,7 +852,7 @@ async def test_login_blocks_transition_on_initial_websocket_failure(
 
     monkeypatch.setattr(app, "_show_conversations", _show_conversations)
 
-    password = "Password123!"  # noqa: S105,S106  # pragma: allowlist secret
+    password = TEST_ACCOUNT_PASSWORD
     await app.on_login_screen_login_success(LoginScreen.LoginSuccess("alice", password, "123456"))
 
     assert login_screen.error.value == "Login failed: WebSocket authentication failed."
@@ -874,7 +875,7 @@ async def test_login_waits_for_initial_websocket_startup_before_showing_conversa
         return LoginSucceeded(
             client=fake_client,
             username="alice",
-            password="Password123!",  # noqa: S105,S106
+            password=TEST_ACCOUNT_PASSWORD,
             user_id="alice-id",
             local_keys=object(),
             sessions={},
@@ -894,7 +895,7 @@ async def test_login_waits_for_initial_websocket_startup_before_showing_conversa
         app.on_login_screen_login_success(
             LoginScreen.LoginSuccess(
                 "alice",
-                "Password123!",  # noqa: S105,S106
+                TEST_ACCOUNT_PASSWORD,
                 "123456",
             )
         )
