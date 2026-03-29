@@ -59,11 +59,13 @@ jobs:
         shell: bash
         run: |
           if [[ "${{ steps.scope.outputs.use_scope }}" == "true" ]]; then
-            if [[ -z "${{ steps.scope.outputs.python_files }}" ]]; then
+            scoped_files="${{ steps.scope.outputs.python_files }}"
+            if [[ -z "$scoped_files" ]]; then
               echo "No Python files changed; skipping scoped Ruff check."
               exit 0
             fi
-            uv run --extra dev ruff check --extend-ignore B008,S104,S108 ${{ steps.scope.outputs.python_files }}
+            mapfile -t files <<< "$scoped_files"
+            uv run --extra dev ruff check --extend-ignore B008,S104,S108 "${files[@]}"
             exit 0
           fi
           uv run --extra dev ruff check --extend-ignore B008,S104,S108 .
@@ -72,11 +74,13 @@ jobs:
         shell: bash
         run: |
           if [[ "${{ steps.scope.outputs.use_scope }}" == "true" ]]; then
-            if [[ -z "${{ steps.scope.outputs.python_files }}" ]]; then
+            scoped_files="${{ steps.scope.outputs.python_files }}"
+            if [[ -z "$scoped_files" ]]; then
               echo "No Python files changed; skipping scoped Ruff format check."
               exit 0
             fi
-            uv run --extra dev ruff format --check ${{ steps.scope.outputs.python_files }}
+            mapfile -t files <<< "$scoped_files"
+            uv run --extra dev ruff format --check "${files[@]}"
             exit 0
           fi
           uv run --extra dev ruff format --check .
@@ -85,11 +89,13 @@ jobs:
         shell: bash
         run: |
           if [[ "${{ steps.scope.outputs.use_scope }}" == "true" ]]; then
-            if [[ -z "${{ steps.scope.outputs.mypy_files }}" ]]; then
+            scoped_files="${{ steps.scope.outputs.mypy_files }}"
+            if [[ -z "$scoped_files" ]]; then
               echo "No client/server Python files changed; skipping scoped MyPy."
               exit 0
             fi
-            uv run --extra dev mypy ${{ steps.scope.outputs.mypy_files }}
+            mapfile -t files <<< "$scoped_files"
+            uv run --extra dev mypy "${files[@]}"
             exit 0
           fi
           uv run --extra dev mypy client server
@@ -98,11 +104,13 @@ jobs:
         shell: bash
         run: |
           if [[ "${{ steps.scope.outputs.use_scope }}" == "true" ]]; then
-            if [[ -z "${{ steps.scope.outputs.python_files }}" ]]; then
+            scoped_files="${{ steps.scope.outputs.python_files }}"
+            if [[ -z "$scoped_files" ]]; then
               echo "No Python files changed; skipping scoped silent-except scan."
               exit 0
             fi
-            uv run python scripts/check_silent_excepts.py ${{ steps.scope.outputs.python_files }}
+            mapfile -t files <<< "$scoped_files"
+            uv run python scripts/check_silent_excepts.py "${files[@]}"
             exit 0
           fi
           uv run python scripts/check_silent_excepts.py
@@ -111,11 +119,13 @@ jobs:
         shell: bash
         run: |
           if [[ "${{ steps.scope.outputs.use_scope }}" == "true" ]]; then
-            if [[ -z "${{ steps.scope.outputs.claim_files }}" ]]; then
+            scoped_files="${{ steps.scope.outputs.claim_files }}"
+            if [[ -z "$scoped_files" ]]; then
               echo "No relevant docs/code files changed; skipping scoped stale-claim scan."
               exit 0
             fi
-            uv run python scripts/check_stale_security_claims.py ${{ steps.scope.outputs.claim_files }}
+            mapfile -t files <<< "$scoped_files"
+            uv run python scripts/check_stale_security_claims.py "${files[@]}"
             exit 0
           fi
           uv run python scripts/check_stale_security_claims.py

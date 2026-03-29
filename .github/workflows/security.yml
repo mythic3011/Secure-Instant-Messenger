@@ -54,11 +54,13 @@ jobs:
         shell: bash
         run: |
           if [[ "${{ steps.scope.outputs.use_scope }}" == "true" ]]; then
-            if [[ -z "${{ steps.scope.outputs.bandit_files }}" ]]; then
+            scoped_files="${{ steps.scope.outputs.bandit_files }}"
+            if [[ -z "$scoped_files" ]]; then
               echo "No security-relevant Python files changed; skipping scoped Bandit scan."
               exit 0
             fi
-            uv tool run --from bandit bandit -q ${{ steps.scope.outputs.bandit_files }}
+            mapfile -t files <<< "$scoped_files"
+            uv tool run --from bandit bandit -q "${files[@]}"
             exit 0
           fi
           uv tool run --from bandit bandit -q -r client server scripts shared
@@ -70,11 +72,13 @@ jobs:
         shell: bash
         run: |
           if [[ "${{ steps.scope.outputs.use_scope }}" == "true" ]]; then
-            if [[ -z "${{ steps.scope.outputs.secret_files }}" ]]; then
+            scoped_files="${{ steps.scope.outputs.secret_files }}"
+            if [[ -z "$scoped_files" ]]; then
               echo "No tracked files changed; skipping scoped detect-secrets scan."
               exit 0
             fi
-            uv tool run --from detect-secrets detect-secrets-hook --baseline .secrets.baseline ${{ steps.scope.outputs.secret_files }}
+            mapfile -t files <<< "$scoped_files"
+            uv tool run --from detect-secrets detect-secrets-hook --baseline .secrets.baseline "${files[@]}"
             exit 0
           fi
           git ls-files -z -- . ':(exclude)docs/plans/**' \
