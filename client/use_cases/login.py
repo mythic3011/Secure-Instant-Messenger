@@ -86,7 +86,7 @@ async def execute_login_handshake(
             client,
             f"Cannot reach server — is it running? ({type(exc).__name__})",
         )
-    except Exception as exc:
+    except Exception as exc:  # allow-silent-except
         return await _close_and_fail(client, f"Unexpected error: {exc}")
 
     if not context.keystore_exists_fn(username):

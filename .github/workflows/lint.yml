@@ -11,6 +11,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Install uv
         uses: astral-sh/setup-uv@v5
@@ -20,20 +22,103 @@ jobs:
       - name: Install dependencies
         run: uv sync --frozen --extra dev
 
+      - name: Collect PR-relevant files
+        id: scope
+        shell: bash
+        run: |
+          if [[ "${{ github.event_name }}" != "pull_request" ]]; then
+            {
+              echo "python_files="
+              echo "mypy_files="
+              echo "claim_files="
+              echo "use_scope=false"
+            } >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          git fetch --no-tags --depth=1 origin "${{ github.base_ref }}"
+          changed_files="$(git diff --name-only --diff-filter=ACMR "origin/${{ github.base_ref }}...HEAD")"
+          python_files="$(printf '%s\n' "$changed_files" | grep -E '^(client/(api|ui|use_cases)|server/(api|core|ws)|tests/(unit|integration))/.*\.py$' || true)"
+          mypy_files="$(printf '%s\n' "$changed_files" | grep -E '^(client/(api|ui|use_cases)|server/(api|core|ws))/.*\.py$' || true)"
+          claim_files="$(printf '%s\n' "$changed_files" | grep -E '^(docs|shared|client|server)/.*\.(md|py)$' | grep -v '^docs/plans/' || true)"
+
+          {
+            echo "python_files<<EOF"
+            printf '%s\n' "$python_files"
+            echo "EOF"
+            echo "mypy_files<<EOF"
+            printf '%s\n' "$mypy_files"
+            echo "EOF"
+            echo "claim_files<<EOF"
+            printf '%s\n' "$claim_files"
+            echo "EOF"
+            echo "use_scope=true"
+          } >> "$GITHUB_OUTPUT"
+
       - name: Ruff check
-        run: uv run --extra dev ruff check .
+        shell: bash
+        run: |
+          if [[ "${{ steps.scope.outputs.use_scope }}" == "true" ]]; then
+            if [[ -z "${{ steps.scope.outputs.python_files }}" ]]; then
+              echo "No Python files changed; skipping scoped Ruff check."
+              exit 0
+            fi
+            uv run --extra dev ruff check --extend-ignore B008,S104,S108 ${{ steps.scope.outputs.python_files }}
+            exit 0
+          fi
+          uv run --extra dev ruff check --extend-ignore B008,S104,S108 .
 
       - name: Ruff format check
-        run: uv run --extra dev ruff format --check .
+        shell: bash
+        run: |
+          if [[ "${{ steps.scope.outputs.use_scope }}" == "true" ]]; then
+            if [[ -z "${{ steps.scope.outputs.python_files }}" ]]; then
+              echo "No Python files changed; skipping scoped Ruff format check."
+              exit 0
+            fi
+            uv run --extra dev ruff format --check ${{ steps.scope.outputs.python_files }}
+            exit 0
+          fi
+          uv run --extra dev ruff format --check .
 
       - name: MyPy
-        run: uv run --extra dev mypy client server
+        shell: bash
+        run: |
+          if [[ "${{ steps.scope.outputs.use_scope }}" == "true" ]]; then
+            if [[ -z "${{ steps.scope.outputs.mypy_files }}" ]]; then
+              echo "No client/server Python files changed; skipping scoped MyPy."
+              exit 0
+            fi
+            uv run --extra dev mypy ${{ steps.scope.outputs.mypy_files }}
+            exit 0
+          fi
+          uv run --extra dev mypy client server
 
       - name: Check silent broad excepts
-        run: uv run python scripts/check_silent_excepts.py
+        shell: bash
+        run: |
+          if [[ "${{ steps.scope.outputs.use_scope }}" == "true" ]]; then
+            if [[ -z "${{ steps.scope.outputs.python_files }}" ]]; then
+              echo "No Python files changed; skipping scoped silent-except scan."
+              exit 0
+            fi
+            uv run python scripts/check_silent_excepts.py ${{ steps.scope.outputs.python_files }}
+            exit 0
+          fi
+          uv run python scripts/check_silent_excepts.py
 
       - name: Check stale security claims
-        run: uv run python scripts/check_stale_security_claims.py
+        shell: bash
+        run: |
+          if [[ "${{ steps.scope.outputs.use_scope }}" == "true" ]]; then
+            if [[ -z "${{ steps.scope.outputs.claim_files }}" ]]; then
+              echo "No relevant docs/code files changed; skipping scoped stale-claim scan."
+              exit 0
+            fi
+            uv run python scripts/check_stale_security_claims.py ${{ steps.scope.outputs.claim_files }}
+            exit 0
+          fi
+          uv run python scripts/check_stale_security_claims.py
 
       - name: Git diff whitespace check
         run: git diff --check

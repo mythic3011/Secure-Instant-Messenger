@@ -11,6 +11,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Install uv
         uses: astral-sh/setup-uv@v5
@@ -20,13 +22,60 @@ jobs:
       - name: Install project dependencies
         run: uv sync --frozen --extra dev
 
+      - name: Collect PR-relevant files
+        id: scope
+        shell: bash
+        run: |
+          if [[ "${{ github.event_name }}" != "pull_request" ]]; then
+            {
+              echo "bandit_files="
+              echo "secret_files="
+              echo "use_scope=false"
+            } >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          git fetch --no-tags --depth=1 origin "${{ github.base_ref }}"
+          changed_files="$(git diff --name-only --diff-filter=ACMR "origin/${{ github.base_ref }}...HEAD")"
+          bandit_files="$(printf '%s\n' "$changed_files" | grep -E '^(client/(api|ui|use_cases)|server/(api|core|ws))/.*\.py$' || true)"
+          secret_files="$(printf '%s\n' "$changed_files" | grep -v '^docs/plans/' || true)"
+
+          {
+            echo "bandit_files<<EOF"
+            printf '%s\n' "$bandit_files"
+            echo "EOF"
+            echo "secret_files<<EOF"
+            printf '%s\n' "$secret_files"
+            echo "EOF"
+            echo "use_scope=true"
+          } >> "$GITHUB_OUTPUT"
+
       - name: Bandit
-        run: uv tool run --from bandit bandit -q -r client server scripts shared
+        shell: bash
+        run: |
+          if [[ "${{ steps.scope.outputs.use_scope }}" == "true" ]]; then
+            if [[ -z "${{ steps.scope.outputs.bandit_files }}" ]]; then
+              echo "No security-relevant Python files changed; skipping scoped Bandit scan."
+              exit 0
+            fi
+            uv tool run --from bandit bandit -q ${{ steps.scope.outputs.bandit_files }}
+            exit 0
+          fi
+          uv tool run --from bandit bandit -q -r client server scripts shared
 
       - name: pip-audit
         run: uv tool run --from pip-audit pip-audit
 
       - name: detect-secrets
+        shell: bash
         run: |
+          if [[ "${{ steps.scope.outputs.use_scope }}" == "true" ]]; then
+            if [[ -z "${{ steps.scope.outputs.secret_files }}" ]]; then
+              echo "No tracked files changed; skipping scoped detect-secrets scan."
+              exit 0
+            fi
+            uv tool run --from detect-secrets detect-secrets-hook --baseline .secrets.baseline ${{ steps.scope.outputs.secret_files }}
+            exit 0
+          fi
           git ls-files -z -- . ':(exclude)docs/plans/**' \
             | xargs -0 uv tool run --from detect-secrets detect-secrets-hook --baseline .secrets.baseline

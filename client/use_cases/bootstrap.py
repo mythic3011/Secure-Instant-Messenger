@@ -53,7 +53,7 @@ async def run_post_login_bootstrap(
         await context.init_store_fn(username)
         await context.sweep_expired_fn()
         sessions = context.load_sessions_fn(username, password)
-    except Exception:
+    except Exception:  # allow-silent-except - fail closed without leaking local storage internals
         return BootstrapFailed(message="Login failed: Local storage unavailable.")
 
     return BootstrapSucceeded(user_id=user_id, sessions=sessions)

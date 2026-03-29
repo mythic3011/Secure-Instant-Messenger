@@ -60,7 +60,10 @@ async def send_friend_request(
     recipient_id = recipient.id
 
     if recipient_id == sender_id:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Cannot add yourself")
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Cannot add yourself",
+        )
 
     # Check if blocked
     stmt = select(Block).where(Block.blocker_id == recipient_id, Block.blocked_id == sender_id)
@@ -88,7 +91,10 @@ async def send_friend_request(
             DBFriendRequestStatus.ACCEPTED,
             DBFriendRequestStatus.PENDING,
         ):
-            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Request already pending or accepted")
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Request already pending or accepted",
+            )
         # Re-send if previously declined/cancelled
         existing_request.status = DBFriendRequestStatus.PENDING
         await db.commit()
@@ -181,9 +187,15 @@ async def handle_request(
 
     action = body.action
     if action == "cancel" and req.sender_id != user_id:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only sender can cancel")
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only sender can cancel",
+        )
     if action in ("accept", "decline") and req.recipient_id != user_id:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only recipient can accept/decline")
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only recipient can accept/decline",
+        )
 
     status_map = {
         "accept": DBFriendRequestStatus.ACCEPTED,
@@ -248,7 +260,10 @@ async def block_user(
     user_id = session["user_id"]
 
     if peer_id == user_id:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Cannot block yourself")
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Cannot block yourself",
+        )
 
     # Insert block
     stmt = select(Block).where(Block.blocker_id == user_id, Block.blocked_id == peer_id)
