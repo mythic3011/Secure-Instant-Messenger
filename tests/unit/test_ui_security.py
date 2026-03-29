@@ -356,9 +356,11 @@ async def test_friends_pending_load_failure_is_shown(
     async def _raise_pending(*_args, **_kwargs):
         raise exc_factory()
 
-    app._client = _as_any(SimpleNamespace(
-        list_pending_requests=_raise_pending,
-    ))
+    app._client = _as_any(
+        SimpleNamespace(
+            list_pending_requests=_raise_pending,
+        )
+    )
 
     await app.on_friends_screen__load_pending(SimpleNamespace())
 
@@ -754,10 +756,12 @@ async def test_friend_accept_server_error_is_shown(monkeypatch: pytest.MonkeyPat
     async def _raise_handle(*_args, **_kwargs):
         raise _imclient_error(409, "Already handled")
 
-    app._client = _as_any(SimpleNamespace(
-        handle_friend_request=_raise_handle,
-        list_pending_requests=None,
-    ))
+    app._client = _as_any(
+        SimpleNamespace(
+            handle_friend_request=_raise_handle,
+            list_pending_requests=None,
+        )
+    )
 
     await app.on_friends_screen_accept_request(SimpleNamespace(request_id="req-1"))
 
@@ -791,10 +795,12 @@ async def test_friend_decline_network_error_is_shown(monkeypatch: pytest.MonkeyP
     async def _raise_handle(*_args, **_kwargs):
         raise httpx.ConnectError("offline")
 
-    app._client = _as_any(SimpleNamespace(
-        handle_friend_request=_raise_handle,
-        list_pending_requests=None,
-    ))
+    app._client = _as_any(
+        SimpleNamespace(
+            handle_friend_request=_raise_handle,
+            list_pending_requests=None,
+        )
+    )
 
     await app.on_friends_screen_decline_request(SimpleNamespace(request_id="req-1"))
 
@@ -846,9 +852,7 @@ async def test_login_blocks_transition_on_initial_websocket_failure(
     monkeypatch.setattr(app, "_show_conversations", _show_conversations)
 
     password = "Password123!"  # noqa: S105,S106
-    await app.on_login_screen_login_success(
-        LoginScreen.LoginSuccess("alice", password, "123456")
-    )
+    await app.on_login_screen_login_success(LoginScreen.LoginSuccess("alice", password, "123456"))
 
     assert login_screen.error.value == "Login failed: WebSocket authentication failed."
     assert showed_conversations is False

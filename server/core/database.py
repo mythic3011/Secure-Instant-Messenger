@@ -70,7 +70,7 @@ def ensure_sqlite_parent_dir(url: str) -> None:
     idx = url.find(marker)
     if idx == -1:
         return
-    db_path = url[idx + len(marker):]
+    db_path = url[idx + len(marker) :]
     if db_path in {":memory:", ""}:
         return
     target = Path(db_path)

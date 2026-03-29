@@ -41,6 +41,7 @@ log = structlog.get_logger()
 # R13 — Send friend request
 # ---------------------------------------------------------------------------
 
+
 @router.post("/request", response_model=FriendRequestOut, status_code=status.HTTP_201_CREATED)
 async def send_friend_request(
     body: FriendRequestCreate,
@@ -129,6 +130,7 @@ async def send_friend_request(
 # R14 — List pending requests
 # ---------------------------------------------------------------------------
 
+
 @router.get("/pending", response_model=list[FriendRequestOut])
 async def list_pending(
     session: dict = Depends(require_auth),
@@ -164,6 +166,7 @@ async def list_pending(
 # ---------------------------------------------------------------------------
 # R14 — Accept / decline / cancel
 # ---------------------------------------------------------------------------
+
 
 @router.put("/request/{request_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def handle_request(
@@ -230,6 +233,7 @@ async def handle_request(
 # R15 — Remove friend
 # ---------------------------------------------------------------------------
 
+
 @router.delete("/{peer_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def remove_friend(
     peer_id: str,
@@ -249,6 +253,7 @@ async def remove_friend(
 # ---------------------------------------------------------------------------
 # R15 — Block user
 # ---------------------------------------------------------------------------
+
 
 @router.post("/{peer_id}/block", status_code=status.HTTP_204_NO_CONTENT)
 async def block_user(

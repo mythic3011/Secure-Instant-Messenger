@@ -71,9 +71,7 @@ def test_key_bundle_signature_invalid():
     sig = make_key_signature(id_kp, dh_kp)
     # Tamper with signature
     bad_sig = bytes([sig[0] ^ 0xFF]) + sig[1:]
-    assert (
-        verify_key_bundle(id_kp.public_bytes(), dh_kp.public_bytes(), bad_sig) is False
-    )
+    assert verify_key_bundle(id_kp.public_bytes(), dh_kp.public_bytes(), bad_sig) is False
 
 
 def test_key_bundle_wrong_key():
@@ -247,9 +245,7 @@ def test_replay_protector_serialise_roundtrip():
 
 
 def test_build_and_decrypt_envelope():
-    alice_sk, bob_sk, conv_id, alice_send, alice_recv, bob_send, bob_recv = (
-        _make_session()
-    )
+    alice_sk, bob_sk, conv_id, alice_send, alice_recv, bob_send, bob_recv = _make_session()
     import time
 
     env = build_and_encrypt(
@@ -269,9 +265,7 @@ def test_build_and_decrypt_envelope():
 
 
 def test_decrypt_envelope_replay_rejected():
-    alice_sk, bob_sk, conv_id, alice_send, alice_recv, bob_send, bob_recv = (
-        _make_session()
-    )
+    alice_sk, bob_sk, conv_id, alice_send, alice_recv, bob_send, bob_recv = _make_session()
     import time
 
     env = build_and_encrypt(
@@ -300,9 +294,7 @@ def test_ratchet_each_message_different_key():
     """Each message must use a different key — forward secrecy."""
     import time
 
-    alice_sk, bob_sk, conv_id, alice_send, alice_recv, bob_send, bob_recv = (
-        _make_session()
-    )
+    alice_sk, bob_sk, conv_id, alice_send, alice_recv, bob_send, bob_recv = _make_session()
 
     envs = []
     for i in range(3):
@@ -333,9 +325,7 @@ def test_ratchet_out_of_order_within_window():
     """Out-of-order messages within MAX_SKIP must be decryptable."""
     import time
 
-    alice_sk, bob_sk, conv_id, alice_send, alice_recv, bob_send, bob_recv = (
-        _make_session()
-    )
+    alice_sk, bob_sk, conv_id, alice_send, alice_recv, bob_send, bob_recv = _make_session()
 
     # Alice sends 3 messages
     envs = []

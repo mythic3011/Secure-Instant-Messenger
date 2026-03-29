@@ -23,6 +23,7 @@ class ConfigError(RuntimeError):
     nicely.
     """
 
+
 log = structlog.get_logger()
 
 
@@ -88,9 +89,7 @@ class Settings(BaseSettings):
             generated = secrets.token_hex(32)
             log.warning("token_secret_key not set, generating temporary value")
             return generated
-        raise ConfigError(
-            f"token_secret_key must be supplied in production (app_env={env!r})"
-        )
+        raise ConfigError(f"token_secret_key must be supplied in production (app_env={env!r})")
 
     @field_validator("totp_encryption_key", mode="before")
     def ensure_totp_key(cls, v, info):
@@ -103,9 +102,7 @@ class Settings(BaseSettings):
             generated = secrets.token_hex(32)
             log.warning("totp_encryption_key not set, generating temporary value")
             return generated
-        raise ConfigError(
-            f"totp_encryption_key must be supplied in production (app_env={env!r})"
-        )
+        raise ConfigError(f"totp_encryption_key must be supplied in production (app_env={env!r})")
 
     # derived helper properties
     @property

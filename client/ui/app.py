@@ -148,6 +148,7 @@ MESSAGE_SEND_FAILED_BANNER = UIBanner(
     message="The message could not be sent.",
 )
 
+
 def _clean_validation_error_message(message: str) -> str:
     return message.removeprefix("Value error, ")
 
@@ -566,8 +567,7 @@ class IMApp(App):
 
     def _rehydrate_peer_usernames(self, conversations: list[dict[str, Any]]) -> None:
         self._peer_usernames = {
-            conversation["peer_id"]: conversation["peer_username"]
-            for conversation in conversations
+            conversation["peer_id"]: conversation["peer_username"] for conversation in conversations
         }
 
     # ------------------------------------------------------------------
