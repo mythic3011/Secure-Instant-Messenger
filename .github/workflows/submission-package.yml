@@ -16,7 +16,7 @@ jobs:
   build-submission:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Validate required repo files
         run: |
@@ -46,7 +46,7 @@ jobs:
           unzip -l submission/71.zip | grep '71/code/scripts/run-client.bat'
 
       - name: Upload submission zip
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: submission-71
           path: submission/71.zip

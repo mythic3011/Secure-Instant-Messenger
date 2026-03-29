@@ -34,13 +34,13 @@ jobs:
         os: [ubuntu-latest, windows-latest]
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
 
-      - uses: astral-sh/setup-uv@v5
+      - uses: astral-sh/setup-uv@v7
 
       - name: Install dependencies
         run: uv sync
@@ -147,7 +147,7 @@ jobs:
           test -f submission/71.zip
 
       - name: Upload logs and submission zip
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: submission-e2e-${{ matrix.os }}
           path: |
