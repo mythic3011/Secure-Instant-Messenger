@@ -222,6 +222,12 @@ async def test_full_e2e_message_flow(app_client: AsyncClient):
     assert resp.status_code == 201, resp.text
     msg_id = resp.json()["id"]
 
+    resp = await client.get("/v1/conversations", headers=_auth(alice_token))
+    assert resp.status_code == 200, resp.text
+    conversations = resp.json()["conversations"]
+    assert conversations[0]["id"] == conv_id
+    assert isinstance(conversations[0]["last_message_at"], int)
+
     # 9. Bob fetches messages
     resp = await client.get(
         f"/v1/messages?conversation_id={conv_id}",
