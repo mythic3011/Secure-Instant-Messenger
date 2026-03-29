@@ -148,6 +148,9 @@ MESSAGE_SEND_FAILED_BANNER = UIBanner(
     message="The message could not be sent.",
 )
 
+def _clean_validation_error_message(message: str) -> str:
+    return message.removeprefix("Value error, ")
+
 
 @runtime_checkable
 class FriendsScreenActions(Protocol):
@@ -609,6 +612,15 @@ class IMApp(App):
                 try:
                     self.screen.query_one("#error", Static).update(
                         f"Registration failed: {e.detail}"
+                    )
+                except Exception as exc:  # allow-silent-except
+                    log.warning("register_error_render_failed", err=str(exc))
+                return
+            except ValidationError as e:
+                try:
+                    self.screen.query_one("#error", Static).update(
+                        "Registration failed: "
+                        f"{_clean_validation_error_message(e.errors()[0]['msg'])}"
                     )
                 except Exception as exc:  # allow-silent-except
                     log.warning("register_error_render_failed", err=str(exc))
