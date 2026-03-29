@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd -- "${SCRIPT_DIR}/../.." && pwd)"
+
+if [[ ! -f "${REPO_ROOT}/pyproject.toml" ]]; then
+    printf 'error: repo root not found from %s\n' "${SCRIPT_DIR}" >&2
+    exit 1
+fi
+
+if ! command -v uv >/dev/null 2>&1; then
+    printf 'error: uv not found in PATH\n' >&2
+    printf 'hint: run: uv sync --extra dev\n' >&2
+    exit 1
+fi
+
+cd "${REPO_ROOT}"
+exec uv run --extra dev pre-commit run --hook-stage pre-commit
