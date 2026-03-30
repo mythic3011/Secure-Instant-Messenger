@@ -49,7 +49,8 @@ openssl req -x509 -newkey rsa:2048 ^
   -keyout certs\server.key ^
   -out certs\server.crt ^
   -days 365 -nodes ^
-  -subj "/C=HK/ST=HK/L=HongKong/O=LocalDev/OU=Dev/CN=localhost" >nul 2>nul
+  -subj "/C=HK/ST=HK/L=HongKong/O=LocalDev/OU=Dev/CN=localhost" ^
+  -addext "subjectAltName=DNS:localhost,DNS:*.orb.local,DNS:server.comp3334-project.orb.local,IP:127.0.0.1" >nul 2>nul
 if errorlevel 1 (
   echo [bootstrap-env] openssl certificate generation failed
   exit /b 1
