@@ -119,11 +119,12 @@ async def execute_send_message(
         return ServerFailure(message="The message could not be sent.")
 
     ttl = context.ttl_settings.get(conversation_id)
-    counter = context.counters.get(conversation_id, 0)
+    #counter = context.counters.get(conversation_id, 0)
     my_id = context.user_id or context.username
 
     try:
         session_state = await ensure_session_fn(context, conversation_id, peer_id)
+        counter = session_state.send_chain.index
     except IMClientError as exc:
         return ServerFailure(message=exc.detail)
     except (httpx.ConnectError, httpx.TimeoutException, httpx.NetworkError):
