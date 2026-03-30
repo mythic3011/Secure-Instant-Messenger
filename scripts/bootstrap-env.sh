@@ -134,6 +134,7 @@ if [[ $MODE == production || ! -f $CERT_FILE || ! -f $KEY_FILE ]]; then
             -keyout "$KEY_FILE" -out "$CERT_FILE" \
             -days 365 -nodes \
             -subj "/C=HK/ST=HK/L=HongKong/O=LocalDev/OU=Dev/CN=localhost" \
+            -addext "subjectAltName=DNS:localhost,DNS:*.orb.local,DNS:server.comp3334-project.orb.local,IP:127.0.0.1" \
             >/dev/null 2>&1
         chmod 600 "$KEY_FILE"
         echo "  TLS cert at $CERT_FILE"
