@@ -1,6 +1,68 @@
 # Deployment Guide — COMP3334 Secure IM
 
-Step-by-step guide to deploy and run the application from a clean **Windows 11** or **Ubuntu Linux** machine. No pre-installed software is assumed.
+This guide shows the recommended way to run the project on a clean machine.
+
+Use the Quick Start first.
+Only read the later sections if something fails.
+
+---
+
+## Quick Start (Recommended)
+
+Run from the project root.
+
+### 1. Install dependencies
+
+```bash
+uv sync
+```
+
+### 2. Generate local config and TLS files
+
+Linux / macOS / Git Bash:
+
+```bash
+chmod +x scripts/bootstrap-env.sh
+./scripts/bootstrap-env.sh
+```
+
+Windows CMD / PowerShell:
+
+```bat
+scripts\bootstrap-env.bat
+```
+
+### 3. Start the server
+
+```bash
+docker compose up --build
+```
+
+Server URL:
+
+```text
+https://localhost:8443
+```
+
+### 4. Start the client in a new terminal
+
+```bash
+uv run python -m client.main --server https://localhost:8443 --no-verify-tls
+```
+
+That is the current standard local/demo run path for this project.
+
+> **TLS note:** Local `--ca-cert` / `--pin-cert` flow is currently tracked as a
+> local-demo certificate issue. Until that is fixed, use `--no-verify-tls` only
+> for local testing and demo runs.
+
+### Standard path summary
+
+```text
+bootstrap -> docker compose -> client connects to https://localhost:8443
+```
+
+Do not mix Docker mode and ad-hoc direct server runs unless you are debugging.
 
 ---
 
@@ -97,7 +159,10 @@ If `uv sync` fails on a clean machine:
 
 ## 4. Configure Environment
 
-Run the bootstrap script — it copies `.env.example` to `.env.local`, **automatically generates cryptographically random secrets** for `TOKEN_SECRET_KEY` and `TOTP_ENCRYPTION_KEY`, and generates the local TLS certificate required by this project:
+Run the bootstrap script. It copies `.env.example` to `.env.local`,
+automatically generates cryptographically random secrets for
+`TOKEN_SECRET_KEY` and `TOTP_ENCRYPTION_KEY`, and generates local TLS files for
+demo use:
 
 **Ubuntu / macOS / Git Bash (Windows):**
 
@@ -118,10 +183,10 @@ scripts\bootstrap-env.bat
 
 ---
 
-## 5. Generate a Self-Signed TLS Certificate (Development)
+## 5. Generate a Self-Signed TLS Certificate (Manual Fallback)
 
 Bootstrap is the primary path.
-Use this manual step only if certificate auto-generation failed.
+Use this only if certificate auto-generation failed.
 
 ```bash
 mkdir -p certs
@@ -184,12 +249,17 @@ The authoritative schema path is the ORM model set created by
 
 ## 7. Run the Client
 
-Open a **new terminal** in the project directory:
+Open a **new terminal** in the project directory.
 
-> Note:
-> Course tutorial materials (for example `docs/Tutorial/Tutorial.pdf`) are not
-> the deployment baseline for this project. This project uses Python 3.12 +
-> `uv` for reproducible environments.
+For local testing and demo, the current reliable path is:
+
+```bash
+uv run python -m client.main --server https://localhost:8443 --no-verify-tls
+```
+
+Course tutorial materials (for example `docs/Tutorial/Tutorial.pdf`) are not
+the deployment baseline for this project. This project uses Python 3.12 +
+`uv` for reproducible environments.
 
 Linux / macOS / Git Bash:
 
@@ -207,7 +277,7 @@ scripts\run-client.bat
 Manual equivalent:
 
 ```bash
-uv run python -m client.main --server https://localhost:8443
+uv run python -m client.main --server https://localhost:8443 --no-verify-tls
 ```
 
 You will be prompted for your username if not provided via `--username`.
@@ -295,10 +365,34 @@ repository-enforced invariants.
 
 ## 10. Troubleshooting
 
+Check these in order.
+
+1. Is Docker running?
+
+```bash
+docker compose ps
+```
+
+2. Is the server up?
+
+```bash
+docker compose logs --tail=100
+```
+
+3. Did bootstrap complete?
+
+Confirm these files exist:
+
+- `.env.local`
+- `certs/server.crt`
+- `certs/server.key`
+
+### Common Problems
+
 | Problem                               | Solution                                                                                                                   |
 | ------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
 | Port 8443 already in use              | Change `PORT=8443` in `.env.local` to another port, e.g. `8444`                                                            |
-| TLS certificate errors in client      | Expected for self-signed certs — prefer `--ca-cert <path>` to trust the dev cert. Use `--no-verify-tls` only as a local development exception. |
+| TLS certificate errors in client      | For current local/demo runs, use `--no-verify-tls`. `--ca-cert` / `--pin-cert` local trust flow is tracked separately in issue `#16`. |
 | TOTP code rejected                    | Ensure your system clock is accurate. Ubuntu: `timedatectl set-ntp true`. Windows: Settings -> Time & Language -> Sync now |
 | Docker permission denied (Linux)      | Run `sudo usermod -aG docker $USER` then log out and back in                                                               |
 | `uv: command not found`               | Restart terminal after installing `uv`, or use `pip install -e .` instead                                                  |
@@ -326,3 +420,16 @@ repository-enforced invariants.
 | `~/.comp3334im/<username>/sessions.json` | Encrypted session state (client)                         |
 | `~/.comp3334im/<username>/messages.db`   | Local message history (client)                           |
 | `/app/data/im.db` (Docker)               | Server SQLite database                                   |
+
+---
+
+## Support Rule
+
+If someone says "it does not work", ask for these exact outputs first:
+
+```bash
+docker compose ps
+docker compose logs --tail=100
+```
+
+Without those two outputs, there is not enough signal to debug the run path.
