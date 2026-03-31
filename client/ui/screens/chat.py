@@ -7,6 +7,7 @@ Covers: R5 (fingerprint), R10/R11 (TTL display + deletion), R17 (delivery status
 from __future__ import annotations
 
 import time
+import datetime
 from typing import TYPE_CHECKING, Any, cast
 
 from textual.app import ComposeResult
@@ -42,27 +43,18 @@ class MessageItem(ListItem):
         self._status = status
         self._ttl = ttl_seconds
         self._is_mine = is_mine
-        # Pre-compute expiry so _sweep_ttl() can compare without re-parsing
         self._expires_at: int | None = (sent_at + ttl_seconds) if ttl_seconds else None
 
     def on_mount(self) -> None:
         self.add_class("mine" if self._is_mine else "theirs")
 
     def compose(self) -> ComposeResult:
-        import datetime
-
         ts = datetime.datetime.fromtimestamp(self._sent_at).strftime("%H:%M")
-        # READ status is reserved for future UX/protocol extension and not currently implemented.
-        # For now, treat "read" identically to "delivered" in the UI.
         status_icon = {"sent": "✓", "delivered": "✓✓", "read": "✓✓"}.get(self._status, "")
 
-        # Show live countdown instead of raw TTL seconds (R10)
         if self._expires_at is not None:
             remaining = self._expires_at - int(time.time())
-            if remaining <= 0:
-                ttl_tag = "TTL expired"
-            else:
-                ttl_tag = f"TTL {remaining}s"
+            ttl_tag = f"TTL {max(0, remaining)}s" if remaining > 0 else "TTL expired"
         else:
             ttl_tag = "TTL off"
 
@@ -108,7 +100,6 @@ class ChatScreen(Screen):
         color: __ERROR__;
         border: tall __ERROR__;
     }
-    #btn_back:hover { background: #1a0000; }
     #header {
         height: 3;
         background: __SURFACE__;
@@ -120,38 +111,75 @@ class ChatScreen(Screen):
     }
     #messages {
         height: 1fr;
-        border: solid #1a1a3e;
+        border: none;
         background: __APP_BACKGROUND__;
-        padding: 0 1;
+        padding: 1 2;
     }
-    /* theirs — left aligned, white */
+
+    /* Base Bubble Styling */
+    #messages > ListItem {
+        background: transparent;
+        border: none;
+        padding: 0;
+        margin: 0;
+        height: auto;
+    }
+
+    #messages > ListItem Vertical {
+        padding: 0 1;
+        margin: 1 0;
+        height: auto;
+        /* Replaced border-radius with border: round for Textual compatibility */
+        border: round gray 0%; 
+        max-width: 85%;
+    }
+
+    /* Their Messages (Left Aligned) */
     #messages > ListItem.theirs {
-        color: #c0c0e0;
-        background: #0d0d1a;
+        align-horizontal: left;
+    }
+    #messages > ListItem.theirs Vertical {
+        background: #202c33;
         border-left: thick #444466;
-        margin: 0 8 0 0;
-        padding: 0 1;
+        color: #e9edef;
+        margin-right: 4;
     }
-    /* mine — right aligned, cyan */
+
+    /* Your Messages (Right Aligned) */
     #messages > ListItem.mine {
-        color: #00ff9f;
-        background: #001a10;
-        border-right: thick #00ff9f;
-        margin: 0 0 0 8;
-        padding: 0 1;
-        text-align: right;
+        align-horizontal: right;
     }
+    #messages > ListItem.mine Vertical {
+        background: #005c4b;
+        border-right: thick #00ff9f;
+        color: #e9edef;
+        margin-left: 4;
+        content-align: right middle;
+    }
+
     .message_sender {
         color: #9aa0c8;
         text-style: bold;
+        margin-bottom: 0;
     }
     .message_body {
-        color: #f4f7ff;
+        color: #ffffff;
         text-style: bold;
+        padding: 0 1;
     }
     .message_meta {
-        color: #7d86ad;
+        color: #aebac1;
+        /* Using opacity instead of font-size */
+        opacity: 0.7;
     }
+
+    ListItem.mine .message_body, ListItem.mine .message_meta {
+        text-align: right;
+    }
+    ListItem.theirs .message_body, ListItem.theirs .message_meta {
+        text-align: left;
+    }
+
     #warning {
         margin: 0 0 1 0;
     }
@@ -161,13 +189,7 @@ class ChatScreen(Screen):
         border: dashed #334155;
         margin: 1 6;
         padding: 1 2;
-    }
-    .placeholder_title {
-        color: #e2e8f0;
-        text-style: bold;
-    }
-    .placeholder_detail {
-        color: #94a3b8;
+        align-horizontal: center;
     }
     #input_row {
         height: 3;
@@ -254,7 +276,6 @@ class ChatScreen(Screen):
     def on_mount(self) -> None:
         self.title = f"Chat — {self.peer_username}"
         self.app.call_later(self._request_history)
-        # R11: sweep expired messages every 30 s while chat is open
         self._ttl_timer = self.set_interval(30, self._sweep_ttl)
 
     async def _request_history(self) -> None:
@@ -301,22 +322,12 @@ class ChatScreen(Screen):
             self.query_one("#msg_input", Input).value = ""
 
     async def _sweep_ttl(self) -> None:
-        """
-        R11: Remove expired TTL messages from the UI and local storage.
-        Called every 30 s by the interval timer set in on_mount().
-        Also called on startup via app.py sweep_expired() (local DB layer).
-        """
         from client.state.store import sweep_expired
-
-        # Purge expired rows from local SQLite first
         await sweep_expired()
-
-        # Remove expired MessageItems from the visible ListView
         now = int(time.time())
         lv = self.query_one("#messages", ListView)
         expired = [
-            item
-            for item in lv.children
+            item for item in lv.children
             if isinstance(item, MessageItem)
             and item._expires_at is not None
             and item._expires_at <= now
@@ -325,7 +336,6 @@ class ChatScreen(Screen):
             await item.remove()
 
     def show_key_warning(self, peer_username: str) -> None:
-        """Display key change warning (R6)."""
         self.set_banner(
             UIBanner(
                 code="key_changed",
@@ -362,7 +372,6 @@ class ChatScreen(Screen):
             self._send()
         elif event.button.id == "btn_settings":
             from client.ui.screens.settings import SettingsScreen
-
             self.app.push_screen(
                 SettingsScreen(
                     conversation_id=self.conversation_id,
@@ -388,6 +397,4 @@ class ChatScreen(Screen):
         text = inp.value.strip()
         if not text:
             return
-        # TTL is managed by app._ttl_settings; pass None here,
-        # app.on_chat_screen_send_message reads it from its own state.
         self.post_message(self.SendMessage(text, ttl=None))
