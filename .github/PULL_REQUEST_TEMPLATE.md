@@ -8,8 +8,36 @@
 - why this PR exists
 - what problem it solves
 
+## Change / Contract Impact
+
+- [ ] no behavior change
+- [ ] changes app behavior / expected flow
+- [ ] changes implementation or use-case contract
+- [ ] changes source of truth
+
+If any box other than "no behavior change" applies, explain:
+
+```text
+What changed?
+What is now the source of truth?
+What old assumption / contract is no longer valid?
+```
+
+## Scope
+
+- [ ] single bug / single scope
+- [ ] stacked / dependent on another issue or PR
+
+If this PR is tied to a bug report, confirm:
+
+- [ ] issue scope is clean and matches this implementation
+- [ ] no mixed root causes remain in the issue body
+- [ ] outdated speculation / analysis has been removed
+
 ## Verification
 
+- [ ] related tests were updated if behavior / contract changed
+- [ ] all related tests pass
 - [ ] `uv run --extra dev pytest tests/unit -q`
 - [ ] `git diff --check`
 
@@ -18,6 +46,17 @@ List any additional commands actually run:
 ```text
 <command output summary>
 ```
+
+## Merge Readiness
+
+- [ ] ready to merge
+- [ ] not merge-ready yet
+
+A PR is not merge-ready if:
+
+- app behavior / contract changed but related tests were not updated
+- source of truth changed but was not made explicit
+- CI is still failing
 
 ## Workflow / Protection Impact
 
