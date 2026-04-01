@@ -270,7 +270,6 @@ dev = [
     { name = "httpx" },
     { name = "mypy" },
     { name = "pre-commit" },
-    { name = "pyright" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
     { name = "pytest-cov" },

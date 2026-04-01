@@ -1,9 +1,10 @@
-name: Auto Label
+name: PR Auto Label
 
 on:
   pull_request_target:
     types:
       - opened
+      - edited
       - synchronize
       - reopened
       - ready_for_review
@@ -13,10 +14,10 @@ permissions:
   pull-requests: write
 
 jobs:
-  label:
+  pr-labels:
     runs-on: ubuntu-latest
     steps:
-      - name: Apply path labels
+      - name: Apply PR path labels
         uses: actions/labeler@v5
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}

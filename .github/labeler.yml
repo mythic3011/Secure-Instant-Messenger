@@ -13,6 +13,14 @@ server:
       - any-glob-to-any-file:
           - "server/**"
 
+mixed-scope:
+  - all:
+      - changed-files:
+          - any-glob-to-any-file:
+              - "client/**"
+      - changed-files:
+          - any-glob-to-any-file:
+              - "server/**"
 security:
   - changed-files:
       - any-glob-to-any-file:
@@ -27,11 +35,10 @@ docs:
           - "docs/**"
           - "README.md"
 
-tests:
+testing:
   - changed-files:
       - any-glob-to-any-file:
           - "tests/**"
-
 ci:
   - changed-files:
       - any-glob-to-any-file:
@@ -40,4 +47,3 @@ ci:
           - "scripts/check_stale_security_claims.py"
           - ".pre-commit-config.yaml"
           - ".gitattributes"
-
