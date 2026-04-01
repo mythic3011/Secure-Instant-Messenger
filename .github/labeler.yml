@@ -14,11 +14,13 @@ server:
           - "server/**"
 
 mixed-scope:
-  - changed-files:
-      - any-glob-to-any-file:
-          - "client/**"
-      - any-glob-to-any-file:
-          - "server/**"
+  - all:
+      - changed-files:
+          - any-glob-to-any-file:
+              - "client/**"
+      - changed-files:
+          - any-glob-to-any-file:
+              - "server/**"
 security:
   - changed-files:
       - any-glob-to-any-file:
@@ -32,11 +34,6 @@ docs:
       - any-glob-to-any-file:
           - "docs/**"
           - "README.md"
-
-tests:
-  - changed-files:
-      - any-glob-to-any-file:
-          - "tests/**"
 
 testing:
   - changed-files:

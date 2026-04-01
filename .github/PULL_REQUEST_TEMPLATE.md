@@ -36,9 +36,9 @@ If this PR is tied to a bug report, confirm:
 
 ## Verification
 
-- [ ] related tests were updated if behavior / contract changed
+- [ ] related tests were updated or added if behavior / contract changed
 - [ ] all related tests pass
-- [ ] `uv run --extra dev pytest tests/unit -q`
+- [ ] test commands actually run are listed below
 - [ ] `git diff --check`
 
 List any additional commands actually run:
