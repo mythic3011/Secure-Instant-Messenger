@@ -13,6 +13,13 @@ server:
       - any-glob-to-any-file:
           - "server/**"
 
+mixed-scope:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "client/**"
+      - any-glob-to-any-file:
+          - "server/**"
+
 security:
   - changed-files:
       - any-glob-to-any-file:
@@ -28,6 +35,11 @@ docs:
           - "README.md"
 
 tests:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "tests/**"
+
+testing:
   - changed-files:
       - any-glob-to-any-file:
           - "tests/**"
