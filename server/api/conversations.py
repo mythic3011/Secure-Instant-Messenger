@@ -5,9 +5,11 @@ Covers: R23, R24
 
 from __future__ import annotations
 
+from datetime import datetime
+
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import case, select, update, or_
+from sqlalchemy import case, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
@@ -18,6 +20,14 @@ from shared.protocol import ConversationListResponse, ConversationOut
 
 router = APIRouter(prefix="/v1/conversations", tags=["conversations"])
 log = structlog.get_logger()
+
+
+def _conversation_timestamp(value: datetime | int | None) -> int | None:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return int(value.timestamp())
+    return int(value)
 
 
 @router.get("", response_model=ConversationListResponse)
@@ -71,7 +81,7 @@ async def list_conversations(
                 id=conv.id,
                 peer_id=peer_id,
                 peer_username=peer_username,
-                last_message_at=conv.last_message_at,
+                last_message_at=_conversation_timestamp(conv.last_message_at),
                 unread_count=unread_count,
             )
             for conv, peer_username, peer_id, unread_count in rows
@@ -96,8 +106,16 @@ async def mark_read(
     conv = result.scalar_one_or_none()
 
     if conv is None:
-        log.debug("mark_read_skipped", conversation_id=conversation_id, user_id=user_id, reason="not_found_or_not_participant")
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not part of this conversation")
+        log.debug(
+            "mark_read_skipped",
+            conversation_id=conversation_id,
+            user_id=user_id,
+            reason="not_found_or_not_participant",
+        )
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Not part of this conversation",
+        )
 
     if conv.user_a_id == user_id:
         conv.unread_count_a = 0

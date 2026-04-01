@@ -30,7 +30,7 @@ class PublicKey(Base):
     )
 
     # Relationships
-    user: Mapped["User"] = relationship("User", back_populates="public_keys")
+    user: Mapped[User] = relationship("User", back_populates="public_keys")
 
     def __repr__(self) -> str:
         return f"<PublicKey(user_id={self.user_id!r})>"

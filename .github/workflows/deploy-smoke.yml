@@ -1,0 +1,54 @@
+name: Deploy Smoke
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    tags:
+      - "v*"
+
+jobs:
+  docker-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Bootstrap env
+        run: |
+          chmod +x scripts/bootstrap-env.sh
+          ./scripts/bootstrap-env.sh
+
+      - name: Build and start server
+        run: docker compose up --build -d
+
+      - name: Wait for health check
+        run: |
+          for i in $(seq 1 24); do
+            CID=$(docker compose ps -q server)
+            STATUS=$(docker inspect --format json "$CID" 2>/dev/null \
+              | python3 -c "import sys,json; d=json.load(sys.stdin); print(d[0]['State']['Health']['Status'])" \
+              2>/dev/null || echo "starting")
+            echo "Attempt $i: $STATUS"
+            if [ "$STATUS" = "healthy" ]; then
+              echo "Server is healthy"
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "Server did not become healthy in time"
+          docker compose logs server
+          exit 1
+
+      - name: Smoke test /health endpoint
+        run: |
+          RESP=$(curl -k -sf https://localhost:8443/health)
+          echo "Response: $RESP"
+          echo "$RESP" | python3 -c "import sys,json; d=json.load(sys.stdin); assert d.get('status')=='ok', d; print('OK')"
+
+      - name: Show server logs on failure
+        if: failure()
+        run: docker compose logs server
+
+      - name: Teardown
+        if: always()
+        run: docker compose down -v

@@ -65,13 +65,13 @@ def set_storage_key(key: bytes | None) -> None:
 
 
 def _aad(conversation_id: str, message_id: str) -> bytes:
-    return f"{conversation_id}:{message_id}".encode("utf-8")
+    return f"{conversation_id}:{message_id}".encode()
 
 
 def _require_storage_key() -> bytes:
     try:
         return get_storage_key()
-    except LocalStorageSecurityError as exc:
+    except LocalStorageSecurityError:
         log.error("storage key unavailable for local message encryption")
         raise
 

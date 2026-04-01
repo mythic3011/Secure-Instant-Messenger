@@ -8,64 +8,85 @@ on:
 
 jobs:
   test:
-    name: Unit & Integration Tests
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@v7
         with:
           version: "0.5.21"
 
       - name: Install dependencies
-        run: uv sync --extra dev
+        run: uv sync --frozen --extra dev
 
       - name: Run tests
-        run: uv run --extra dev pytest -v --tb=short
+        run: uv run --extra dev pytest tests/unit tests/security tests/integration -v --tb=short
 
-  docker-build:
-    name: Docker Build & Health Check
+  ruff_review:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - name: Bootstrap env
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          version: "0.5.21"
+
+      - name: Install dependencies
+        run: uv sync --frozen --extra dev
+
+      - name: Generate Ruff review report
+        continue-on-error: true
         run: |
-          chmod +x scripts/bootstrap-env.sh
-          ./scripts/bootstrap-env.sh
+          mkdir -p reports
+          UV_CACHE_DIR=$PWD/.uv-cache uv run python scripts/review_ruff.py --json --output reports/ruff-review.json
 
-      - name: Build and start server
-        run: docker compose up --build -d
-
-      - name: Wait for health check
-        run: |
-          for i in $(seq 1 24); do
-            CID=$(docker compose ps -q server)
-            STATUS=$(docker inspect --format json "$CID" 2>/dev/null \
-              | python3 -c "import sys,json; d=json.load(sys.stdin); print(d[0]['State']['Health']['Status'])" \
-              2>/dev/null || echo "starting")
-            echo "Attempt $i: $STATUS"
-            if [ "$STATUS" = "healthy" ]; then
-              echo "Server is healthy"
-              exit 0
-            fi
-            sleep 5
-          done
-          echo "Server did not become healthy in time"
-          docker compose logs server
-          exit 1
-
-      - name: Smoke test /health endpoint
-        run: |
-          RESP=$(curl -k -sf https://localhost:8443/health)
-          echo "Response: $RESP"
-          echo "$RESP" | python3 -c "import sys,json; d=json.load(sys.stdin); assert d.get('status')=='ok', d; print('OK')"
-
-      - name: Show server logs on failure
-        if: failure()
-        run: docker compose logs server
-
-      - name: Teardown
+      - name: Upload Ruff review artifact
         if: always()
-        run: docker compose down -v
+        uses: actions/upload-artifact@v6
+        with:
+          name: ruff-review
+          path: reports/ruff-review.json
+          if-no-files-found: error
+
+      - name: Write Ruff review summary
+        if: always()
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          report_path = Path("reports/ruff-review.json")
+          summary_path = Path(os.environ["GITHUB_STEP_SUMMARY"])
+
+          if not report_path.exists():
+              summary_path.write_text(
+                  "## Ruff review summary\n\n- report: missing\n",
+                  encoding="utf-8",
+              )
+              raise SystemExit(0)
+
+          report = json.loads(report_path.read_text(encoding="utf-8"))
+          lines = [
+              "## Ruff review summary",
+              "",
+              f"- ruff check: {report['ruff_check']}",
+              f"- ruff format --check: {report['ruff_format_check']}",
+              f"- format-first files: {len(report['format_first_files'])}",
+              f"- lint-only files: {len(report['lint_only_files'])}",
+              "- top recurring rule IDs:",
+          ]
+
+          top_rules = report["top_recurring_rule_ids"][:3]
+          if top_rules:
+              lines.extend(
+                  f"  - {item['rule_id']}: {item['count']}"
+                  for item in top_rules
+              )
+          else:
+              lines.append("  - none")
+
+          summary_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+          PY

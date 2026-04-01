@@ -2,7 +2,7 @@
 
 End-to-end encrypted instant messaging application built for COMP3334. Demonstrates strong cryptographic practices, replay protection, and an honest-but-curious server model.
 
-**Team:** 5 people | **Deadline:** April 8, 2026 07:50 | **Tests:** 53/53 passing ✅
+**Team:** 5 people | **Deadline:** April 8, 2026 07:50
 
 ## Security
 
@@ -44,37 +44,66 @@ All 19 identified security vulnerabilities have been fixed. See [`docs/SECURITY_
 └── docker-compose.yml
 ```
 
-## Getting started
+## Quick start
 
-1. **Install dependencies** (requires [uv](https://docs.astral.sh/uv/)):
+Choose one setup path only. For teammates and graders, use the standard path
+below first and only read later sections if something fails.
+
+### Standard run path
+
+1. **Install dependencies**:
 
    ```bash
    uv sync
    ```
 
-2. **Start the server:**
+2. **Generate local config and demo TLS files**:
+
+   Linux / macOS / Git Bash:
 
    ```bash
-   uv run python -m server.main
+   chmod +x scripts/bootstrap-env.sh
+   ./scripts/bootstrap-env.sh
    ```
 
-   The server auto-detects the environment and creates `./data/` automatically.
-   In development mode, secrets are auto-generated (logged as warnings).
-   TLS certs are optional locally — the server falls back to HTTP if missing.
+   Windows CMD / PowerShell:
 
-3. **(Optional) Generate TLS certs and customise config:**
+   ```bat
+   scripts\bootstrap-env.bat
+   ```
+
+3. **Start the server**:
 
    ```bash
-   bash scripts/bootstrap-env.sh dev
+   docker compose up --build
    ```
 
-4. **Launch the client** (in a separate terminal):
+   The standard server URL is:
+
+   ```text
+   https://localhost:8443
+   ```
+
+4. **Start the client in a new terminal**:
 
    ```bash
-   uv run python -m client.main --server https://localhost:8443
+   uv run python -m client.main --server https://localhost:8443 --no-verify-tls
    ```
 
-   The client stores identity keys in `~/.comp3334im/<username>/`.
+   This is the current reliable local/demo path. Local certificate trust via
+   `--ca-cert` is tracked separately in issue `#16`.
+
+Do not mix Docker mode and ad-hoc direct local server runs in the same session
+unless you are explicitly debugging config or database paths.
+
+### What this project expects
+
+- Python 3.12
+- `uv`
+- Docker with Compose support
+- Local bootstrap via `scripts/bootstrap-env.*`
+
+The client stores identity keys in `~/.comp3334im/<username>/`.
 
 ## Testing
 
@@ -92,17 +121,29 @@ uv run --extra dev pytest tests/security/ -v
 uv run --extra dev pytest tests/integration/ -v
 ```
 
-## Docker
+Avoid hard-coding a test total in submission docs. Use fresh `pytest` output as
+the evidence source because the suite evolves during fixes/refactors.
+
+## Alternative run paths
+
+### Docker mode
+
+Docker Compose starts the **server only**. The client still runs from the host
+terminal.
 
 ```bash
-# Start server
 docker compose up --build
-
-# Start client (separate terminal) — use --no-verify-tls since the container auto-generates a self-signed cert
 uv run python -m client.main --server https://localhost:8443 --no-verify-tls
 ```
 
-> **Note:** The client defaults to HTTP in `main.py`. Always pass `--server https://localhost:8443` when connecting to the Docker server. Without `--no-verify-tls`, you'll get a `ConnectionError` because the container's self-signed cert isn't trusted by the host.
+### Direct server run (debug only)
+
+```bash
+uv run python -m server.main
+uv run python -m client.main --server https://localhost:8443 --no-verify-tls
+```
+
+This is not the primary grading/demo path.
 
 ## Architecture & Protocol
 
@@ -118,11 +159,12 @@ See `docs/DEPLOY.md` for step-by-step instructions for Windows 11 and Ubuntu.
 
 ## Troubleshooting
 
-| Problem                                               | Fix                                                                                                                                                                |
-| ----------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `PermissionError: '/app/data'`                        | Stale `.env.local` with container path. Delete it or remove the `DATABASE_URL` line and restart.                                                                   |
-| TLS cert not found                                    | Run `bash scripts/bootstrap-env.sh dev`, or ignore — server falls back to HTTP in dev mode.                                                                        |
-| `ConnectionError` / "Cannot reach server" with Docker | The container auto-generates a self-signed cert the host doesn't trust. Use `--no-verify-tls` and make sure you pass `--server https://localhost:8443` (not HTTP). |
+| Problem                                               | Fix                                                                                                                                           |
+| ----------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| `PermissionError: '/app/data'`                        | Stale `.env.local` with container path. Delete it or remove the `DATABASE_URL` line and restart.                                            |
+| TLS cert files missing                                | Run `bash scripts/bootstrap-env.sh` or `scripts\bootstrap-env.bat`, then restart the server.                                                 |
+| `ConnectionError` / "Cannot reach server" with Docker | Confirm Docker is running, then use `https://localhost:8443`. For local/demo use, the current reliable client path is `--no-verify-tls`.    |
+| `--ca-cert` or `--pin-cert` still fails locally       | Known local/demo cert issue: bootstrap-generated cert trust is tracked in issue `#16`. Use `--no-verify-tls` only as the current workaround. |
 
 **Data directory contract:**
 

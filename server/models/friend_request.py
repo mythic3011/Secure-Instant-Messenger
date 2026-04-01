@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
-from datetime import datetime
 from enum import Enum as PyEnum
 from typing import TYPE_CHECKING
 
-from sqlalchemy import DateTime, Enum, ForeignKey, String, UniqueConstraint, func
+from sqlalchemy import Enum, ForeignKey, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from server.models.base import Base, TimestampMixin
@@ -44,10 +43,10 @@ class FriendRequest(Base, TimestampMixin):
     )
 
     # Relationships
-    sender: Mapped["User"] = relationship(
+    sender: Mapped[User] = relationship(
         "User", foreign_keys=[sender_id], back_populates="sent_friend_requests"
     )
-    recipient: Mapped["User"] = relationship(
+    recipient: Mapped[User] = relationship(
         "User", foreign_keys=[recipient_id], back_populates="received_friend_requests"
     )
 

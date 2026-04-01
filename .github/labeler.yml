@@ -19,7 +19,6 @@ mixed-scope:
           - "client/**"
       - any-glob-to-any-file:
           - "server/**"
-
 security:
   - changed-files:
       - any-glob-to-any-file:
@@ -43,7 +42,6 @@ testing:
   - changed-files:
       - any-glob-to-any-file:
           - "tests/**"
-
 ci:
   - changed-files:
       - any-glob-to-any-file:

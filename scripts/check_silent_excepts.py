@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import argparse
 import ast
 from pathlib import Path
 
@@ -78,7 +79,25 @@ class SilentExceptVisitor(ast.NodeVisitor):
         return isinstance(func, ast.Attribute) and func.attr in LOG_METHODS
 
 
-def iter_py_files() -> list[Path]:
+def _in_scope(path: Path) -> bool:
+    return bool(path.parts) and path.parts[0] in ROOTS
+
+
+def iter_py_files(selected_paths: list[str] | None = None) -> list[Path]:
+    if selected_paths is not None:
+        files: list[Path] = []
+        for raw_path in selected_paths:
+            path = Path(raw_path)
+            if (
+                path.exists()
+                and path.suffix == ".py"
+                and _in_scope(path)
+                and ".venv" not in path.parts
+                and "__pycache__" not in path.parts
+            ):
+                files.append(path)
+        return sorted(set(files))
+
     files: list[Path] = []
     for root in ROOTS:
         base = Path(root)
@@ -110,8 +129,13 @@ def scan_file(path: Path) -> list[str]:
 
 
 def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("paths", nargs="*")
+    args = parser.parse_args()
+
     issues: list[str] = []
-    for path in iter_py_files():
+    selected_paths = args.paths or None
+    for path in iter_py_files(selected_paths):
         issues.extend(scan_file(path))
 
     if issues:

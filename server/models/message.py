@@ -43,8 +43,8 @@ class Message(Base):
     expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
     # Relationships
-    sender: Mapped["User"] = relationship("User", foreign_keys=[sender_id])
-    recipient: Mapped["User"] = relationship("User", foreign_keys=[recipient_id])
+    sender: Mapped[User] = relationship("User", foreign_keys=[sender_id])
+    recipient: Mapped[User] = relationship("User", foreign_keys=[recipient_id])
 
     def __repr__(self) -> str:
         return f"<Message(id={self.id!r}, conversation={self.conversation_id!r})>"

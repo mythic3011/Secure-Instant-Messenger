@@ -1,0 +1,155 @@
+name: Submission E2E
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - ".github/workflows/submission-e2e.yml"
+      - ".github/workflows/submission-package.yml"
+      - "docs/DEPLOY.md"
+      - "scripts/bootstrap-env.sh"
+      - "scripts/bootstrap-env.bat"
+      - "scripts/bootstrap_env.py"
+      - "scripts/run-server.sh"
+      - "scripts/run-server.bat"
+      - "scripts/run-client.sh"
+      - "scripts/run-client.bat"
+      - "scripts/build_submission_zip.sh"
+      - "client/**"
+      - "server/**"
+      - "shared/**"
+      - "pyproject.toml"
+      - "uv.lock"
+      - "docker-compose.yml"
+      - "Dockerfile.server"
+      - ".env.example"
+
+jobs:
+  submission-e2e:
+    name: submission-e2e (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - uses: astral-sh/setup-uv@v7
+
+      - name: Install dependencies
+        run: uv sync
+
+      - name: Bootstrap environment (Ubuntu)
+        if: runner.os == 'Linux'
+        run: ./scripts/bootstrap-env.sh
+
+      - name: Bootstrap environment (Windows)
+        if: runner.os == 'Windows'
+        shell: cmd
+        run: scripts\bootstrap-env.bat
+
+      - name: Validate generated files (Ubuntu)
+        if: runner.os == 'Linux'
+        run: |
+          test -f .env.local
+          test -f certs/server.crt
+          test -f certs/server.key
+
+      - name: Validate generated files (Windows)
+        if: runner.os == 'Windows'
+        shell: cmd
+        run: |
+          if not exist .env.local exit /b 1
+          if not exist certs\server.crt exit /b 1
+          if not exist certs\server.key exit /b 1
+
+      - name: Helper self-check (Ubuntu)
+        if: runner.os == 'Linux'
+        run: |
+          ./scripts/run-server.sh --check
+          ./scripts/run-client.sh --check
+
+      - name: Helper self-check (Windows)
+        if: runner.os == 'Windows'
+        shell: cmd
+        run: |
+          scripts\run-server.bat --check
+          scripts\run-client.bat --check
+
+      - name: Start server and probe health (Ubuntu)
+        if: runner.os == 'Linux'
+        run: |
+          mkdir -p .ci-logs
+          ./scripts/run-server.sh > .ci-logs/server.log 2>&1 &
+          echo $! > .ci-logs/server.pid
+          for _ in 1 2 3 4 5 6 7 8 9 10; do
+            if curl -kfsS https://127.0.0.1:8443/health > .ci-logs/health.json; then
+              exit 0
+            fi
+            sleep 2
+          done
+          cat .ci-logs/server.log
+          exit 1
+
+      - name: Stop server (Ubuntu)
+        if: runner.os == 'Linux'
+        run: |
+          if [[ -f .ci-logs/server.pid ]]; then
+            kill "$(cat .ci-logs/server.pid)" || true
+          fi
+
+      - name: Start server and probe health (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path .ci-logs | Out-Null
+          $proc = Start-Process -FilePath "cmd.exe" -ArgumentList "/c scripts\run-server.bat" -PassThru -RedirectStandardOutput ".ci-logs/server.log" -RedirectStandardError ".ci-logs/server.err"
+          $proc.Id | Out-File -FilePath .ci-logs/server.pid -Encoding ascii
+          for ($i = 0; $i -lt 10; $i++) {
+            try {
+              $resp = Invoke-WebRequest -Uri "https://127.0.0.1:8443/health" -SkipCertificateCheck -UseBasicParsing
+              $resp.Content | Out-File -FilePath .ci-logs/health.json -Encoding utf8
+              exit 0
+            } catch {
+              Start-Sleep -Seconds 2
+            }
+          }
+          Get-Content .ci-logs/server.log
+          Get-Content .ci-logs/server.err
+          exit 1
+
+      - name: Stop server (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          if (Test-Path .ci-logs/server.pid) {
+            $serverPid = Get-Content .ci-logs/server.pid
+            Stop-Process -Id $serverPid -Force -ErrorAction SilentlyContinue
+          }
+
+      - name: Create placeholder report and video
+        shell: bash
+        run: |
+          mkdir -p .ci-artifacts
+          printf 'submission smoke report\n' > .ci-artifacts/report.pdf
+          printf 'submission smoke video\n' > .ci-artifacts/video.mp4
+
+      - name: Build submission zip
+        shell: bash
+        run: |
+          bash scripts/build_submission_zip.sh 71 .ci-artifacts/report.pdf .ci-artifacts/video.mp4
+          test -f submission/71.zip
+
+      - name: Upload logs and submission zip
+        uses: actions/upload-artifact@v6
+        with:
+          name: submission-e2e-${{ matrix.os }}
+          path: |
+            .ci-logs/
+            submission/71.zip

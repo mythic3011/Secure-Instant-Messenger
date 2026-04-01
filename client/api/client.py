@@ -12,12 +12,12 @@ import logging
 import ssl
 import warnings
 from collections.abc import Awaitable, Callable
-from typing import Any
-from typing import Literal
+from typing import Any, Literal, cast
 
 import httpx
 import websockets
 import websockets.exceptions
+from websockets.asyncio.client import ClientConnection
 
 from shared.protocol import (
     ConversationListResponse,
@@ -122,8 +122,8 @@ def _make_ssl_ctx(
                     return 0
             return preverify_ok
 
-        # Use setattr to avoid Pylance type errors (verify_callback exists at runtime)
-        setattr(ctx, "verify_callback", _verify_pin_callback)
+        # Use setattr through Any to avoid Pylance complaints about dynamic SSLContext attrs.
+        cast(Any, ctx).verify_callback = _verify_pin_callback
 
     return ctx
 
@@ -171,12 +171,21 @@ class IMClient:
         return {}
 
     async def _request(self, method: str, path: str, **kwargs: Any) -> httpx.Response:
-        assert self._http is not None, "Use IMClient as async context manager"
+        if self._http is None:
+            raise RuntimeError("Use IMClient as async context manager")
         log.debug("-> %s %s", method.upper(), path)
         resp = await self._http.request(method, path, headers=self._headers(), **kwargs)
-        log.debug("← %s %s %d (%d bytes)", method.upper(), path, resp.status_code, len(resp.content))
+        log.debug(
+            "← %s %s %d (%d bytes)", method.upper(), path, resp.status_code, len(resp.content)
+        )
         if resp.status_code >= 400:
-            log.warning("Request failed: %s %s -> HTTP %d: %s", method.upper(), path, resp.status_code, resp.text[:200])
+            log.warning(
+                "Request failed: %s %s -> HTTP %d: %s",
+                method.upper(),
+                path,
+                resp.status_code,
+                resp.text[:200],
+            )
             raise IMClientError(resp.status_code, resp.text)
         return resp
 
@@ -259,7 +268,13 @@ class IMClient:
     # WebSocket
     async def connect_ws(self, on_message: MessageCallback) -> None:
         self._on_message = on_message
-        self._ws_task = asyncio.create_task(self._ws_loop())
+        ready: asyncio.Future[None] = asyncio.get_running_loop().create_future()
+        self._ws_task = asyncio.create_task(self._ws_loop(ready))
+        try:
+            await ready
+        except Exception:
+            await self.disconnect()
+            raise
 
     async def disconnect(self) -> None:
         if self._ws_task:
@@ -281,7 +296,54 @@ class IMClient:
                 f"Certificate pin mismatch: expected {self._pin_sha256}, got {cert_hash}"
             )
 
-    async def _ws_loop(self) -> None:
+    async def _handle_ws_raw(self, raw: str | bytes) -> None:
+        try:
+            if isinstance(raw, bytes):
+                raw = raw.decode()
+            msg = json.loads(raw)
+            if msg.get("type") != "ping" and self._on_message:
+                await self._on_message(msg)
+        except json.JSONDecodeError as exc:
+            log.warning("WS JSON parse error: %s", exc)
+        except Exception as exc:  # allow-silent-except
+            log.warning("WS handler error: %s", exc)
+
+    @staticmethod
+    def _initial_ws_failure_message(exc: Exception) -> str:
+        if isinstance(exc, websockets.exceptions.ConnectionClosed):
+            code = IMClient._connection_closed_code(exc)
+            if code in {4001, 1006}:
+                return "WebSocket authentication failed."
+            return f"WebSocket closed during startup (code={code})."
+        if isinstance(exc, TimeoutError):
+            return "WebSocket authentication confirmation timed out."
+        if isinstance(exc, (httpx.ConnectError, httpx.TimeoutException, httpx.NetworkError)):
+            return "Cannot reach server."
+        return f"WebSocket startup failed: {type(exc).__name__}"
+
+    @staticmethod
+    def _connection_closed_code(exc: websockets.exceptions.ConnectionClosed) -> int | None:
+        received = getattr(exc, "rcvd", None)
+        if received is not None and getattr(received, "code", None) is not None:
+            return int(received.code)
+        sent = getattr(exc, "sent", None)
+        if sent is not None and getattr(sent, "code", None) is not None:
+            return int(sent.code)
+        return getattr(exc, "code", None)
+
+    async def _complete_initial_ws_handshake(
+        self,
+        ws: ClientConnection,
+    ) -> list[str]:
+        raw = await asyncio.wait_for(ws.recv(), timeout=5.0)
+        if isinstance(raw, bytes):
+            raw = raw.decode()
+        msg = json.loads(raw)
+        if msg.get("type") != "auth_ok":
+            raise RuntimeError("WebSocket startup missing auth confirmation.")
+        return []
+
+    async def _ws_loop(self, ready: asyncio.Future[None] | None = None) -> None:
         """WebSocket listener with automatic reconnect."""
         ws_url = self._base_url.replace("https://", "wss://").replace("http://", "ws://")
         ws_url = f"{ws_url}/v1/ws"
@@ -305,27 +367,40 @@ class IMClient:
                             cert_hash = hashlib.sha256(ssl_obj).hexdigest()
                             if cert_hash != self._pin_sha256:
                                 raise ssl.SSLError(
-                                    f"Certificate pin mismatch: expected {self._pin_sha256}, got {cert_hash}"
+                                    "Certificate pin mismatch: expected "
+                                    f"{self._pin_sha256}, got {cert_hash}"
                                 )
                     # First-frame auth: send token in the WebSocket payload,
                     # not the URL, to keep it out of server/proxy access logs.
                     await ws.send(json.dumps({"type": "auth", "token": self._token}))
+                    initial_messages: list[str] = []
+                    if ready is not None and not ready.done():
+                        initial_messages = await self._complete_initial_ws_handshake(ws)
+                        ready.set_result(None)
                     retry_count = 0
                     log.info("WebSocket connected")
-                    async for raw in ws:
-                        try:
-                            msg = json.loads(raw)
-                            if msg.get("type") != "ping" and self._on_message:
-                                await self._on_message(msg)
-                        except json.JSONDecodeError as exc:
-                            log.warning("WS JSON parse error: %s", exc)
-                        except Exception as exc:  # allow-silent-except
-                            log.warning("WS handler error: %s", exc)
+                    for initial_raw in initial_messages:
+                        await self._handle_ws_raw(initial_raw)
+                    async for ws_raw in ws:
+                        await self._handle_ws_raw(ws_raw)
             except websockets.exceptions.ConnectionClosed as exc:
-                log.info("WS closed (code=%s), reconnecting in 3s…", exc.code)
+                if ready is not None and not ready.done():
+                    ready.set_exception(
+                        IMClientConnectionError(self._initial_ws_failure_message(exc))
+                    )
+                    return
+                log.info(
+                    "WS closed (code=%s), reconnecting in 3s…",
+                    self._connection_closed_code(exc),
+                )
             except asyncio.CancelledError:
                 return
             except Exception as exc:  # allow-silent-except
+                if ready is not None and not ready.done():
+                    ready.set_exception(
+                        IMClientConnectionError(self._initial_ws_failure_message(exc))
+                    )
+                    return
                 log.warning("WebSocket error (%s): %s", type(exc).__name__, exc)
 
             retry_count += 1
@@ -355,6 +430,12 @@ class IMClientError(Exception):
         except (json.JSONDecodeError, KeyError, TypeError):
             pass
         return raw
+
+
+class IMClientConnectionError(Exception):
+    def __init__(self, detail: str) -> None:
+        self.detail = detail
+        super().__init__(detail)
 
 
 _HTTP_STATUS: dict[int, str] = {
