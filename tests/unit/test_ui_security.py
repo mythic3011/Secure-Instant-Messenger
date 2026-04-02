@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 from types import SimpleNamespace
 from typing import Any, cast
 
@@ -31,7 +32,7 @@ from client.ui.screens.login import LoginScreen
 from client.ui.screens.settings import SettingsScreen
 from client.use_cases.friends import FriendRequestHandled
 from client.use_cases.login import LoginSucceeded
-from shared.protocol import FriendRequestStatus
+from shared.protocol import FetchMessagesResponse, FriendRequestStatus, MessageEnvelope
 from tests.secrets import TEST_ACCOUNT_PASSWORD
 
 
@@ -164,6 +165,32 @@ def _identity_cache_raw(value: dict[str, dict[str, object]]) -> dict[str, object
     return cast(dict[str, object], value)
 
 
+def _history_envelope(
+    *,
+    message_id: str,
+    sender_id: str,
+    recipient_id: str = "alice-id",
+    conversation_id: str = "conv-1",
+    counter: int = 0,
+    sent_at: int = 100,
+    eph_pub_b64: str | None = None,
+    conv_dh_pub_b64: str | None = None,
+) -> MessageEnvelope:
+    return MessageEnvelope(
+        id=message_id,
+        sender_id=sender_id,
+        recipient_id=recipient_id,
+        conversation_id=conversation_id,
+        counter=counter,
+        nonce_b64=base64.b64encode(b"0" * 12).decode(),
+        ciphertext_b64=base64.b64encode(b"ciphertext").decode(),
+        eph_pub_b64=eph_pub_b64,
+        conv_dh_pub_b64=conv_dh_pub_b64,
+        chain_index=counter,
+        sent_at=sent_at,
+    )
+
+
 @pytest.mark.asyncio
 async def test_chat_history_local_decrypt_failure_is_handled(
     monkeypatch: pytest.MonkeyPatch,
@@ -194,6 +221,139 @@ async def test_chat_history_local_decrypt_failure_is_handled(
     assert "Local chat history is unavailable" in warning_widget.value
     assert len(messages.items) == 1
     assert send_button.disabled is False
+
+
+@pytest.mark.asyncio
+async def test_chat_history_request_syncs_before_render(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app = IMApp("https://example.test", "alice")
+    chat = ChatScreen("conv-1", "bob-id", "bob", "alice-id")
+    app._screen_stack.append(chat)  # type: ignore[attr-defined]
+    call_order: list[str] = []
+    result = ChatHistoryResult(state=UIScreenState(kind="ok"), messages=())
+    rendered: list[ChatHistoryResult] = []
+
+    async def _sync_history(conversation_id: str) -> None:
+        call_order.append(f"sync:{conversation_id}")
+
+    async def _load_history(conversation_id: str) -> ChatHistoryResult:
+        call_order.append(f"load:{conversation_id}")
+        return result
+
+    monkeypatch.setattr(app, "_sync_chat_history_from_server", _sync_history)
+    monkeypatch.setattr(app, "load_chat_history_state", _load_history)
+    monkeypatch.setattr(chat, "render_history_result", lambda history: rendered.append(history))
+
+    await app.on_chat_screen_request_history(SimpleNamespace(conversation_id="conv-1"))
+
+    assert call_order == ["sync:conv-1", "load:conv-1"]
+    assert rendered == [result]
+
+
+@pytest.mark.asyncio
+async def test_history_sync_processes_oldest_peer_messages_only(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app = IMApp("https://example.test", "alice")
+    app._client = _as_any(SimpleNamespace(fetch_messages=None))
+    app._user_id = "alice-id"
+    processed: list[str] = []
+
+    newest_own = _history_envelope(message_id="msg-3", sender_id="alice-id", sent_at=300)
+    middle_peer = _history_envelope(message_id="msg-2", sender_id="bob-id", sent_at=200)
+    oldest_peer = _history_envelope(message_id="msg-1", sender_id="bob-id", sent_at=100)
+
+    async def _fetch_messages(_conversation_id: str) -> FetchMessagesResponse:
+        return FetchMessagesResponse(
+            messages=[newest_own, middle_peer, oldest_peer],
+            has_more=False,
+            next_cursor=None,
+        )
+
+    async def _store_history(envelope: MessageEnvelope) -> None:
+        processed.append(envelope.id)
+
+    monkeypatch.setattr(app._client, "fetch_messages", _fetch_messages)
+    monkeypatch.setattr(app, "_store_fetched_history_envelope", _store_history)
+
+    await app._sync_chat_history_from_server("conv-1")
+
+    assert processed == ["msg-1", "msg-2"]
+
+
+@pytest.mark.asyncio
+async def test_store_fetched_history_envelope_bootstraps_session_and_persists(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app = IMApp("https://example.test", "alice")
+    app._client = _as_any(SimpleNamespace(get_keys=None))
+    app._user_id = "alice-id"
+    app._local_keys = SimpleNamespace(identity_kp=object(), dh_kp=object())
+    app._peer_usernames = {"bob-id": "bob"}
+    persisted: list[str] = []
+    saved_messages: list[dict[str, object]] = []
+    upserted: list[dict[str, object]] = []
+
+    envelope = _history_envelope(
+        message_id="msg-1",
+        sender_id="bob-id",
+        counter=0,
+        sent_at=100,
+        eph_pub_b64=base64.b64encode(b"peer-eph").decode(),
+        conv_dh_pub_b64=base64.b64encode(b"peer-conv").decode(),
+    )
+
+    async def _get_keys(_peer_username: str):
+        return SimpleNamespace(
+            identity_pub_b64=base64.b64encode(b"peer-identity").decode(),
+            dh_pub_b64=base64.b64encode(b"peer-dh").decode(),
+        )
+
+    async def _save_message(**kwargs) -> None:
+        saved_messages.append(kwargs)
+
+    async def _upsert_conversation(**kwargs) -> None:
+        upserted.append(kwargs)
+
+    monkeypatch.setattr(app._client, "get_keys", _get_keys)
+    monkeypatch.setattr(
+        app_module,
+        "derive_session_key_as_responder",
+        lambda **_kwargs: SimpleNamespace(
+            raw=b"k" * 32,
+            conversation_id="conv-1",
+            peer_id="bob-id",
+        ),
+    )
+    monkeypatch.setattr(
+        app_module,
+        "derive_ratchet_chains",
+        lambda *_args, **_kwargs: (SimpleNamespace(), SimpleNamespace()),
+    )
+    monkeypatch.setattr(app_module, "decrypt_envelope", lambda **_kwargs: "hello from history")
+    monkeypatch.setattr(app_module, "save_message", _save_message)
+    monkeypatch.setattr(app_module, "upsert_conversation", _upsert_conversation)
+    monkeypatch.setattr(app, "_persist_sessions", lambda: persisted.append("persist"))
+
+    await app._store_fetched_history_envelope(envelope)
+
+    assert "conv-1" in app._sessions
+    assert saved_messages == [
+        {
+            "id": "msg-1",
+            "conversation_id": "conv-1",
+            "sender_id": "bob-id",
+            "recipient_id": "alice-id",
+            "counter": 0,
+            "plaintext": "hello from history",
+            "sent_at": 100,
+            "ttl_seconds": None,
+            "delivery_status": "delivered",
+        }
+    ]
+    assert upserted[0]["peer_username"] == "bob"
+    assert persisted == ["persist", "persist"]
 
 
 @pytest.mark.asyncio
