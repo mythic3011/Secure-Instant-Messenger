@@ -14,7 +14,7 @@ import pyotp
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.hashes import SHA256
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
-from sqlalchemy import and_, case, select
+from sqlalchemy import and_, case, delete, select, update
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
 from server.core.config import get_settings
@@ -163,7 +163,44 @@ def verify_totp(secret: str, code: str) -> bool:
 # Rate limiting — simple DB-backed token bucket
 # ---------------------------------------------------------------------------
 
-async def check_rate_limit(key: str, max_attempts: int, window_seconds: int) -> bool:
+async def reset_rate_limit(key: str) -> None:
+    """
+    Reset failed-attempt tracking for a key after successful authentication.
+
+    Behavior:
+    - If an active lockout exists, keep `locked_until` but reset `attempts` to 0.
+    - If lockout is not active (or no lock), delete the row to keep the table tidy.
+    """
+    from server.core.database import get_session
+    from server.models.rate_limit import RateLimit
+
+    async with get_session() as db:
+        now = int(time.time())
+
+        # Clean up non-locked (or expired lock) rows.
+        await db.execute(
+            delete(RateLimit).where(
+                and_(
+                    RateLimit.key == key,
+                    (RateLimit.locked_until.is_(None) | (RateLimit.locked_until <= now)),
+                )
+            )
+        )
+
+        # Keep active lockout but clear attempt counter.
+        await db.execute(
+            update(RateLimit)
+            .where(and_(RateLimit.key == key, RateLimit.locked_until > now))
+            .values(attempts=0)
+        )
+
+
+async def check_rate_limit(
+    key: str,
+    max_attempts: int,
+    window_seconds: int,
+    is_failed_attempt: bool = True,
+) -> bool:
     """
     Atomic rate limit check using INSERT ... ON CONFLICT (upsert).
     Returns True if the request is allowed, False if rate-limited.
@@ -174,6 +211,8 @@ async def check_rate_limit(key: str, max_attempts: int, window_seconds: int) -> 
       could both read attempts=4 (below max=5) and both pass, exceeding
       the limit. The upsert makes the read-check-write a single SQL
       statement, which SQLite executes under its internal write lock.
+    If `is_failed_attempt` is False, this is a read-only lockout check that does
+    not increment attempts.
     """
     from server.core.database import get_session
     from server.models.rate_limit import RateLimit
@@ -187,6 +226,9 @@ async def check_rate_limit(key: str, max_attempts: int, window_seconds: int) -> 
         locked_until = result.scalar_one_or_none()
         if locked_until and now < locked_until:
             return False
+
+        if not is_failed_attempt:
+            return True
 
         # Atomic upsert — increment or reset window in one statement.
         # SQLite's ON CONFLICT executes atomically under the write lock.
