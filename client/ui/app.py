@@ -749,17 +749,14 @@ class IMApp(App):
         """Handler for FriendsScreen._LoadPending (internal load trigger)."""
         if self._client is None:
             return
-        try:
-            friends = self.screen
-        except Exception as exc:  # allow-silent-except
-            log.warning("friends_screen_lookup_failed", err=str(exc))
+        friends = self._current_friends_screen()
+        if friends is None:
             return
         result = await execute_load_pending_requests(self._friends_context())
-        try:
-            self._apply_pending_requests_result(friends=friends, result=result)
-        except Exception as exc:  # allow-silent-except
-            log.warning("friends_screen_update_failed", err=str(exc))
+        friends = self._current_friends_screen()
+        if friends is None:
             return
+        self._apply_pending_requests_result(friends=friends, result=result)
         if not isinstance(result, PendingRequestsLoaded):
             log.warning("friends_pending_load_failed", err=result.message)
 

@@ -392,6 +392,51 @@ async def test_friends_pending_load_failure_is_shown(
 
 
 @pytest.mark.asyncio
+async def test_friends_pending_load_ignores_screen_change_after_await(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app = IMApp("https://example.test", "alice")
+    friends_screen = _FakeFriendsScreen()
+    app._screen_stack.append(friends_screen)  # type: ignore[attr-defined]
+
+    async def _load_pending(_context) -> app_module.PendingRequestsLoaded:
+        app._screen_stack.append(_FakeLoginScreen())  # type: ignore[attr-defined]
+        return app_module.PendingRequestsLoaded(requests=[{"id": "r1", "sender_name": "bob"}])
+
+    monkeypatch.setattr(app_module, "execute_load_pending_requests", _load_pending)
+    app._client = _as_any(SimpleNamespace())
+
+    await app.on_friends_screen__load_pending(SimpleNamespace())
+
+    assert friends_screen.pending_payloads == []
+    assert friends_screen.error == ""
+    assert friends_screen.status == ""
+
+
+@pytest.mark.asyncio
+async def test_friends_pending_load_propagates_unexpected_screen_contract_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app = IMApp("https://example.test", "alice")
+
+    class _BrokenFriendsScreen(_FakeFriendsScreen):
+        def populate_pending(self, requests: list[dict]) -> None:
+            raise RuntimeError("broken friends screen")
+
+    screen = _BrokenFriendsScreen()
+    app._screen_stack.append(screen)  # type: ignore[attr-defined]
+
+    async def _load_pending(_context) -> app_module.PendingRequestsLoaded:
+        return app_module.PendingRequestsLoaded(requests=[{"id": "r1", "sender_name": "bob"}])
+
+    monkeypatch.setattr(app_module, "execute_load_pending_requests", _load_pending)
+    app._client = _as_any(SimpleNamespace())
+
+    with pytest.raises(RuntimeError, match="broken friends screen"):
+        await app.on_friends_screen__load_pending(SimpleNamespace())
+
+
+@pytest.mark.asyncio
 async def test_register_request_logs_and_returns_on_expected_error_widget_miss(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
