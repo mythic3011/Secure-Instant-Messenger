@@ -6,6 +6,7 @@ from typing import Any, cast
 
 import httpx
 import pytest
+from textual.css.query import NoMatches
 
 from client.api.client import IMClientConnectionError, IMClientError
 from client.crypto.session import (
@@ -98,6 +99,24 @@ class _FakeLoginScreen:
             return self.error
         msg = f"unexpected selector: {selector}"
         raise KeyError(msg)
+
+
+class _FakeRegisterScreen:
+    def __init__(self, *, query_error: Exception | None = None) -> None:
+        self.error = _FakeStatic()
+        self._query_error = query_error
+        self.totp_uri: str | None = None
+
+    def query_one(self, selector: str, *_args, **_kwargs):
+        if selector == "#error":
+            if self._query_error is not None:
+                raise self._query_error
+            return self.error
+        msg = f"unexpected selector: {selector}"
+        raise KeyError(msg)
+
+    def show_totp_setup(self, totp_uri: str) -> None:
+        self.totp_uri = totp_uri
 
 
 def _patch_chat_widgets(
@@ -370,6 +389,175 @@ async def test_friends_pending_load_failure_is_shown(
 
     assert screen.pending_payloads == []
     assert screen.error == expected_error
+
+
+@pytest.mark.asyncio
+async def test_friends_pending_load_ignores_screen_change_after_await(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app = IMApp("https://example.test", "alice")
+    friends_screen = _FakeFriendsScreen()
+    app._screen_stack.append(friends_screen)  # type: ignore[attr-defined]
+
+    async def _load_pending(_context) -> app_module.PendingRequestsLoaded:
+        app._screen_stack.append(_FakeLoginScreen())  # type: ignore[attr-defined]
+        return app_module.PendingRequestsLoaded(requests=[{"id": "r1", "sender_name": "bob"}])
+
+    monkeypatch.setattr(app_module, "execute_load_pending_requests", _load_pending)
+    app._client = _as_any(SimpleNamespace())
+
+    await app.on_friends_screen__load_pending(SimpleNamespace())
+
+    assert friends_screen.pending_payloads == []
+    assert friends_screen.error == ""
+    assert friends_screen.status == ""
+
+
+@pytest.mark.asyncio
+async def test_friends_pending_load_propagates_unexpected_screen_contract_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app = IMApp("https://example.test", "alice")
+
+    class _BrokenFriendsScreen(_FakeFriendsScreen):
+        def populate_pending(self, requests: list[dict]) -> None:
+            raise RuntimeError("broken friends screen")
+
+    screen = _BrokenFriendsScreen()
+    app._screen_stack.append(screen)  # type: ignore[attr-defined]
+
+    async def _load_pending(_context) -> app_module.PendingRequestsLoaded:
+        return app_module.PendingRequestsLoaded(requests=[{"id": "r1", "sender_name": "bob"}])
+
+    monkeypatch.setattr(app_module, "execute_load_pending_requests", _load_pending)
+    app._client = _as_any(SimpleNamespace())
+
+    with pytest.raises(RuntimeError, match="broken friends screen"):
+        await app.on_friends_screen__load_pending(SimpleNamespace())
+
+
+@pytest.mark.asyncio
+async def test_register_request_logs_and_returns_on_expected_error_widget_miss(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app = IMApp("https://example.test", "alice")
+    warnings: list[tuple[tuple, dict]] = []
+    screen = _FakeRegisterScreen(query_error=NoMatches("missing #error"))
+    app._screen_stack.append(screen)  # type: ignore[attr-defined]
+
+    class _FakeClient:
+        def __init__(self, *_args, **_kwargs) -> None:
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args) -> None:
+            return None
+
+        async def register(self, _body):
+            raise _imclient_error(409, "Still pending")
+
+    monkeypatch.setattr(app_module, "IMClient", _FakeClient)
+    monkeypatch.setattr(app_module, "save_keystore", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        app_module.log,
+        "warning",
+        lambda *args, **kwargs: warnings.append((args, kwargs)),
+    )
+
+    await app.on_register_screen_register_request(
+        SimpleNamespace(username="alice", password=TEST_ACCOUNT_PASSWORD)
+    )
+
+    assert screen.error.value == ""
+    assert any(args and args[0] == "register_error_render_failed" for args, _ in warnings)
+
+
+@pytest.mark.asyncio
+async def test_register_request_propagates_unexpected_error_widget_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app = IMApp("https://example.test", "alice")
+    screen = _FakeRegisterScreen(query_error=RuntimeError("boom"))
+    app._screen_stack.append(screen)  # type: ignore[attr-defined]
+
+    class _FakeClient:
+        def __init__(self, *_args, **_kwargs) -> None:
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args) -> None:
+            return None
+
+        async def register(self, _body):
+            raise _imclient_error(409, "Still pending")
+
+    monkeypatch.setattr(app_module, "IMClient", _FakeClient)
+    monkeypatch.setattr(app_module, "save_keystore", lambda *_args, **_kwargs: None)
+
+    with pytest.raises(RuntimeError, match="boom"):
+        await app.on_register_screen_register_request(
+            SimpleNamespace(username="alice", password=TEST_ACCOUNT_PASSWORD)
+        )
+
+
+@pytest.mark.asyncio
+async def test_register_request_propagates_unexpected_register_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app = IMApp("https://example.test", "alice")
+    screen = _FakeRegisterScreen()
+    app._screen_stack.append(screen)  # type: ignore[attr-defined]
+
+    class _FakeClient:
+        def __init__(self, *_args, **_kwargs) -> None:
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args) -> None:
+            return None
+
+        async def register(self, _body):
+            raise RuntimeError("unexpected register bug")
+
+    monkeypatch.setattr(app_module, "IMClient", _FakeClient)
+    monkeypatch.setattr(app_module, "save_keystore", lambda *_args, **_kwargs: None)
+
+    with pytest.raises(RuntimeError, match="unexpected register bug"):
+        await app.on_register_screen_register_request(
+            SimpleNamespace(username="alice", password=TEST_ACCOUNT_PASSWORD)
+        )
+
+
+@pytest.mark.asyncio
+async def test_logout_propagates_unexpected_client_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app = IMApp("https://example.test", "alice")
+    exited: list[tuple[object, ...]] = []
+    popped: list[bool] = []
+
+    async def _raise_logout() -> None:
+        raise ValueError("unexpected bug")
+
+    async def _noop_aexit(*_args) -> None:
+        exited.append(_args)
+        return None
+
+    app._client = _as_any(SimpleNamespace(logout=_raise_logout, __aexit__=_noop_aexit))
+    monkeypatch.setattr(app, "pop_screen", lambda: popped.append(True))
+
+    with pytest.raises(ValueError, match="unexpected bug"):
+        await app.on_conversation_list_screen_logout(SimpleNamespace())
+
+    assert exited == [(None, None, None)]
+    assert app._client is None
+    assert popped == []
 
 
 def test_banner_priority_prefers_key_changed() -> None:

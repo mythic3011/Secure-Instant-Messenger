@@ -15,6 +15,7 @@ import httpx
 import structlog
 from pydantic import ValidationError
 from textual.app import App, ComposeResult
+from textual.css.query import NoMatches
 from textual.widgets import Static
 
 from client.api.client import IMClient, IMClientError
@@ -202,6 +203,13 @@ class IMApp(App):
     def _persist_sessions(self) -> None:
         if self._local_keys and self._password and self._username:
             save_sessions(self._username, self._password, self._sessions)
+
+    @staticmethod
+    def _render_register_error(screen: Any, message: str) -> None:
+        try:
+            screen.query_one("#error", Static).update(message)
+        except NoMatches as exc:
+            log.warning("register_error_render_failed", err=str(exc))
 
     def _derive_and_set_storage_key(self, username: str, password: str) -> None:
         keystore_path = Path.home() / ".comp3334im" / username / "keystore.json"
@@ -588,6 +596,7 @@ class IMApp(App):
     async def on_register_screen_register_request(self, msg: Any) -> None:
         username = msg.username
         password = msg.password
+        register_screen = self.screen
 
         identity_kp = IdentityKeypair.generate()
         dh_kp = DHKeypair.generate()
@@ -612,35 +621,19 @@ class IMApp(App):
                     )
                 )
             except (httpx.ConnectError, httpx.TimeoutException, httpx.NetworkError) as e:
-                try:
-                    self.screen.query_one("#error", Static).update(
-                        f"Cannot reach server — is it running? ({type(e).__name__})"
-                    )
-                except Exception as exc:  # allow-silent-except
-                    log.warning("register_error_render_failed", err=str(exc))
+                self._render_register_error(
+                    register_screen,
+                    f"Cannot reach server — is it running? ({type(e).__name__})",
+                )
                 return
             except IMClientError as e:
-                try:
-                    self.screen.query_one("#error", Static).update(
-                        f"Registration failed: {e.detail}"
-                    )
-                except Exception as exc:  # allow-silent-except
-                    log.warning("register_error_render_failed", err=str(exc))
+                self._render_register_error(register_screen, f"Registration failed: {e.detail}")
                 return
             except ValidationError as e:
-                try:
-                    self.screen.query_one("#error", Static).update(
-                        "Registration failed: "
-                        f"{_clean_validation_error_message(e.errors()[0]['msg'])}"
-                    )
-                except Exception as exc:  # allow-silent-except
-                    log.warning("register_error_render_failed", err=str(exc))
-                return
-            except Exception as e:
-                try:
-                    self.screen.query_one("#error", Static).update(f"Unexpected error: {e}")
-                except Exception as exc:  # allow-silent-except
-                    log.warning("register_error_render_failed", err=str(exc))
+                self._render_register_error(
+                    register_screen,
+                    f"Registration failed: {_clean_validation_error_message(e.errors()[0]['msg'])}",
+                )
                 return
 
         save_keystore(username, password, local_keys)
@@ -695,12 +688,18 @@ class IMApp(App):
 
     async def on_conversation_list_screen_logout(self, msg: ConversationListScreen.Logout) -> None:
         if self._client:
+            unexpected_logout_error: Exception | None = None
             try:
                 await self._client.logout()
-            except Exception as exc:  # allow-silent-except
+            except (IMClientError, httpx.HTTPError) as exc:
                 log.warning("logout_failed", err=str(exc))
-            await self._client.__aexit__(None, None, None)
-            self._client = None
+            except Exception as exc:
+                unexpected_logout_error = exc
+            finally:
+                await self._client.__aexit__(None, None, None)
+                self._client = None
+            if unexpected_logout_error is not None:
+                raise unexpected_logout_error
         self._persist_sessions()
         self.pop_screen()
 
@@ -753,17 +752,14 @@ class IMApp(App):
         """Handler for FriendsScreen._LoadPending (internal load trigger)."""
         if self._client is None:
             return
-        try:
-            friends = self.screen
-        except Exception as exc:  # allow-silent-except
-            log.warning("friends_screen_lookup_failed", err=str(exc))
+        friends = self._current_friends_screen()
+        if friends is None:
             return
         result = await execute_load_pending_requests(self._friends_context())
-        try:
-            self._apply_pending_requests_result(friends=friends, result=result)
-        except Exception as exc:  # allow-silent-except
-            log.warning("friends_screen_update_failed", err=str(exc))
+        friends = self._current_friends_screen()
+        if friends is None:
             return
+        self._apply_pending_requests_result(friends=friends, result=result)
         if not isinstance(result, PendingRequestsLoaded):
             log.warning("friends_pending_load_failed", err=result.message)
 
