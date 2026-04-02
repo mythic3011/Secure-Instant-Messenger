@@ -8,8 +8,8 @@ from typing import Any
 from server.models.message import Message
 from shared.protocol import (
     DeliveryStatus,
-    FriendRequestPushEvent,
     FriendRequestPushPayload,
+    FriendRequestStatus,
     MessageEnvelope,
     MessageType,
     WsPushType,
@@ -63,7 +63,7 @@ def build_message_event(message: Message | MessageEnvelope) -> dict[str, Any]:
 
 def build_friend_request_event(
     *,
-    event: FriendRequestPushEvent,
+    event: FriendRequestStatus,
     request_id: str,
     sender_id: str,
     recipient_id: str,

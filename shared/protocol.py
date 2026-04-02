@@ -97,13 +97,6 @@ class WsPushType(StrEnum):
     SYSTEM = "system"
 
 
-class FriendRequestPushEvent(StrEnum):
-    PENDING = "pending"
-    ACCEPTED = "accepted"
-    DECLINED = "declined"
-    CANCELLED = "cancelled"
-
-
 # ---------------------------------------------------------------------------
 # Auth
 # ---------------------------------------------------------------------------
@@ -311,7 +304,7 @@ class FriendRequestOut(BaseModel):
 
 
 class FriendRequestPushPayload(BaseModel):
-    event: FriendRequestPushEvent
+    event: FriendRequestStatus
     request_id: str
     sender_id: str
     recipient_id: str

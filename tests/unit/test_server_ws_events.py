@@ -14,7 +14,7 @@ from server.ws.events import (
     build_message_event,
     build_message_payload,
 )
-from shared.protocol import FriendRequestPushEvent, WsPushType
+from shared.protocol import FriendRequestStatus, WsPushType
 
 
 def _fake_message(*, delivered_at: datetime | None = None) -> Any:
@@ -61,7 +61,7 @@ def test_build_message_payload_normalizes_datetime_and_preserves_bootstrap_field
 
 def test_build_friend_request_event_for_accept_exposes_refresh_contract() -> None:
     event = build_friend_request_event(
-        event=FriendRequestPushEvent.ACCEPTED,
+        event=FriendRequestStatus.ACCEPTED,
         request_id="req-1",
         sender_id="alice-id",
         recipient_id="bob-id",
@@ -71,7 +71,7 @@ def test_build_friend_request_event_for_accept_exposes_refresh_contract() -> Non
     assert event == {
         "type": WsPushType.FRIEND_REQUEST.value,
         "payload": {
-            "event": FriendRequestPushEvent.ACCEPTED.value,
+            "event": FriendRequestStatus.ACCEPTED.value,
             "request_id": "req-1",
             "sender_id": "alice-id",
             "recipient_id": "bob-id",

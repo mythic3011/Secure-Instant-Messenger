@@ -30,7 +30,6 @@ from shared.protocol import (
     FriendRequestAction,
     FriendRequestCreate,
     FriendRequestOut,
-    FriendRequestPushEvent,
 )
 from shared.protocol import (
     FriendRequestStatus as WireFriendRequestStatus,
@@ -235,7 +234,7 @@ async def handle_request(
         pushed = await push_to_user(
             req.sender_id,
             build_friend_request_event(
-                event=FriendRequestPushEvent.ACCEPTED,
+                event=WireFriendRequestStatus.ACCEPTED,
                 request_id=req.id,
                 sender_id=req.sender_id,
                 recipient_id=req.recipient_id,
