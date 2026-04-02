@@ -12,6 +12,12 @@ import signal
 import sys
 from pathlib import Path
 from types import FrameType
+from typing import Protocol
+
+
+class _SignalExitApp(Protocol):
+    def run(self) -> None: ...
+    def exit(self) -> None: ...
 
 
 def _setup_logging(log_dir: Path, verbose: bool = False) -> None:
@@ -51,18 +57,17 @@ def _setup_logging(log_dir: Path, verbose: bool = False) -> None:
     log.debug("Logging initialised — file: %s", log_file)
 
 
-def _run_app_with_sigint_exit(app: object, log: logging.Logger) -> None:
+def _run_app_with_sigint_exit(app: _SignalExitApp, log: logging.Logger) -> None:
     """Request a clean Textual exit on Ctrl+C instead of bubbling KeyboardInterrupt."""
 
     interrupted = False
+    shutdown_logged = False
     previous_handler = signal.getsignal(signal.SIGINT)
 
     def _handle_sigint(_signum: int, _frame: FrameType | None) -> None:
         nonlocal interrupted
         interrupted = True
-        exit_fn = getattr(app, "exit", None)
-        if callable(exit_fn):
-            exit_fn()
+        app.exit()
 
     try:
         signal.signal(signal.SIGINT, _handle_sigint)
@@ -77,10 +82,11 @@ def _run_app_with_sigint_exit(app: object, log: logging.Logger) -> None:
         app.run()
     except KeyboardInterrupt:
         log.info("Client shut down by user (KeyboardInterrupt)")
+        shutdown_logged = True
     finally:
         signal.signal(signal.SIGINT, previous_handler)
 
-    if interrupted:
+    if interrupted and not shutdown_logged:
         log.info("Client shut down by user (KeyboardInterrupt)")
 
 
