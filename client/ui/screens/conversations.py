@@ -206,7 +206,7 @@ class ConversationListScreen(Screen):
         requires_review_count = sum(1 for item in conversations if item.requires_action)
         return (
             f"{self._pluralize(conversation_count, 'conversation')}  ·  "
-            f"{self._pluralize(unread_count, 'unread message', 'unread')}  ·  "
+            f"{self._pluralize(unread_count, 'unread', 'unread')}  ·  "
             f"{self._pluralize(requires_review_count, 'needs review', 'needs review')}"
         )
 
