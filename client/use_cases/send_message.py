@@ -10,13 +10,17 @@ import httpx
 
 from client.api.client import IMClient, IMClientError
 from client.crypto.session import (
+    PEER_BUNDLE_BLOCKED_MESSAGE,
     IdentityKeyCache,
+    InvalidPeerBundleError,
     LocalStorageSecurityError,
     ReplayProtector,
     SecurityError,
     build_and_encrypt,
+    check_and_update_verified_peer_bundle,
     derive_ratchet_chains,
     derive_session_key_as_initiator,
+    validate_decode_and_bind_peer_bundle,
 )
 from client.crypto.storage import LocalKeys, SessionState
 from client.state.store import save_message, upsert_conversation
@@ -66,17 +70,19 @@ async def ensure_session(
     if peer_username is None:
         return None
 
-    peer_bundle = await context.client.get_keys(peer_username)
+    peer_bundle = validate_decode_and_bind_peer_bundle(
+        await context.client.get_keys(peer_username),
+        expected_peer_id=peer_id,
+        expected_username=peer_username,
+    )
 
     my_id = context.user_id or context.username
-    peer_identity_pub = base64.b64decode(peer_bundle.identity_pub_b64)
-    peer_dh_pub = base64.b64decode(peer_bundle.dh_pub_b64)
 
     session_key, eph_pub_bytes, conv_dh_pub_bytes = derive_session_key_as_initiator(
         my_identity_kp=context.local_keys.identity_kp,
         my_dh_kp=context.local_keys.dh_kp,
-        peer_identity_pub_bytes=peer_identity_pub,
-        peer_dh_pub_bytes=peer_dh_pub,
+        peer_identity_pub_bytes=peer_bundle.identity_pub,
+        peer_dh_pub_bytes=peer_bundle.dh_pub,
         my_user_id=my_id,
         peer_user_id=peer_id,
         conversation_id=conv_id,
@@ -84,7 +90,7 @@ async def ensure_session(
 
     send_chain, recv_chain = derive_ratchet_chains(session_key.raw, initiator=True)
     cache = IdentityKeyCache()
-    cache.check_and_update(peer_id, peer_identity_pub)
+    check_and_update_verified_peer_bundle(cache, peer_id, peer_bundle)
 
     state = SessionState(
         session_key=session_key,
@@ -124,6 +130,12 @@ async def execute_send_message(
 
     try:
         session_state = await ensure_session_fn(context, conversation_id, peer_id)
+    except InvalidPeerBundleError:
+        return SendMessageBlocked(
+            reason=LocalSecurityFailure(message=PEER_BUNDLE_BLOCKED_MESSAGE),
+            sent_at=None,
+            disable_send=True,
+        )
     except IMClientError as exc:
         return ServerFailure(message=exc.detail)
     except (httpx.ConnectError, httpx.TimeoutException, httpx.NetworkError):

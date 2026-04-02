@@ -112,6 +112,14 @@ Alice                          Server                         Bob
   │                               │  -> decrypt locally          │
 ```
 
+### 2.3 Fetched Peer Bundle Trust Gate
+
+Fetched peer key bundles are treated as untrusted by default. Before any fetched
+bundle can influence trust state, fingerprint/key-change handling, or session
+establishment, the client requires centralized trust-gate validation for both
+bundle signature verification and expected-peer binding. Invalid or mismatched
+bundles fail closed with no trust/session state mutation.
+
 ---
 
 ## 3. Cryptographic Protocol Design
@@ -148,8 +156,12 @@ Alice                          Server                         Bob
 
 ```
 1. Alice fetches bob_identity_pub + bob_dh_pub from server
-2. Alice generates ephemeral keypair: alice_eph_priv, alice_eph_pub
-3. Alice computes:
+2. Alice passes the fetched bundle through the trust gate:
+   - verify key_sig over identity_pub || dh_pub
+   - bind the returned bundle to the expected peer identity
+   - reject invalid or mismatched bundles before deriving any session key
+3. Alice generates ephemeral keypair: alice_eph_priv, alice_eph_pub
+4. Alice computes:
    DH1 = X25519(alice_dh_priv,  bob_dh_pub)    # static-static
    DH2 = X25519(alice_eph_priv, bob_dh_pub)    # ephemeral-static
    ikm = DH1 || DH2
@@ -159,7 +171,7 @@ Alice                          Server                         Bob
      info = alice_id || bob_id || conversation_id,
      len  = 32
    )
-4. First message envelope includes alice_eph_pub so Bob can recompute
+5. First message envelope includes alice_eph_pub so Bob can recompute
 ```
 
 **Bob receives and decrypts:**
@@ -202,10 +214,12 @@ States:
 
 On every received message with `eph_pub_b64` set (re-keying):
 
-1. Fetch sender's current `identity_pub` from server
-2. Compare with locally cached value in `IdentityKeyCache`
-3. If different -> raise `KeyChangeWarning` -> show `⚠ key changed` banner
-4. User views fingerprint in ⚙ settings and clicks "Mark as Verified ✓"
+1. Fetch sender's current key bundle from the server
+2. Pass the bundle through the centralized trust gate
+3. Require both signature verification and expected-peer binding before identity continuity logic runs
+4. Compare the verified identity key with the locally cached value in `IdentityKeyCache`
+5. If different -> raise `KeyChangeWarning` -> show `⚠ key changed` banner
+6. User views fingerprint in ⚙ settings and clicks "Mark as Verified ✓"
 
 ### 3.5 Fingerprint / Safety Number (R5)
 
@@ -704,3 +718,11 @@ than an end-to-end protected acknowledgement.
 
 **Mitigation in a production system:** Implement Option B, where delivery ACKs
 are bound to the session and protected end-to-end.
+
+### 14.7 No Formal Revocation Lifecycle
+
+This hardening covers fetched-bundle authenticity and expected-peer binding, but
+not a formal revocation or invalidation lifecycle.
+
+**Mitigation in a production system:** Add lifecycle state,
+ordering/versioning, and recovery semantics for explicit revocation handling.

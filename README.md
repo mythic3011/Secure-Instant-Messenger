@@ -16,6 +16,7 @@ All 19 identified security vulnerabilities have been fixed. See [`docs/SECURITY_
 - Argon2id password hashing and TOTP-based 2FA with QR code
 - Replay protection (monotonic counter + message ID dedup)
 - Key change detection with fingerprint verification
+- Centralized peer-bundle trust gate with signature verification, expected-peer binding, and fail-closed rejection of invalid or mismatched bundles
 - Timed self-destruct messages (TTL in authenticated data)
 - Python implementation with SQLite backend and Textual TUI client
 

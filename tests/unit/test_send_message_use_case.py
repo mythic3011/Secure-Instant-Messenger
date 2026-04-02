@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 from types import SimpleNamespace
 from typing import cast
 
@@ -7,15 +8,23 @@ import httpx
 import pytest
 
 from client.api.client import IMClientError
-from client.crypto.session import LocalStorageSecurityError
+from client.crypto.session import (
+    DHKeypair,
+    IdentityKeypair,
+    InvalidPeerBundleError,
+    LocalStorageSecurityError,
+    make_key_signature,
+)
 from client.crypto.storage import SessionState
 from client.use_cases.results import LocalSecurityFailure, NetworkFailure, ServerFailure
 from client.use_cases.send_message import (
     SendMessageBlocked,
     SendMessageContext,
     SendMessageSucceeded,
+    ensure_session,
     execute_send_message,
 )
+from shared.protocol import PublicKeyBundle
 
 
 def _imclient_error(status_code: int, detail: str) -> IMClientError:
@@ -24,6 +33,19 @@ def _imclient_error(status_code: int, detail: str) -> IMClientError:
 
 def _session_state() -> SessionState:
     return cast(SessionState, SimpleNamespace(send_chain=object(), next_outbound_counter=0))
+
+
+def _peer_bundle(*, user_id: str = "bob-id", username: str = "bob") -> PublicKeyBundle:
+    identity_kp = IdentityKeypair.generate()
+    dh_kp = DHKeypair.generate()
+    return PublicKeyBundle(
+        user_id=user_id,
+        username=username,
+        identity_pub_b64=base64.b64encode(identity_kp.public_bytes()).decode(),
+        dh_pub_b64=base64.b64encode(dh_kp.public_bytes()).decode(),
+        key_sig_b64=base64.b64encode(make_key_signature(identity_kp, dh_kp)).decode(),
+        uploaded_at=123,
+    )
 
 
 @pytest.mark.asyncio
@@ -141,6 +163,76 @@ async def test_execute_send_message_returns_network_failure_for_session_error() 
     )
 
     assert result == NetworkFailure()
+
+
+@pytest.mark.asyncio
+async def test_execute_send_message_returns_local_security_block_for_invalid_peer_bundle() -> None:
+    context = SendMessageContext(
+        client=SimpleNamespace(send_message=None),
+        local_keys=SimpleNamespace(),
+        username="alice",
+        user_id="alice-id",
+        sessions={},
+        peer_usernames={"bob-id": "bob"},
+        ttl_settings={},
+        counters={},
+        persist_sessions=lambda: None,
+    )
+
+    async def _raise_session(*_args, **_kwargs):
+        raise InvalidPeerBundleError("bundle rejected")
+
+    result = await execute_send_message(
+        context,
+        conversation_id="conv-1",
+        peer_id="bob-id",
+        plaintext="hello",
+        ensure_session_fn=_raise_session,
+    )
+
+    assert result == SendMessageBlocked(
+        reason=LocalSecurityFailure(
+            message="Unable to verify peer key bundle. Session setup was blocked for your safety."
+        ),
+        sent_at=None,
+        disable_send=True,
+    )
+
+
+@pytest.mark.asyncio
+async def test_ensure_session_rejects_bundle_bound_to_different_peer() -> None:
+    fetched = False
+    persist_called = False
+    context = SendMessageContext(
+        client=SimpleNamespace(get_keys=None),
+        local_keys=SimpleNamespace(identity_kp=object(), dh_kp=object()),
+        username="alice",
+        user_id="alice-id",
+        sessions={},
+        peer_usernames={"bob-id": "bob"},
+        ttl_settings={},
+        counters={},
+        persist_sessions=lambda: None,
+    )
+
+    async def _get_keys(_username: str) -> PublicKeyBundle:
+        nonlocal fetched
+        fetched = True
+        return _peer_bundle(user_id="carol-id", username="carol")
+
+    def _persist_sessions() -> None:
+        nonlocal persist_called
+        persist_called = True
+
+    context.client = SimpleNamespace(get_keys=_get_keys)
+    context.persist_sessions = _persist_sessions
+
+    with pytest.raises(InvalidPeerBundleError, match="does not match expected peer"):
+        await ensure_session(context, "conv-1", "bob-id")
+
+    assert fetched is True
+    assert context.sessions == {}
+    assert persist_called is False
 
 
 @pytest.mark.asyncio
