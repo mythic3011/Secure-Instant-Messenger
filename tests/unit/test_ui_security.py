@@ -505,6 +505,36 @@ async def test_register_request_propagates_unexpected_error_widget_failure(
 
 
 @pytest.mark.asyncio
+async def test_register_request_propagates_unexpected_register_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app = IMApp("https://example.test", "alice")
+    screen = _FakeRegisterScreen()
+    app._screen_stack.append(screen)  # type: ignore[attr-defined]
+
+    class _FakeClient:
+        def __init__(self, *_args, **_kwargs) -> None:
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args) -> None:
+            return None
+
+        async def register(self, _body):
+            raise RuntimeError("unexpected register bug")
+
+    monkeypatch.setattr(app_module, "IMClient", _FakeClient)
+    monkeypatch.setattr(app_module, "save_keystore", lambda *_args, **_kwargs: None)
+
+    with pytest.raises(RuntimeError, match="unexpected register bug"):
+        await app.on_register_screen_register_request(
+            SimpleNamespace(username="alice", password=TEST_ACCOUNT_PASSWORD)
+        )
+
+
+@pytest.mark.asyncio
 async def test_logout_propagates_unexpected_client_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
