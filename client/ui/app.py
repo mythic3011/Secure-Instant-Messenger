@@ -40,7 +40,7 @@ from client.crypto.session import (
     derive_ratchet_chains,
     derive_session_key_as_responder,
     make_key_signature,
-    validate_and_decode_peer_bundle,
+    validate_decode_and_bind_peer_bundle,
 )
 from client.crypto.storage import (
     LocalKeys,
@@ -539,7 +539,11 @@ class IMApp(App):
                 return
 
             try:
-                verified_bundle = validate_and_decode_peer_bundle(peer_bundle)
+                verified_bundle = validate_decode_and_bind_peer_bundle(
+                    peer_bundle,
+                    expected_peer_id=peer_id,
+                    expected_username=peer_username,
+                )
                 eph_pub = base64.b64decode(envelope.eph_pub_b64, validate=True)
                 conv_dh_pub = base64.b64decode(envelope.conv_dh_pub_b64, validate=True)
                 session_key = derive_session_key_as_responder(
@@ -1226,7 +1230,11 @@ class IMApp(App):
                 return
 
             try:
-                verified_bundle = validate_and_decode_peer_bundle(peer_bundle)
+                verified_bundle = validate_decode_and_bind_peer_bundle(
+                    peer_bundle,
+                    expected_peer_id=peer_id,
+                    expected_username=peer_username,
+                )
                 eph_pub = base64.b64decode(envelope.eph_pub_b64, validate=True)
                 conv_dh_pub = base64.b64decode(envelope.conv_dh_pub_b64, validate=True)
                 session_key = derive_session_key_as_responder(
@@ -1282,7 +1290,11 @@ class IMApp(App):
             if peer_username and client:
                 try:
                     peer_bundle = await client.get_keys(peer_username)
-                    verified_bundle = validate_and_decode_peer_bundle(peer_bundle)
+                    verified_bundle = validate_decode_and_bind_peer_bundle(
+                        peer_bundle,
+                        expected_peer_id=peer_id,
+                        expected_username=peer_username,
+                    )
                     key_changed = check_and_update_verified_peer_bundle(
                         state.identity_key_cache, peer_id, verified_bundle
                     )

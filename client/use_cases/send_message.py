@@ -20,7 +20,7 @@ from client.crypto.session import (
     check_and_update_verified_peer_bundle,
     derive_ratchet_chains,
     derive_session_key_as_initiator,
-    validate_and_decode_peer_bundle,
+    validate_decode_and_bind_peer_bundle,
 )
 from client.crypto.storage import LocalKeys, SessionState
 from client.state.store import save_message, upsert_conversation
@@ -70,7 +70,11 @@ async def ensure_session(
     if peer_username is None:
         return None
 
-    peer_bundle = validate_and_decode_peer_bundle(await context.client.get_keys(peer_username))
+    peer_bundle = validate_decode_and_bind_peer_bundle(
+        await context.client.get_keys(peer_username),
+        expected_peer_id=peer_id,
+        expected_username=peer_username,
+    )
 
     my_id = context.user_id or context.username
 

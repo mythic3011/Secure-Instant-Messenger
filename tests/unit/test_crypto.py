@@ -39,6 +39,7 @@ from client.crypto.session import (
     encrypt_message,
     make_key_signature,
     validate_and_decode_peer_bundle,
+    validate_decode_and_bind_peer_bundle,
     verify_key_bundle,
 )
 from shared.protocol import PublicKeyBundle
@@ -133,6 +134,41 @@ def test_validate_and_decode_peer_bundle_returns_verified_material():
     assert verified.fingerprint_input == identity_kp.public_bytes()
     with pytest.raises(FrozenInstanceError):
         verified.identity_pub = b"x" * 32  # type: ignore[misc]
+
+
+def test_validate_decode_and_bind_peer_bundle_accepts_matching_peer_identity() -> None:
+    bundle = _public_key_bundle()
+
+    verified = validate_decode_and_bind_peer_bundle(
+        bundle,
+        expected_peer_id="bob-id",
+        expected_username="bob",
+    )
+
+    assert verified.user_id == "bob-id"
+    assert verified.username == "bob"
+
+
+def test_validate_decode_and_bind_peer_bundle_rejects_mismatched_peer_id() -> None:
+    bundle = _public_key_bundle()
+
+    with pytest.raises(InvalidPeerBundleError, match="user_id does not match"):
+        validate_decode_and_bind_peer_bundle(
+            bundle,
+            expected_peer_id="alice-id",
+            expected_username="bob",
+        )
+
+
+def test_validate_decode_and_bind_peer_bundle_rejects_mismatched_username() -> None:
+    bundle = _public_key_bundle()
+
+    with pytest.raises(InvalidPeerBundleError, match="username does not match"):
+        validate_decode_and_bind_peer_bundle(
+            bundle,
+            expected_peer_id="bob-id",
+            expected_username="alice",
+        )
 
 
 @pytest.mark.parametrize(

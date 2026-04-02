@@ -222,7 +222,15 @@ class PeerBundleSignatureError(InvalidPeerBundleError):
 
 @dataclass(frozen=True)
 class VerifiedPeerBundle:
-    """Immutable trusted view of fetched peer key material."""
+    """
+    Immutable view of fetched peer key material.
+
+    Security notes:
+      - Only identity_pub and dh_pub are authenticated by the peer signature
+        over identity_pub || dh_pub.
+      - user_id and username are copied from the fetched bundle and must still
+        be bound to the expected peer before trust/session use.
+    """
 
     user_id: str
     username: str
@@ -295,6 +303,24 @@ def validate_and_decode_peer_bundle(bundle: PublicKeyBundle) -> VerifiedPeerBund
         identity_pub=identity_pub,
         dh_pub=dh_pub,
     )
+
+
+def validate_decode_and_bind_peer_bundle(
+    bundle: PublicKeyBundle,
+    *,
+    expected_peer_id: str,
+    expected_username: str | None = None,
+) -> VerifiedPeerBundle:
+    """
+    Admit fetched peer bundle material only if it is both signature-valid and
+    bound to the expected peer identity.
+    """
+    verified_bundle = validate_and_decode_peer_bundle(bundle)
+    if verified_bundle.user_id != expected_peer_id:
+        raise InvalidPeerBundleError("Peer bundle user_id does not match expected peer")
+    if expected_username is not None and verified_bundle.username != expected_username:
+        raise InvalidPeerBundleError("Peer bundle username does not match expected peer")
+    return verified_bundle
 
 
 def check_and_update_verified_peer_bundle(

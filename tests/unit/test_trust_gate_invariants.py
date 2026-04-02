@@ -13,7 +13,7 @@ def test_fetched_bundle_paths_do_not_decode_or_verify_outside_trust_gate() -> No
     for path in target_paths:
         source = path.read_text()
         assert "verify_key_bundle(" not in source
-        assert "validate_and_decode_peer_bundle(" in source
+        assert "validate_decode_and_bind_peer_bundle(" in source
         assert "peer_bundle.identity_pub_b64" not in source
         assert "peer_bundle.dh_pub_b64" not in source
         assert "peer_bundle.key_sig_b64" not in source
