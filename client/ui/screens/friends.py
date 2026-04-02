@@ -6,7 +6,8 @@ Covers: R13, R14, R15
 from __future__ import annotations
 
 from textual.app import ComposeResult
-from textual.containers import Horizontal
+from textual.containers import Horizontal, Vertical
+from textual.css.query import NoMatches
 from textual.message import Message
 from textual.screen import Screen
 from textual.widgets import Button, Input, ListItem, ListView, Static
@@ -43,100 +44,106 @@ class FriendsScreen(Screen):
     CSS = """
     FriendsScreen {
         layout: vertical;
-        background: #0a0a0f;
+        background: #0b1120;
     }
-
-    /* ── Title bar ── */
     #header {
-        height: 3;
-        background: #0d0d1a;
-        border-bottom: solid #00ff9f;
-        color: #00ff9f;
+        height: 4;
+        background: #0d1324;
+        border-bottom: solid #14304f;
+        color: #7dd3fc;
         text-style: bold;
-        content-align: center middle;
-        padding: 0 2;
-    }
-
-    /* ── Section labels ── */
-    .section_label {
-        height: 2;
-        background: #0d0d1a;
-        border-bottom: solid #1a1a3e;
-        color: #8888cc;
-        text-style: italic;
-        padding: 0 2;
         content-align: left middle;
+        padding: 0 2 0 3;
     }
-
-    /* ── Pending list ── */
+    #hero {
+        height: 4;
+        margin: 1 2;
+        padding: 0 2;
+        background: #101826;
+        border: round #14304f;
+    }
+    #hero_title {
+        color: #f8fafc;
+        text-style: bold;
+    }
+    #hero_subtitle {
+        color: #94a3b8;
+    }
+    #pending_summary {
+        color: #86efac;
+        text-style: bold;
+    }
     #pending_list {
         height: 1fr;
-        border: solid #1a1a3e;
-        background: #0a0a0f;
+        margin: 0 2;
+        border: solid #1a2742;
+        background: #0b1120;
     }
     #pending_list > ListItem {
-        color: #c0c0e0;
+        color: #dbeafe;
         padding: 0 0;
         height: 3;
     }
-    #pending_list > ListItem:hover { background: #0d0d2a; }
+    #pending_list > ListItem:hover { background: #111c33; }
     .req_row  { height: 3; align: left middle; }
-    .req_name { width: 1fr; color: #e0e0ff; content-align: left middle; padding: 0 1; }
+    .req_name { width: 1fr; color: #f8fafc; content-align: left middle; padding: 0 1; }
     .req_btn  { width: 12; height: 3; }
-
-    /* ── Status / error bar ── */
+    #pending_empty {
+        height: 3;
+        margin: 0 2;
+        color: #64748b;
+        content-align: center middle;
+    }
     #status {
-        color: #00ff9f;
+        color: #86efac;
         height: 1;
         padding: 0 2;
         content-align: left middle;
     }
     #error  {
-        color: #ff4444;
+        color: #fca5a5;
         height: 1;
         padding: 0 2;
         content-align: left middle;
         text-style: bold;
     }
-
-    /* ── Add-friend row ── */
     #add_row {
         height: 3;
-        background: #0d0d1a;
-        border-top: solid #1a1a3e;
+        margin: 1 2 0 2;
+        background: #0d1324;
+        border: round #1a2742;
     }
     #add_input {
         width: 1fr;
-        border: tall #1a1a3e;
-        background: #0a0a1a;
-        color: #e0e0ff;
+        border: tall #1a2742;
+        background: #0f172a;
+        color: #f8fafc;
     }
-    #add_input:focus { border: tall #00ccff; }
+    #add_input:focus { border: tall #38bdf8; }
     #btn_add {
         width: 16;
-        background: #00ccff;
-        color: #000000;
+        background: #38bdf8;
+        color: #082f49;
         text-style: bold;
     }
-    #btn_add:hover { background: #00aadd; }
-
-    /* ── Bottom toolbar ── */
+    #btn_add:hover { background: #7dd3fc; }
     #toolbar {
         height: 3;
-        background: #0d0d1a;
-        border-top: solid #1a1a3e;
+        margin-top: 1;
+        background: #0d1324;
+        border-top: solid #14304f;
     }
     #toolbar Button {
-        background: #0d0d1a;
-        color: #00ccff;
-        border: tall #1a1a3e;
+        background: #0d1324;
+        color: #7dd3fc;
+        border: tall #1a2742;
     }
-    #toolbar Button:hover { background: #0d0d2a; color: #00ff9f; }
+    #toolbar Button:hover { background: #111c33; color: #86efac; }
     #btn_exit {
-        color: #ff4444;
-        border: tall #ff4444;
+        color: #f87171;
+        border: tall #7f1d1d;
     }
-    #btn_exit:hover { background: #1a0000; color: #ff6666; }
+    #btn_exit:hover { background: #2b1113; color: #fca5a5; }
     """
 
     class SendRequest(Message):
@@ -155,9 +162,16 @@ class FriendsScreen(Screen):
             self.request_id = request_id
 
     def compose(self) -> ComposeResult:
-        yield Static("◈ SECURE IM  ·  Friends", id="header")
-        yield Static("Pending friend requests", classes="section_label")
+        yield Static("◈ SECURE IM  ·  Friends  ·  trusted contacts", id="header")
+        with Vertical(id="hero"):
+            yield Static("Friend requests", id="hero_title")
+            yield Static(
+                "Incoming requests load here when you open this screen and after each action.",
+                id="hero_subtitle",
+            )
+            yield Static("No incoming requests right now", id="pending_summary")
         yield ListView(id="pending_list")
+        yield Static(self.render_empty_state(), id="pending_empty")
         yield Static("", id="status")
         yield Static("", id="error")
         with Horizontal(id="add_row"):
@@ -177,11 +191,33 @@ class FriendsScreen(Screen):
     class _LoadPending(Message):
         pass
 
+    @staticmethod
+    def _pluralize(value: int, singular: str, plural: str | None = None) -> str:
+        noun = singular if value == 1 else (plural or f"{singular}s")
+        return f"{value} {noun}"
+
+    def render_pending_summary(self, requests: list[dict]) -> str:
+        count = len(requests)
+        return f"{self._pluralize(count, 'incoming request')}  ·  respond to start chatting"
+
+    @staticmethod
+    def render_empty_state() -> str:
+        return "No pending requests.\nSend an invite below to start a secure conversation."
+
     def populate_pending(self, requests: list[dict]) -> None:
         lv = self.query_one("#pending_list", ListView)
         lv.clear()
         for r in requests:
             lv.append(FriendRequestItem(r["id"], r["sender_name"]))
+        summary = (
+            self.render_pending_summary(requests) if requests else "No incoming requests right now"
+        )
+        empty_state = "" if requests else self.render_empty_state()
+        try:
+            self.query_one("#pending_summary", Static).update(summary)
+            self.query_one("#pending_empty", Static).update(empty_state)
+        except NoMatches:
+            return
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         btn_id = event.button.id or ""

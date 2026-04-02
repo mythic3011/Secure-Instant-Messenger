@@ -25,8 +25,10 @@ from client.ui.contracts import (
 )
 from client.ui.screens.chat import ChatScreen
 from client.ui.screens.conversations import ConversationItem, ConversationListScreen
+from client.ui.screens.friends import FriendsScreen
 from client.ui.screens.login import LoginScreen
 from client.ui.screens.settings import SettingsScreen
+from client.use_cases.friends import FriendRequestHandled
 from client.use_cases.login import LoginSucceeded
 from shared.protocol import FriendRequestStatus
 from tests.secrets import TEST_ACCOUNT_PASSWORD
@@ -697,6 +699,108 @@ def test_conversation_summary_refresh_updates_banner_and_secondary_text_together
     assert detail.value == "Identity key changed"
 
 
+def test_conversation_list_summary_reports_counts() -> None:
+    screen = ConversationListScreen("alice")
+    conversations = [
+        ConversationSummaryViewModel(
+            conv_id="conv-1",
+            peer_id="bob-id",
+            peer_username="bob",
+            unread_count=3,
+            requires_action=False,
+        ),
+        ConversationSummaryViewModel(
+            conv_id="conv-2",
+            peer_id="carol-id",
+            peer_username="carol",
+            unread_count=0,
+            requires_action=True,
+        ),
+    ]
+
+    assert (
+        screen.render_summary_line(conversations)
+        == "2 conversations  ·  3 unread  ·  1 needs review"
+    )
+
+
+def test_conversation_list_summary_keeps_unread_label_consistent() -> None:
+    screen = ConversationListScreen("alice")
+    conversations = [
+        ConversationSummaryViewModel(
+            conv_id="conv-1",
+            peer_id="bob-id",
+            peer_username="bob",
+            unread_count=1,
+            requires_action=False,
+        )
+    ]
+
+    assert (
+        screen.render_summary_line(conversations)
+        == "1 conversation  ·  1 unread  ·  0 needs review"
+    )
+
+
+def test_conversation_list_empty_state_guides_next_step() -> None:
+    screen = ConversationListScreen("alice")
+
+    assert (
+        screen.render_empty_state()
+        == "No conversations yet.\nAccepted friends will appear here immediately."
+    )
+
+
+def test_friends_screen_pending_summary_reports_count() -> None:
+    screen = FriendsScreen()
+    requests = [
+        {"id": "req-1", "sender_name": "bob"},
+        {"id": "req-2", "sender_name": "carol"},
+    ]
+
+    assert (
+        screen.render_pending_summary(requests)
+        == "2 incoming requests  ·  respond to start chatting"
+    )
+
+
+def test_friends_screen_empty_state_guides_sending_request() -> None:
+    screen = FriendsScreen()
+
+    assert (
+        screen.render_empty_state()
+        == "No pending requests.\nSend an invite below to start a secure conversation."
+    )
+
+
+def test_friends_screen_populate_pending_updates_summary_and_empty_state(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    screen = FriendsScreen()
+    pending_list = _FakeListView()
+    pending_summary = _FakeStatic()
+    empty_state = _FakeStatic()
+    widgets = {
+        "#pending_list": pending_list,
+        "#pending_summary": pending_summary,
+        "#pending_empty": empty_state,
+    }
+    monkeypatch.setattr(screen, "query_one", lambda selector, *_args, **_kwargs: widgets[selector])
+
+    screen.populate_pending([])
+    assert pending_summary.value == "No incoming requests right now"
+    assert (
+        empty_state.value
+        == "No pending requests.\nSend an invite below to start a secure conversation."
+    )
+    assert pending_list.items == []
+
+    screen.populate_pending([{"id": "req-1", "sender_name": "bob"}])
+    assert pending_summary.value == "1 incoming request  ·  respond to start chatting"
+    assert empty_state.value == ""
+    assert len(pending_list.items) == 1
+
+
 def test_verified_warning_persists_until_reverified() -> None:
     cache = IdentityKeyCache()
     pub1 = b"a" * 32
@@ -769,6 +873,59 @@ async def test_friend_accept_server_error_is_shown(monkeypatch: pytest.MonkeyPat
 
     assert screen.error == "Already handled"
     assert screen.pending_payloads == []
+
+
+@pytest.mark.asyncio
+async def test_friend_accept_refreshes_existing_conversation_lists_for_acceptor(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app = IMApp("https://example.test", "alice")
+    friends = _FakeFriendsScreen()
+    conversation_screen = ConversationListScreen("alice")
+    app._screen_stack.append(conversation_screen)  # type: ignore[attr-defined]
+    app._screen_stack.append(friends)  # type: ignore[attr-defined]
+    app._client = _as_any(SimpleNamespace(handle_friend_request=None, list_pending_requests=None))
+
+    async def _execute_handle_friend_request(*_args, **_kwargs):
+        return FriendRequestHandled(
+            requests=[],
+            status_message="Friend request accepted.",
+        )
+
+    synced = 0
+    populated: list[list[ConversationSummaryViewModel]] = []
+
+    async def _sync_conversations() -> None:
+        nonlocal synced
+        synced += 1
+
+    async def _get_conversations() -> list[dict[str, object]]:
+        return [
+            {
+                "id": "conv-1",
+                "peer_id": "bob-id",
+                "peer_username": "bob",
+                "last_message_at": 123,
+                "unread_count": 0,
+            }
+        ]
+
+    monkeypatch.setattr(app_module, "execute_handle_friend_request", _execute_handle_friend_request)
+    monkeypatch.setattr(app, "_sync_conversations_from_server", _sync_conversations)
+    monkeypatch.setattr(app_module, "get_conversations", _get_conversations)
+    monkeypatch.setattr(
+        ConversationListScreen,
+        "populate",
+        lambda self, conversations: populated.append(conversations),
+    )
+
+    await app.on_friends_screen_accept_request(SimpleNamespace(request_id="req-1"))
+
+    assert friends.status == "Friend request accepted."
+    assert synced == 1
+    assert app._peer_usernames == {"bob-id": "bob"}
+    assert len(populated) == 1
+    assert populated[0][0].conv_id == "conv-1"
 
 
 @pytest.mark.asyncio

@@ -505,6 +505,15 @@ class IMApp(App):
             return
         friends.show_error(result.message)
 
+    async def _refresh_open_conversation_lists(self) -> None:
+        await self._sync_conversations_from_server()
+        conversations = await get_conversations()
+        self._rehydrate_peer_usernames(conversations)
+
+        for screen in self.screen_stack:
+            if isinstance(screen, ConversationListScreen):
+                screen.populate(self._build_conversation_summaries(conversations))
+
     def compose(self) -> ComposeResult:
         yield from []  # app has no persistent widgets; screens handle layout
 
@@ -787,6 +796,9 @@ class IMApp(App):
             action="accept",
         )
         self._apply_friend_request_result(friends=friends, result=result)
+        if isinstance(result, FriendRequestHandled):
+            await self._refresh_open_conversation_lists()
+            return
         if not isinstance(result, FriendRequestHandled):
             log.warning(
                 "friend_request_accept_failed",
@@ -900,13 +912,7 @@ class IMApp(App):
         if push.event != FriendRequestStatus.ACCEPTED:
             return
 
-        await self._sync_conversations_from_server()
-        conversations = await get_conversations()
-        self._rehydrate_peer_usernames(conversations)
-
-        for screen in self.screen_stack:
-            if isinstance(screen, ConversationListScreen):
-                screen.populate(self._build_conversation_summaries(conversations))
+        await self._refresh_open_conversation_lists()
 
     async def _handle_incoming_message(self, payload: dict) -> None:
         try:
