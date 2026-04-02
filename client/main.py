@@ -8,8 +8,10 @@ import argparse
 import logging
 import logging.handlers
 import os
+import signal
 import sys
 from pathlib import Path
+from types import FrameType
 
 
 def _setup_logging(log_dir: Path, verbose: bool = False) -> None:
@@ -47,6 +49,39 @@ def _setup_logging(log_dir: Path, verbose: bool = False) -> None:
 
     log = logging.getLogger(__name__)
     log.debug("Logging initialised — file: %s", log_file)
+
+
+def _run_app_with_sigint_exit(app: object, log: logging.Logger) -> None:
+    """Request a clean Textual exit on Ctrl+C instead of bubbling KeyboardInterrupt."""
+
+    interrupted = False
+    previous_handler = signal.getsignal(signal.SIGINT)
+
+    def _handle_sigint(_signum: int, _frame: FrameType | None) -> None:
+        nonlocal interrupted
+        interrupted = True
+        exit_fn = getattr(app, "exit", None)
+        if callable(exit_fn):
+            exit_fn()
+
+    try:
+        signal.signal(signal.SIGINT, _handle_sigint)
+    except ValueError:
+        try:
+            app.run()
+        except KeyboardInterrupt:
+            log.info("Client shut down by user (KeyboardInterrupt)")
+        return
+
+    try:
+        app.run()
+    except KeyboardInterrupt:
+        log.info("Client shut down by user (KeyboardInterrupt)")
+    finally:
+        signal.signal(signal.SIGINT, previous_handler)
+
+    if interrupted:
+        log.info("Client shut down by user (KeyboardInterrupt)")
 
 
 def main() -> None:
@@ -126,16 +161,14 @@ def main() -> None:
 
     from client.ui.app import IMApp
 
-    try:
-        IMApp(
-            server_url=server,
-            username=username,
-            verify_tls=verify_tls,
-            ca_cert=ca_cert,
-            pin_sha256=args.pin_cert,
-        ).run()
-    except KeyboardInterrupt:
-        log.info("Client shut down by user (KeyboardInterrupt)")
+    app = IMApp(
+        server_url=server,
+        username=username,
+        verify_tls=verify_tls,
+        ca_cert=ca_cert,
+        pin_sha256=args.pin_cert,
+    )
+    _run_app_with_sigint_exit(app, log)
 
 
 if __name__ == "__main__":
