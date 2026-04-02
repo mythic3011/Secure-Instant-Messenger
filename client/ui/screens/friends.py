@@ -166,7 +166,7 @@ class FriendsScreen(Screen):
         with Vertical(id="hero"):
             yield Static("Friend requests", id="hero_title")
             yield Static(
-                "Incoming requests appear here as soon as the server pushes them.",
+                "Incoming requests load here when you open this screen and after each action.",
                 id="hero_subtitle",
             )
             yield Static("No incoming requests right now", id="pending_summary")
