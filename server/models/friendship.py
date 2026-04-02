@@ -12,9 +12,7 @@ class Friendship(Base):
     """Mutual friendship between two users (canonical order: user_a_id < user_b_id)."""
 
     __tablename__ = "friendships"
-    __table_args__ = (
-        CheckConstraint("user_a_id < user_b_id", name="ck_friendship_order"),
-    )
+    __table_args__ = (CheckConstraint("user_a_id < user_b_id", name="ck_friendship_order"),)
 
     user_a_id: Mapped[str] = mapped_column(
         String(32), ForeignKey("users.id", ondelete="CASCADE"), primary_key=True

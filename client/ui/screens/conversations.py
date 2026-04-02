@@ -17,10 +17,10 @@ from client.ui.contracts import ConversationSummaryViewModel, UIBanner
 class ConversationItem(ListItem):
     def __init__(self, summary: ConversationSummaryViewModel) -> None:
         super().__init__()
-        self.conv_id       = summary.conv_id
-        self.peer_id       = summary.peer_id
+        self.conv_id = summary.conv_id
+        self.peer_id = summary.peer_id
         self.peer_username = summary.peer_username
-        self.unread        = summary.unread_count
+        self.unread = summary.unread_count
         self.requires_action = summary.requires_action
         self.primary_banner = summary.primary_banner
 
@@ -137,8 +137,8 @@ class ConversationListScreen(Screen):
     class ConversationSelected(Message):
         def __init__(self, conv_id: str, peer_id: str, peer_username: str) -> None:
             super().__init__()
-            self.conv_id       = conv_id
-            self.peer_id       = peer_id
+            self.conv_id = conv_id
+            self.peer_id = peer_id
             self.peer_username = peer_username
 
     class OpenFriends(Message):
@@ -157,8 +157,8 @@ class ConversationListScreen(Screen):
         yield ListView(id="conv_list")
         with Horizontal(id="toolbar"):
             yield Button("⊕ Friends", variant="primary", id="btn_friends")
-            yield Button("⏻ Logout",  variant="default", id="btn_logout")
-            yield Button("✕ Exit",    variant="default", id="btn_exit")
+            yield Button("⏻ Logout", variant="default", id="btn_logout")
+            yield Button("✕ Exit", variant="default", id="btn_exit")
 
     def populate(self, conversations: list[ConversationSummaryViewModel]) -> None:
         """Fill the list from controller-provided summary view models."""

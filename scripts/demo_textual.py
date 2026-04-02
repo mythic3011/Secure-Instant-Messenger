@@ -17,5 +17,6 @@ class TestApp(App):
     def on_button_pressed(self, event: Button.Pressed) -> None:
         self.query_one("#test", Static).update("bruhhhhhh")
 
+
 if __name__ == "__main__":
     TestApp().run()

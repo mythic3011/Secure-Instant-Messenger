@@ -312,9 +312,7 @@ def load_sessions(
             send_chain=RatchetChain.from_dict(entry["send_chain"]),
             recv_chain=RatchetChain.from_dict(entry["recv_chain"]),
             replay_protector=ReplayProtector(state=entry.get("replay_state")),
-            identity_key_cache=IdentityKeyCache.from_dict(
-                entry.get("identity_key_cache", {})
-            ),
+            identity_key_cache=IdentityKeyCache.from_dict(entry.get("identity_key_cache", {})),
         )
 
     return result
