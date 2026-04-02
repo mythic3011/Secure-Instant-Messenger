@@ -6,7 +6,14 @@ from datetime import datetime
 from typing import Any
 
 from server.models.message import Message
-from shared.protocol import DeliveryStatus, MessageEnvelope, MessageType
+from shared.protocol import (
+    DeliveryStatus,
+    FriendRequestPushEvent,
+    FriendRequestPushPayload,
+    MessageEnvelope,
+    MessageType,
+    WsPushType,
+)
 
 
 def _unix_timestamp(value: datetime | int) -> int:
@@ -49,14 +56,14 @@ def build_message_payload(message: Message | MessageEnvelope) -> dict[str, Any]:
 
 def build_message_event(message: Message | MessageEnvelope) -> dict[str, Any]:
     return {
-        "type": MessageType.MESSAGE.value,
+        "type": WsPushType.MESSAGE.value,
         "payload": build_message_payload(message),
     }
 
 
 def build_friend_request_event(
     *,
-    event: str,
+    event: FriendRequestPushEvent,
     request_id: str,
     sender_id: str,
     recipient_id: str,
@@ -68,16 +75,15 @@ def build_friend_request_event(
     signal without introducing a new top-level websocket message type.
     """
 
-    payload: dict[str, Any] = {
-        "event": event,
-        "request_id": request_id,
-        "sender_id": sender_id,
-        "recipient_id": recipient_id,
-    }
-    if conversation_id is not None:
-        payload["conversation_id"] = conversation_id
+    payload = FriendRequestPushPayload(
+        event=event,
+        request_id=request_id,
+        sender_id=sender_id,
+        recipient_id=recipient_id,
+        conversation_id=conversation_id,
+    ).model_dump()
 
     return {
-        "type": "friend_request",
+        "type": WsPushType.FRIEND_REQUEST.value,
         "payload": payload,
     }
