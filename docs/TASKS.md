@@ -1,9 +1,9 @@
 # COMP3334 Project — Task Breakdown
 
-## Status: In Progress
+## Status: Submission Freeze / Maintainer Follow-up
 
 **Team:** 5 people (P1–P5)
-**Deadline:** April 2, 2026 16:59
+**Course Deadline:** April 8, 2026 07:50
 
 ---
 
@@ -62,25 +62,29 @@
 
 ---
 
-## Remaining Tasks 🔲
+## Current Priorities 🔲
 
-### Week 2 (Mar 17–23) — ✅ Done
+### Submission-facing deliverables
 
-| #   | Task                                                                           | Owner | Req | Status  |
-| --- | ------------------------------------------------------------------------------ | ----- | --- | ------- |
-| 1   | **Wire up `client/ui/app.py` event handlers** — login->conversation->chat flow | P4    | All | ✅ Done |
-| 2   | **`MessageItem` widget** — implemented inline in `client/ui/screens/chat.py`   | P4    | R23 | ✅ Done |
-| 3   | **P5 task assignment** — assign P5 to deploy testing + report §10              | All   | —   | ✅ Done |
+| #   | Task                                                 | Owner    | Status |
+| --- | ---------------------------------------------------- | -------- | ------ |
+| 1   | Finalize testing evidence pack and checklist (`#13`) | Assigned | Open   |
+| 2   | Finalize demo video script / recording package (`#14`) | Assigned | Open |
+| 3   | Finalize report package (`#15`)                      | Assigned | Open   |
 
-### Week 3 Priority (Mar 24–Apr 1)
+### Post-freeze follow-ups
 
-| #   | Task                                                                    | Owner | Req |
-| --- | ----------------------------------------------------------------------- | ----- | --- |
-| 4   | **End-to-end manual test** — two terminals, Alice+Bob full conversation | All   | All |
-| 5   | **Windows 11 deploy test** — follow DEPLOY.md on clean Windows VM       | P5    | §9  |
-| 6   | **Ubuntu deploy test** — follow DEPLOY.md on clean Ubuntu VM            | P5    | §9  |
-| 7   | **Report writing** — split by section (see below), merge Apr 1          | All   | §8  |
-| 8   | **Presentation video** — 10 min, record by Apr 1                        | All   | §10 |
+| #   | Task                                                                       | Owner      | Status |
+| --- | -------------------------------------------------------------------------- | ---------- | ------ |
+| 4   | Client-side friendship-change push handling + conversation refresh (`#28`) | Unassigned | Open   |
+| 5   | Server-side requester notification after friend acceptance (`#29`)         | Unassigned | Open   |
+| 6   | Avoid noisy KeyboardInterrupt traceback on Windows client shutdown (`#21`) | Unassigned | Open   |
+
+### Operational note
+
+The old mixed-scope friend-refresh issue was closed and replaced by `#28` and
+`#29` so server notification and client refresh logic can be reviewed
+separately.
 
 ---
 
@@ -104,7 +108,7 @@
 
 1. ~~**`client/ui/app.py` event handler naming**~~ — ✅ All handlers verified correct (`on_login_screen_login_success`, `on_conversation_list_screen_conversation_selected`, etc.).
 2. ~~**`make_key_signature` import**~~ — ✅ Imported directly from `client/crypto/session.py` in `app.py:31`. No issue.
-3. **TLS in dev** — verification stays enabled by default. Prefer trusting the dev cert with `--ca-cert`; use `--no-verify-tls` only as a local exception.
+3. **TLS in dev** — verification stays enabled by default. Standard local/demo path is `--ca-cert ./certs/server.crt`; use `--no-verify-tls` only as a temporary local fallback when a specific machine still rejects the generated cert.
 4. **pytest requires `--extra dev`** — run as `uv run --extra dev pytest` (pytest is in `[project.optional-dependencies].dev`).
 5. **Submission guardrails enabled** — `scripts/check_silent_excepts.py` and `scripts/check_stale_security_claims.py` run in pre-commit and `lint.yml`.
 
@@ -123,7 +127,7 @@ uv sync --extra dev
 uv run uvicorn server.main:app --host 0.0.0.0 --port 8443
 
 # Run client
-uv run python -m client.main --server https://localhost:8443
+uv run python -m client.main --server https://localhost:8443 --ca-cert ./certs/server.crt
 
 # Run all tests
 uv run --extra dev pytest -v

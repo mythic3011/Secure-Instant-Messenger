@@ -47,19 +47,20 @@ https://localhost:8443
 ### 4. Start the client in a new terminal
 
 ```bash
-uv run python -m client.main --server https://localhost:8443 --no-verify-tls
+uv run python -m client.main --server https://localhost:8443 --ca-cert ./certs/server.crt
 ```
 
-That is the current standard local/demo run path for this project.
+That is the standard local/demo run path for this project.
 
-> **TLS note:** Local `--ca-cert` / `--pin-cert` flow is currently tracked as a
-> local-demo certificate issue. Until that is fixed, use `--no-verify-tls` only
-> for local testing and demo runs.
+> **TLS note:** Bootstrap-generated demo certs include SAN entries for
+> `localhost` and `127.0.0.1`, so `--ca-cert ./certs/server.crt` is the
+> preferred local trust path. Use `--no-verify-tls` only as a temporary local
+> fallback on machines that still reject the cert.
 
 ### Standard path summary
 
 ```text
-bootstrap -> docker compose -> client connects to https://localhost:8443
+bootstrap -> docker compose -> client connects to https://localhost:8443 with --ca-cert ./certs/server.crt
 ```
 
 Do not mix Docker mode and ad-hoc direct server runs unless you are debugging.
@@ -107,6 +108,7 @@ source $HOME/.local/bin/env   # or restart terminal
 
 ```powershell
 powershell -c "irm https://astral.sh/uv/install.ps1 | iex"
+```
 ```
 
 ---
@@ -251,10 +253,10 @@ The authoritative schema path is the ORM model set created by
 
 Open a **new terminal** in the project directory.
 
-For local testing and demo, the current reliable path is:
+For local testing and demo, the standard path is:
 
 ```bash
-uv run python -m client.main --server https://localhost:8443 --no-verify-tls
+uv run python -m client.main --server https://localhost:8443 --ca-cert ./certs/server.crt
 ```
 
 Course tutorial materials (for example `docs/Tutorial/Tutorial.pdf`) are not
@@ -277,7 +279,7 @@ scripts\run-client.bat
 Manual equivalent:
 
 ```bash
-uv run python -m client.main --server https://localhost:8443 --no-verify-tls
+uv run python -m client.main --server https://localhost:8443 --ca-cert ./certs/server.crt
 ```
 
 You will be prompted for your username if not provided via `--username`.
@@ -392,7 +394,7 @@ Confirm these files exist:
 | Problem                               | Solution                                                                                                                   |
 | ------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
 | Port 8443 already in use              | Change `PORT=8443` in `.env.local` to another port, e.g. `8444`                                                            |
-| TLS certificate errors in client      | For current local/demo runs, use `--no-verify-tls`. `--ca-cert` / `--pin-cert` local trust flow is tracked separately in issue `#16`. |
+| TLS certificate errors in client      | Preferred local path is `--ca-cert ./certs/server.crt`. If that still fails on a specific machine, fall back to `--no-verify-tls` for local/demo only and capture the exact failure for follow-up. |
 | TOTP code rejected                    | Ensure your system clock is accurate. Ubuntu: `timedatectl set-ntp true`. Windows: Settings -> Time & Language -> Sync now |
 | Docker permission denied (Linux)      | Run `sudo usermod -aG docker $USER` then log out and back in                                                               |
 | `uv: command not found`               | Restart terminal after installing `uv`, or use `pip install -e .` instead                                                  |
