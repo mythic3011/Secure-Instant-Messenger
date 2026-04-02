@@ -635,6 +635,9 @@ class IMApp(App):
                     f"Registration failed: {_clean_validation_error_message(e.errors()[0]['msg'])}",
                 )
                 return
+            except Exception as e:
+                self._render_register_error(register_screen, f"Unexpected error: {e}")
+                return
 
         save_keystore(username, password, local_keys)
 
