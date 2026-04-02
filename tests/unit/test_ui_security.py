@@ -264,7 +264,13 @@ async def test_history_sync_processes_oldest_peer_messages_only(
     middle_peer = _history_envelope(message_id="msg-2", sender_id="bob-id", sent_at=200)
     oldest_peer = _history_envelope(message_id="msg-1", sender_id="bob-id", sent_at=100)
 
-    async def _fetch_messages(_conversation_id: str) -> FetchMessagesResponse:
+    async def _fetch_messages(
+        _conversation_id: str,
+        before_id: str | None = None,
+        limit: int = 50,
+    ) -> FetchMessagesResponse:
+        assert before_id is None
+        assert limit == 50
         return FetchMessagesResponse(
             messages=[newest_own, middle_peer, oldest_peer],
             has_more=False,
@@ -280,6 +286,59 @@ async def test_history_sync_processes_oldest_peer_messages_only(
     await app._sync_chat_history_from_server("conv-1")
 
     assert processed == ["msg-1", "msg-2"]
+
+
+@pytest.mark.asyncio
+async def test_history_sync_pages_all_messages_oldest_to_newest(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app = IMApp("https://example.test", "alice")
+    app._client = _as_any(SimpleNamespace(fetch_messages=None))
+    app._user_id = "alice-id"
+    processed: list[str] = []
+    cursors: list[str | None] = []
+
+    page_one = [
+        _history_envelope(message_id="msg-4", sender_id="alice-id", sent_at=400),
+        _history_envelope(message_id="msg-3", sender_id="bob-id", sent_at=300),
+    ]
+    page_two = [
+        _history_envelope(message_id="msg-2", sender_id="bob-id", sent_at=200),
+        _history_envelope(message_id="msg-1", sender_id="bob-id", sent_at=100),
+    ]
+
+    async def _fetch_messages(
+        _conversation_id: str,
+        before_id: str | None = None,
+        limit: int = 50,
+    ) -> FetchMessagesResponse:
+        assert limit == 50
+        cursors.append(before_id)
+        if before_id is None:
+            return FetchMessagesResponse(
+                messages=page_one,
+                has_more=True,
+                next_cursor="msg-3",
+            )
+        if before_id == "msg-3":
+            return FetchMessagesResponse(
+                messages=page_two,
+                has_more=False,
+                next_cursor=None,
+            )
+        msg = f"unexpected cursor: {before_id}"
+        raise AssertionError(msg)
+
+    async def _store_history(envelope: MessageEnvelope) -> None:
+        processed.append(envelope.id)
+
+    monkeypatch.setattr(app._client, "fetch_messages", _fetch_messages)
+    monkeypatch.setattr(app, "_store_fetched_history_envelope", _store_history)
+
+    await app._sync_chat_history_from_server("conv-1")
+
+    assert cursors == [None, "msg-3"]
+    assert processed == ["msg-1", "msg-2", "msg-3"]
 
 
 @pytest.mark.asyncio

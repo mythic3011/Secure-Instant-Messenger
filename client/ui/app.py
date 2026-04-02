@@ -370,28 +370,36 @@ class IMApp(App):
         if self._client is None:
             return
 
-        try:
-            response = await self._client.fetch_messages(conversation_id)
-        except IMClientError as exc:
-            log.warning(
-                "history_sync_fetch_failed",
-                conversation_id=conversation_id,
-                error=exc.detail,
-            )
-            return
-        except (httpx.ConnectError, httpx.TimeoutException, httpx.NetworkError) as exc:
-            log.warning(
-                "history_sync_fetch_network_error",
-                conversation_id=conversation_id,
-                error=str(exc),
-            )
-            return
+        pages: list[list[MessageEnvelope]] = []
+        before_id: str | None = None
+        while True:
+            try:
+                response = await self._client.fetch_messages(conversation_id, before_id=before_id)
+            except IMClientError as exc:
+                log.warning(
+                    "history_sync_fetch_failed",
+                    conversation_id=conversation_id,
+                    error=exc.detail,
+                )
+                return
+            except (httpx.ConnectError, httpx.TimeoutException, httpx.NetworkError) as exc:
+                log.warning(
+                    "history_sync_fetch_network_error",
+                    conversation_id=conversation_id,
+                    error=str(exc),
+                )
+                return
+            pages.append(list(response.messages))
+            if not response.has_more or response.next_cursor is None:
+                break
+            before_id = response.next_cursor
 
         my_id = self._user_id or self._username
-        for envelope in reversed(response.messages):
-            if envelope.sender_id == my_id:
-                continue
-            await self._store_fetched_history_envelope(envelope)
+        for page in reversed(pages):
+            for envelope in reversed(page):
+                if envelope.sender_id == my_id:
+                    continue
+                await self._store_fetched_history_envelope(envelope)
 
     async def _store_fetched_history_envelope(self, envelope: MessageEnvelope) -> None:
         if self._client is None:
