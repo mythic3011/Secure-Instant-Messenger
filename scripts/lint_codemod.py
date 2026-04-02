@@ -38,6 +38,12 @@ def _index(offsets: list[int], lineno: int, col: int) -> int:
     return offsets[lineno - 1] + col
 
 
+def _require_position(value: int | None, *, label: str) -> int:
+    if value is None:
+        raise ValueError(f"AST node missing required position: {label}")
+    return value
+
+
 def _apply_replacements(source: str, replacements: list[Replacement]) -> str:
     updated = source
     for replacement in sorted(replacements, key=lambda item: item.start, reverse=True):
@@ -71,7 +77,11 @@ def _rewrite_strenum_classes(source: str) -> RewriteResult:
             continue
 
         start = _index(offsets, first.lineno, first.col_offset)
-        end = _index(offsets, second.end_lineno, second.end_col_offset)
+        end = _index(
+            offsets,
+            _require_position(second.end_lineno, label="class base end_lineno"),
+            _require_position(second.end_col_offset, label="class base end_col_offset"),
+        )
         replacements.append(Replacement(start=start, end=end, text="StrEnum"))
         changed = True
 
@@ -123,16 +133,18 @@ def _import_insertion_offset(source: str) -> int:
     index = 0
     if body and isinstance(body[0], ast.Expr) and isinstance(body[0].value, ast.Constant):
         if isinstance(body[0].value.value, str):
-            index = offsets[body[0].end_lineno]
+            index = offsets[_require_position(body[0].end_lineno, label="docstring end_lineno")]
     future_imports = [
         node for node in body if isinstance(node, ast.ImportFrom) and node.module == "__future__"
     ]
     if future_imports:
-        return offsets[future_imports[-1].end_lineno]
+        return offsets[
+            _require_position(future_imports[-1].end_lineno, label="future import end_lineno")
+        ]
 
     imports = [node for node in body if isinstance(node, ast.Import | ast.ImportFrom)]
     if imports:
-        return offsets[imports[-1].end_lineno]
+        return offsets[_require_position(imports[-1].end_lineno, label="import end_lineno")]
 
     return index
 
@@ -166,7 +178,11 @@ def _rewrite_raise_from(source: str) -> RewriteResult:
             replacements.append(Replacement(start=header_start, end=header_end, text=new_header))
 
         raise_start = _index(offsets, only_stmt.lineno, only_stmt.col_offset)
-        raise_end = _index(offsets, only_stmt.end_lineno, only_stmt.end_col_offset)
+        raise_end = _index(
+            offsets,
+            _require_position(only_stmt.end_lineno, label="raise end_lineno"),
+            _require_position(only_stmt.end_col_offset, label="raise end_col_offset"),
+        )
         raise_text = source[raise_start:raise_end]
         if " from " in raise_text:
             continue

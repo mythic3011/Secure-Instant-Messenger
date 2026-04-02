@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from scripts import lint_codemod
 
 
@@ -141,7 +143,7 @@ def test_noop_ambiguous_mixed_class_bases() -> None:
     assert result.rules == ()
 
 
-def test_main_requires_explicit_python_paths(capsys: object) -> None:
+def test_main_requires_explicit_python_paths(capsys: pytest.CaptureFixture[str]) -> None:
     exit_code = lint_codemod.main(["--check", "README.md"])
 
     captured = capsys.readouterr()
@@ -160,7 +162,9 @@ def test_main_check_exit_code_is_one_when_changes_pending(tmp_path: Path) -> Non
     assert exit_code == 1
 
 
-def test_unsupported_case_reports_unchanged_not_error(tmp_path: Path, capsys: object) -> None:
+def test_unsupported_case_reports_unchanged_not_error(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
     target = _write(
         tmp_path / "unsupported.py",
         (

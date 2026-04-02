@@ -352,7 +352,7 @@ async def test_store_fetched_history_envelope_bootstraps_session_and_persists(
     app = IMApp("https://example.test", "alice")
     app._client = _as_any(SimpleNamespace(get_keys=None, send_ack=None))
     app._user_id = "alice-id"
-    app._local_keys = SimpleNamespace(identity_kp=object(), dh_kp=object())
+    app._local_keys = _as_any(SimpleNamespace(identity_kp=object(), dh_kp=object()))
     app._peer_usernames = {"bob-id": "bob"}
     persisted: list[str] = []
     saved_messages: list[dict[str, object]] = []
@@ -438,7 +438,7 @@ async def test_store_fetched_history_envelope_invalid_bootstrap_material_is_skip
     app = IMApp("https://example.test", "alice")
     app._client = _as_any(SimpleNamespace(get_keys=None, send_ack=None))
     app._user_id = "alice-id"
-    app._local_keys = SimpleNamespace(identity_kp=object(), dh_kp=object())
+    app._local_keys = _as_any(SimpleNamespace(identity_kp=object(), dh_kp=object()))
     app._peer_usernames = {"bob-id": "bob"}
     warning_events: list[tuple[tuple, dict]] = []
     saved_messages: list[dict[str, object]] = []
@@ -632,7 +632,7 @@ async def test_store_fetched_history_envelope_invalid_bundle_skips_without_side_
     app = IMApp("https://example.test", "alice")
     app._client = _as_any(SimpleNamespace(get_keys=None, send_ack=None))
     app._user_id = "alice-id"
-    app._local_keys = SimpleNamespace(identity_kp=object(), dh_kp=object())
+    app._local_keys = _as_any(SimpleNamespace(identity_kp=object(), dh_kp=object()))
     app._peer_usernames = {"bob-id": "bob"}
     warning_events: list[tuple[tuple, dict]] = []
     saved_messages: list[dict[str, object]] = []
@@ -690,7 +690,7 @@ async def test_store_fetched_history_envelope_rejects_mismatched_peer_binding(
     app = IMApp("https://example.test", "alice")
     app._client = _as_any(SimpleNamespace(get_keys=None, send_ack=None))
     app._user_id = "alice-id"
-    app._local_keys = SimpleNamespace(identity_kp=object(), dh_kp=object())
+    app._local_keys = _as_any(SimpleNamespace(identity_kp=object(), dh_kp=object()))
     app._peer_usernames = {"bob-id": "bob"}
     warning_events: list[tuple[tuple, dict]] = []
     acked: list[tuple[str, str]] = []
@@ -822,7 +822,7 @@ async def test_incoming_bootstrap_rejects_mismatched_peer_binding(
     warning_events: list[tuple[tuple, dict]] = []
     saved_messages: list[dict[str, object]] = []
     app._user_id = "alice-id"
-    app._local_keys = SimpleNamespace(identity_kp=object(), dh_kp=object())
+    app._local_keys = _as_any(SimpleNamespace(identity_kp=object(), dh_kp=object()))
     app._client = _as_any(SimpleNamespace(get_keys=None))
     app._peer_usernames["bob-id"] = "bob"
     app._screen_stack.append(_FakeLoginScreen())  # type: ignore[attr-defined]
