@@ -8,6 +8,7 @@ Handles all message events from screens and dispatches WebSocket pushes.
 from __future__ import annotations
 
 import base64
+import binascii
 from pathlib import Path
 from typing import Any, Protocol, cast, runtime_checkable
 
@@ -371,6 +372,185 @@ class IMApp(App):
                 state=self.build_screen_state("degraded", LOCAL_HISTORY_UNAVAILABLE),
                 messages=(),
             )
+
+    async def _sync_chat_history_from_server(self, conversation_id: str) -> None:
+        if self._client is None:
+            return
+
+        pages: list[list[MessageEnvelope]] = []
+        before_id: str | None = None
+        while True:
+            try:
+                response = await self._client.fetch_messages(conversation_id, before_id=before_id)
+            except IMClientError as exc:
+                log.warning(
+                    "history_sync_fetch_failed",
+                    conversation_id=conversation_id,
+                    error=exc.detail,
+                )
+                return
+            except (httpx.ConnectError, httpx.TimeoutException, httpx.NetworkError) as exc:
+                log.warning(
+                    "history_sync_fetch_network_error",
+                    conversation_id=conversation_id,
+                    error=str(exc),
+                )
+                return
+            pages.append(list(response.messages))
+            if not response.has_more or response.next_cursor is None:
+                break
+            before_id = response.next_cursor
+
+        my_id = self._user_id or self._username
+        for page in reversed(pages):
+            for envelope in reversed(page):
+                if envelope.sender_id == my_id:
+                    continue
+                await self._store_fetched_history_envelope(envelope)
+
+    async def _store_fetched_history_envelope(self, envelope: MessageEnvelope) -> None:
+        if self._client is None:
+            return
+
+        conv_id = envelope.conversation_id
+        peer_id = envelope.sender_id
+        my_id = self._user_id or self._username
+
+        state = self._sessions.get(conv_id)
+        if state is None:
+            if (
+                envelope.eph_pub_b64 is None
+                or envelope.conv_dh_pub_b64 is None
+                or self._local_keys is None
+            ):
+                log.warning(
+                    "history_sync_session_unavailable",
+                    conversation_id=conv_id,
+                    message_id=envelope.id,
+                )
+                return
+
+            peer_username = self._peer_usernames.get(peer_id)
+            if peer_username is None:
+                log.warning(
+                    "history_sync_missing_peer_username",
+                    conversation_id=conv_id,
+                    message_id=envelope.id,
+                    peer_id=peer_id,
+                )
+                return
+
+            try:
+                peer_bundle = await self._client.get_keys(peer_username)
+            except (httpx.ConnectError, httpx.TimeoutException, httpx.NetworkError) as exc:
+                log.warning(
+                    "history_sync_get_keys_network_error",
+                    conversation_id=conv_id,
+                    message_id=envelope.id,
+                    peer=peer_username,
+                    err=str(exc),
+                )
+                return
+            except IMClientError as exc:
+                log.warning(
+                    "history_sync_get_keys_failed",
+                    conversation_id=conv_id,
+                    message_id=envelope.id,
+                    peer=peer_username,
+                    err=str(exc),
+                )
+                return
+
+            try:
+                peer_identity_pub = base64.b64decode(peer_bundle.identity_pub_b64, validate=True)
+                peer_dh_pub = base64.b64decode(peer_bundle.dh_pub_b64, validate=True)
+                eph_pub = base64.b64decode(envelope.eph_pub_b64, validate=True)
+                conv_dh_pub = base64.b64decode(envelope.conv_dh_pub_b64, validate=True)
+                session_key = derive_session_key_as_responder(
+                    my_identity_kp=self._local_keys.identity_kp,
+                    my_dh_kp=self._local_keys.dh_kp,
+                    peer_identity_pub_bytes=peer_identity_pub,
+                    peer_dh_pub_bytes=peer_dh_pub,
+                    eph_pub_bytes=eph_pub,
+                    conv_dh_pub_bytes=conv_dh_pub,
+                    my_user_id=my_id,
+                    peer_user_id=peer_id,
+                    conversation_id=conv_id,
+                )
+                send_chain, recv_chain = derive_ratchet_chains(session_key.raw, initiator=False)
+            except (binascii.Error, ValueError) as exc:
+                log.warning(
+                    "history_sync_session_bootstrap_failed",
+                    conversation_id=conv_id,
+                    message_id=envelope.id,
+                    error=type(exc).__name__,
+                )
+                return
+            cache = IdentityKeyCache()
+            cache.check_and_update(peer_id, peer_identity_pub)
+            state = SessionState(
+                session_key=session_key,
+                send_chain=send_chain,
+                recv_chain=recv_chain,
+                replay_protector=ReplayProtector(),
+                identity_key_cache=cache,
+            )
+            self._sessions[conv_id] = state
+            self._persist_sessions()
+
+        try:
+            plaintext = decrypt_envelope(
+                recv_chain=state.recv_chain,
+                envelope=envelope,
+                replay_protector=state.replay_protector,
+            )
+        except SecurityError as exc:
+            log.warning(
+                "history_sync_message_rejected",
+                conversation_id=conv_id,
+                message_id=envelope.id,
+                error=type(exc).__name__,
+            )
+            return
+        except ValueError as exc:
+            log.warning(
+                "history_sync_message_malformed",
+                conversation_id=conv_id,
+                message_id=envelope.id,
+                err=str(exc),
+            )
+            return
+
+        try:
+            await save_message(
+                id=envelope.id,
+                conversation_id=conv_id,
+                sender_id=peer_id,
+                recipient_id=my_id,
+                counter=envelope.counter,
+                plaintext=plaintext,
+                sent_at=envelope.sent_at,
+                ttl_seconds=envelope.ttl_seconds,
+                delivery_status="delivered",
+            )
+        except (LocalStorageSecurityError, SecurityError) as exc:
+            log.warning(
+                "history_sync_store_failed",
+                conversation_id=conv_id,
+                message_id=envelope.id,
+                error=type(exc).__name__,
+            )
+            return
+
+        self._persist_sessions()
+        await upsert_conversation(
+            id=conv_id,
+            peer_id=peer_id,
+            peer_username=self._peer_usernames.get(peer_id, peer_id),
+            last_message_at=envelope.sent_at,
+            unread_count=0,
+        )
+        await self._send_delivery_ack(envelope.id, conv_id)
 
     async def send_message_state(
         self,
@@ -836,6 +1016,7 @@ class IMApp(App):
         chat = self.screen
         if not isinstance(chat, ChatScreen):
             return
+        await self._sync_chat_history_from_server(msg.conversation_id)
         result = await self.load_chat_history_state(msg.conversation_id)
         trust_state = self.trust_state_to_view_model(msg.conversation_id)
         if trust_state and trust_state.banner is not None:
@@ -1106,28 +1287,32 @@ class IMApp(App):
                         )
 
         # Send delivery ACK
-        if self._client:
-            try:
-                await self._client.send_ack(
-                    DeliveryAck(
-                        message_id=envelope.id,
-                        conversation_id=conv_id,
-                    )
-                )
-            except IMClientError as exc:
-                log.warning("delivery_ack_failed", message_id=envelope.id, err=str(exc))
-            except (httpx.ConnectError, httpx.TimeoutException, httpx.NetworkError) as exc:
-                log.warning(
-                    "delivery_ack_network_error",
-                    message_id=envelope.id,
-                    err=str(exc),
-                )
+        await self._send_delivery_ack(envelope.id, conv_id)
 
     async def _handle_ack(self, payload: dict) -> None:
         message_id = payload.get("message_id")
         if not message_id:
             return
         await update_delivery_status(message_id, "delivered")
+
+    async def _send_delivery_ack(self, message_id: str, conversation_id: str) -> None:
+        if self._client is None:
+            return
+        try:
+            await self._client.send_ack(
+                DeliveryAck(
+                    message_id=message_id,
+                    conversation_id=conversation_id,
+                )
+            )
+        except IMClientError as exc:
+            log.warning("delivery_ack_failed", message_id=message_id, err=str(exc))
+        except (httpx.ConnectError, httpx.TimeoutException, httpx.NetworkError) as exc:
+            log.warning(
+                "delivery_ack_network_error",
+                message_id=message_id,
+                err=str(exc),
+            )
 
     # ------------------------------------------------------------------
     # Session establishment helper
