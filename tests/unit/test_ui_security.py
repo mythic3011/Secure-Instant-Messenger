@@ -759,6 +759,45 @@ async def test_incoming_rekey_refresh_invalid_bundle_keeps_existing_session(
     assert warning_events
 
 
+def test_invalid_peer_bundle_log_key_uses_bounded_prefix_and_length() -> None:
+    app = IMApp("https://example.test", "alice")
+    bundle_a = SimpleNamespace(
+        identity_pub_b64="A" * 128 + "tail-a",
+        dh_pub_b64="B" * 128 + "tail-a",
+        key_sig_b64="C" * 128 + "tail-a",
+    )
+    bundle_b = SimpleNamespace(
+        identity_pub_b64="A" * 128 + "tail-b",
+        dh_pub_b64="B" * 128 + "tail-b",
+        key_sig_b64="C" * 128 + "tail-b",
+    )
+    bundle_c = SimpleNamespace(
+        identity_pub_b64="A" * 127,
+        dh_pub_b64="B" * 127,
+        key_sig_b64="C" * 127,
+    )
+
+    assert app._invalid_peer_bundle_log_key(
+        peer_id="bob-id", bundle=bundle_a
+    ) == app._invalid_peer_bundle_log_key(peer_id="bob-id", bundle=bundle_b)
+    assert app._invalid_peer_bundle_log_key(
+        peer_id="bob-id", bundle=bundle_a
+    ) != app._invalid_peer_bundle_log_key(peer_id="bob-id", bundle=bundle_c)
+
+
+def test_should_log_invalid_peer_bundle_evicts_oldest_entry() -> None:
+    app = IMApp("https://example.test", "alice")
+    keys = [f"key-{index}" for index in range(257)]
+
+    for key in keys:
+        assert app._should_log_invalid_peer_bundle(key) is True
+
+    assert len(app._invalid_peer_bundle_log_keys) == 256
+    assert "key-0" not in app._invalid_peer_bundle_log_keys
+    assert "key-256" in app._invalid_peer_bundle_log_keys
+    assert app._should_log_invalid_peer_bundle("key-1") is False
+
+
 @pytest.mark.asyncio
 async def test_security_ui_paths_do_not_silently_swallow(monkeypatch: pytest.MonkeyPatch) -> None:
     app = IMApp("https://example.test", "alice")

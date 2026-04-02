@@ -161,6 +161,26 @@ def test_validate_and_decode_peer_bundle_rejects_malformed_base64(
 @pytest.mark.parametrize(
     ("field", "value"),
     [
+        ("identity_pub_b64", "A" * 45),
+        ("dh_pub_b64", "A" * 45),
+        ("key_sig_b64", "A" * 89),
+    ],
+)
+def test_validate_and_decode_peer_bundle_rejects_oversized_encoded_fields(
+    field: str,
+    value: str,
+) -> None:
+    bundle = _public_key_bundle()
+    payload = bundle.model_dump()
+    payload[field] = value
+
+    with pytest.raises(MalformedPeerBundleError, match="too long"):
+        validate_and_decode_peer_bundle(PublicKeyBundle.model_construct(**payload))
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
         ("identity_pub_b64", 123),
         ("dh_pub_b64", None),
         ("key_sig_b64", MappingProxyType({})),

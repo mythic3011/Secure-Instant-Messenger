@@ -22,6 +22,7 @@ import base64
 import binascii
 import hashlib
 import logging
+import math
 import os
 from collections import deque
 from dataclasses import dataclass, field
@@ -239,8 +240,14 @@ def _require_non_empty_string(value: object, field_name: str) -> str:
     return value
 
 
+def _max_base64_len_for_decoded_size(decoded_len: int) -> int:
+    return 4 * math.ceil(decoded_len / 3)
+
+
 def _decode_bundle_field(value: object, field_name: str, expected_len: int) -> bytes:
     encoded = _require_non_empty_string(value, field_name)
+    if len(encoded) > _max_base64_len_for_decoded_size(expected_len):
+        raise MalformedPeerBundleError(f"{field_name} is too long")
     try:
         decoded = base64.b64decode(encoded, validate=True)
     except (ValueError, binascii.Error) as exc:

@@ -10,6 +10,7 @@ from __future__ import annotations
 import base64
 import binascii
 import hashlib
+from collections import OrderedDict
 from pathlib import Path
 from typing import Any, Protocol, cast, runtime_checkable
 
@@ -156,6 +157,8 @@ MESSAGE_SEND_FAILED_BANNER = UIBanner(
     title="Send failed",
     message="The message could not be sent.",
 )
+_INVALID_BUNDLE_LOG_KEY_LIMIT = 256
+_INVALID_BUNDLE_HASH_FIELD_CHARS = 128
 PEER_BUNDLE_BLOCKED_BANNER = UIBanner(
     code="message_send_blocked",
     severity="error",
@@ -213,7 +216,7 @@ class IMApp(App):
         self._counters: dict[str, int] = {}
         # peer_id -> username cache (for get_keys lookups)
         self._peer_usernames: dict[str, str] = {}
-        self._invalid_peer_bundle_log_keys: set[str] = set()
+        self._invalid_peer_bundle_log_keys: OrderedDict[str, None] = OrderedDict()
 
     def _persist_sessions(self) -> None:
         if self._local_keys and self._password and self._username:
@@ -328,8 +331,20 @@ class IMApp(App):
         for field_name in ("identity_pub_b64", "dh_pub_b64", "key_sig_b64"):
             value = getattr(bundle, field_name, "")
             if isinstance(value, str):
-                digest.update(value.encode())
+                prefix = value[:_INVALID_BUNDLE_HASH_FIELD_CHARS]
+                digest.update(field_name.encode())
+                digest.update(str(len(value)).encode())
+                digest.update(prefix.encode())
         return digest.hexdigest()
+
+    def _should_log_invalid_peer_bundle(self, key: str) -> bool:
+        if key in self._invalid_peer_bundle_log_keys:
+            self._invalid_peer_bundle_log_keys.move_to_end(key)
+            return False
+        self._invalid_peer_bundle_log_keys[key] = None
+        if len(self._invalid_peer_bundle_log_keys) > _INVALID_BUNDLE_LOG_KEY_LIMIT:
+            self._invalid_peer_bundle_log_keys.popitem(last=False)
+        return True
 
     def _log_invalid_peer_bundle(
         self,
@@ -343,9 +358,8 @@ class IMApp(App):
         peer_username: str | None = None,
     ) -> None:
         log_key = self._invalid_peer_bundle_log_key(peer_id=peer_id, bundle=bundle)
-        if log_key in self._invalid_peer_bundle_log_keys:
+        if not self._should_log_invalid_peer_bundle(log_key):
             return
-        self._invalid_peer_bundle_log_keys.add(log_key)
         log.warning(
             event,
             conversation_id=conversation_id,
