@@ -95,6 +95,8 @@ from client.use_cases.open_conversation import (
 )
 from shared.protocol import (
     DeliveryAck,
+    FriendRequestPushPayload,
+    FriendRequestStatus,
     MessageEnvelope,
     RegisterRequest,
 )
@@ -885,6 +887,26 @@ class IMApp(App):
             await self._handle_incoming_message(msg.get("payload", {}))
         elif msg_type == "ack":
             await self._handle_ack(msg.get("payload", {}))
+        elif msg_type == "friend_request":
+            await self._handle_friend_request_push(msg.get("payload", {}))
+
+    async def _handle_friend_request_push(self, payload: dict[str, Any]) -> None:
+        try:
+            push = FriendRequestPushPayload.model_validate(payload)
+        except ValidationError as exc:
+            log.warning("friend_request_push_invalid", err=str(exc))
+            return
+
+        if push.event != FriendRequestStatus.ACCEPTED:
+            return
+
+        await self._sync_conversations_from_server()
+        conversations = await get_conversations()
+        self._rehydrate_peer_usernames(conversations)
+
+        for screen in self.screen_stack:
+            if isinstance(screen, ConversationListScreen):
+                screen.populate(self._build_conversation_summaries(conversations))
 
     async def _handle_incoming_message(self, payload: dict) -> None:
         try:
