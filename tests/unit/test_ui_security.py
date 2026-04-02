@@ -25,6 +25,7 @@ from client.ui.contracts import (
 )
 from client.ui.screens.chat import ChatScreen
 from client.ui.screens.conversations import ConversationItem, ConversationListScreen
+from client.ui.screens.friends import FriendsScreen
 from client.ui.screens.login import LoginScreen
 from client.ui.screens.settings import SettingsScreen
 from client.use_cases.login import LoginSucceeded
@@ -695,6 +696,90 @@ def test_conversation_summary_refresh_updates_banner_and_secondary_text_together
 
     assert status.value == "Security review required"
     assert detail.value == "Identity key changed"
+
+
+def test_conversation_list_summary_reports_counts() -> None:
+    screen = ConversationListScreen("alice")
+    conversations = [
+        ConversationSummaryViewModel(
+            conv_id="conv-1",
+            peer_id="bob-id",
+            peer_username="bob",
+            unread_count=3,
+            requires_action=False,
+        ),
+        ConversationSummaryViewModel(
+            conv_id="conv-2",
+            peer_id="carol-id",
+            peer_username="carol",
+            unread_count=0,
+            requires_action=True,
+        ),
+    ]
+
+    assert (
+        screen.render_summary_line(conversations)
+        == "2 conversations  ·  3 unread  ·  1 needs review"
+    )
+
+
+def test_conversation_list_empty_state_guides_next_step() -> None:
+    screen = ConversationListScreen("alice")
+
+    assert (
+        screen.render_empty_state()
+        == "No conversations yet.\nAccepted friends will appear here immediately."
+    )
+
+
+def test_friends_screen_pending_summary_reports_count() -> None:
+    screen = FriendsScreen()
+    requests = [
+        {"id": "req-1", "sender_name": "bob"},
+        {"id": "req-2", "sender_name": "carol"},
+    ]
+
+    assert (
+        screen.render_pending_summary(requests)
+        == "2 incoming requests  ·  respond to start chatting"
+    )
+
+
+def test_friends_screen_empty_state_guides_sending_request() -> None:
+    screen = FriendsScreen()
+
+    assert (
+        screen.render_empty_state()
+        == "No pending requests.\nSend an invite below to start a secure conversation."
+    )
+
+
+def test_friends_screen_populate_pending_updates_summary_and_empty_state(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    screen = FriendsScreen()
+    pending_list = _FakeListView()
+    pending_summary = _FakeStatic()
+    empty_state = _FakeStatic()
+    widgets = {
+        "#pending_list": pending_list,
+        "#pending_summary": pending_summary,
+        "#pending_empty": empty_state,
+    }
+    monkeypatch.setattr(screen, "query_one", lambda selector, *_args, **_kwargs: widgets[selector])
+
+    screen.populate_pending([])
+    assert pending_summary.value == "No incoming requests right now"
+    assert (
+        empty_state.value
+        == "No pending requests.\nSend an invite below to start a secure conversation."
+    )
+    assert pending_list.items == []
+
+    screen.populate_pending([{"id": "req-1", "sender_name": "bob"}])
+    assert pending_summary.value == "1 incoming request  ·  respond to start chatting"
+    assert empty_state.value == ""
+    assert len(pending_list.items) == 1
 
 
 def test_verified_warning_persists_until_reverified() -> None:
