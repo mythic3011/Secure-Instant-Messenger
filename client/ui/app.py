@@ -1288,6 +1288,7 @@ class IMApp(App):
             peer_username = self._peer_usernames.get(peer_id)
             client = self._client
             if peer_username and client:
+                peer_bundle: object | None = None
                 try:
                     peer_bundle = await client.get_keys(peer_username)
                     verified_bundle = validate_decode_and_bind_peer_bundle(
