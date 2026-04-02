@@ -436,7 +436,6 @@ async def test_friends_pending_load_propagates_unexpected_screen_contract_failur
         await app.on_friends_screen__load_pending(SimpleNamespace())
 
 
-@pytest.mark.asyncio
 async def test_register_request_logs_and_returns_on_expected_error_widget_miss(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -533,8 +532,9 @@ async def test_register_request_propagates_unexpected_register_failure(
             SimpleNamespace(username="alice", password=TEST_ACCOUNT_PASSWORD)
         )
 
+    assert screen.error.value == ""
 
-@pytest.mark.asyncio
+
 async def test_logout_propagates_unexpected_client_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -553,7 +553,7 @@ async def test_logout_propagates_unexpected_client_error(
     monkeypatch.setattr(app, "pop_screen", lambda: popped.append(True))
 
     with pytest.raises(ValueError, match="unexpected bug"):
-        await app.on_conversation_list_screen_logout(SimpleNamespace())
+        await app.on_conversation_list_screen_logout(ConversationListScreen.Logout())
 
     assert exited == [(None, None, None)]
     assert app._client is None
