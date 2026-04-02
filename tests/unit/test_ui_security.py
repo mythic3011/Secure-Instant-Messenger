@@ -539,12 +539,14 @@ async def test_logout_propagates_unexpected_client_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     app = IMApp("https://example.test", "alice")
+    exited: list[tuple[object, ...]] = []
     popped: list[bool] = []
 
     async def _raise_logout() -> None:
         raise ValueError("unexpected bug")
 
     async def _noop_aexit(*_args) -> None:
+        exited.append(_args)
         return None
 
     app._client = _as_any(SimpleNamespace(logout=_raise_logout, __aexit__=_noop_aexit))
@@ -553,6 +555,8 @@ async def test_logout_propagates_unexpected_client_error(
     with pytest.raises(ValueError, match="unexpected bug"):
         await app.on_conversation_list_screen_logout(SimpleNamespace())
 
+    assert exited == [(None, None, None)]
+    assert app._client is None
     assert popped == []
 
 

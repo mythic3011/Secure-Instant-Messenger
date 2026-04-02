@@ -688,12 +688,18 @@ class IMApp(App):
 
     async def on_conversation_list_screen_logout(self, msg: ConversationListScreen.Logout) -> None:
         if self._client:
+            unexpected_logout_error: Exception | None = None
             try:
                 await self._client.logout()
             except (IMClientError, httpx.HTTPError) as exc:
                 log.warning("logout_failed", err=str(exc))
-            await self._client.__aexit__(None, None, None)
-            self._client = None
+            except Exception as exc:
+                unexpected_logout_error = exc
+            finally:
+                await self._client.__aexit__(None, None, None)
+                self._client = None
+            if unexpected_logout_error is not None:
+                raise unexpected_logout_error
         self._persist_sessions()
         self.pop_screen()
 
