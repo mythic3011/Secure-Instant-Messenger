@@ -15,6 +15,7 @@ import httpx
 import structlog
 from pydantic import ValidationError
 from textual.app import App, ComposeResult
+from textual.css.query import NoMatches
 from textual.widgets import Static
 
 from client.api.client import IMClient, IMClientError
@@ -202,6 +203,13 @@ class IMApp(App):
     def _persist_sessions(self) -> None:
         if self._local_keys and self._password and self._username:
             save_sessions(self._username, self._password, self._sessions)
+
+    @staticmethod
+    def _render_register_error(screen: Any, message: str) -> None:
+        try:
+            screen.query_one("#error", Static).update(message)
+        except NoMatches as exc:
+            log.warning("register_error_render_failed", err=str(exc))
 
     def _derive_and_set_storage_key(self, username: str, password: str) -> None:
         keystore_path = Path.home() / ".comp3334im" / username / "keystore.json"
@@ -588,6 +596,7 @@ class IMApp(App):
     async def on_register_screen_register_request(self, msg: Any) -> None:
         username = msg.username
         password = msg.password
+        register_screen = self.screen
 
         identity_kp = IdentityKeypair.generate()
         dh_kp = DHKeypair.generate()
@@ -612,35 +621,22 @@ class IMApp(App):
                     )
                 )
             except (httpx.ConnectError, httpx.TimeoutException, httpx.NetworkError) as e:
-                try:
-                    self.screen.query_one("#error", Static).update(
-                        f"Cannot reach server — is it running? ({type(e).__name__})"
-                    )
-                except Exception as exc:  # allow-silent-except
-                    log.warning("register_error_render_failed", err=str(exc))
+                self._render_register_error(
+                    register_screen,
+                    f"Cannot reach server — is it running? ({type(e).__name__})",
+                )
                 return
             except IMClientError as e:
-                try:
-                    self.screen.query_one("#error", Static).update(
-                        f"Registration failed: {e.detail}"
-                    )
-                except Exception as exc:  # allow-silent-except
-                    log.warning("register_error_render_failed", err=str(exc))
+                self._render_register_error(register_screen, f"Registration failed: {e.detail}")
                 return
             except ValidationError as e:
-                try:
-                    self.screen.query_one("#error", Static).update(
-                        "Registration failed: "
-                        f"{_clean_validation_error_message(e.errors()[0]['msg'])}"
-                    )
-                except Exception as exc:  # allow-silent-except
-                    log.warning("register_error_render_failed", err=str(exc))
+                self._render_register_error(
+                    register_screen,
+                    f"Registration failed: {_clean_validation_error_message(e.errors()[0]['msg'])}",
+                )
                 return
             except Exception as e:
-                try:
-                    self.screen.query_one("#error", Static).update(f"Unexpected error: {e}")
-                except Exception as exc:  # allow-silent-except
-                    log.warning("register_error_render_failed", err=str(exc))
+                self._render_register_error(register_screen, f"Unexpected error: {e}")
                 return
 
         save_keystore(username, password, local_keys)
@@ -697,7 +693,7 @@ class IMApp(App):
         if self._client:
             try:
                 await self._client.logout()
-            except Exception as exc:  # allow-silent-except
+            except (IMClientError, httpx.HTTPError) as exc:
                 log.warning("logout_failed", err=str(exc))
             await self._client.__aexit__(None, None, None)
             self._client = None
