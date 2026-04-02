@@ -553,7 +553,7 @@ async def test_logout_propagates_unexpected_client_error(
     monkeypatch.setattr(app, "pop_screen", lambda: popped.append(True))
 
     with pytest.raises(ValueError, match="unexpected bug"):
-        await app.on_conversation_list_screen_logout(SimpleNamespace())
+        await app.on_conversation_list_screen_logout(ConversationListScreen.Logout())
 
     assert exited == [(None, None, None)]
     assert app._client is None
