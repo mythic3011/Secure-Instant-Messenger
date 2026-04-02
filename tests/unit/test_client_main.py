@@ -2,12 +2,26 @@ from __future__ import annotations
 
 import logging
 import signal
-from types import SimpleNamespace
+from collections.abc import Callable
 from typing import Any
 
 import pytest
 
 from client import main as client_main
+
+
+class _FakeSignalExitApp:
+    def __init__(self, *, run: Callable[[], None], exit: Callable[[], None] | None = None) -> None:
+        self._run = run
+        self._exit = exit or (lambda: None)
+        self.exited = False
+
+    def run(self) -> None:
+        self._run()
+
+    def exit(self) -> None:
+        self.exited = True
+        self._exit()
 
 
 def test_run_app_with_sigint_exit_requests_clean_exit_and_restores_handler(
@@ -16,18 +30,12 @@ def test_run_app_with_sigint_exit_requests_clean_exit_and_restores_handler(
     previous_handler = signal.default_int_handler
     installed_handlers: list[Any] = []
     restored_handlers: list[Any] = []
-    app = SimpleNamespace()
     log_messages: list[str] = []
-
-    def _exit() -> None:
-        app.exited = True
 
     def _run() -> None:
         installed_handlers[0](signal.SIGINT, None)
 
-    app.exit = _exit
-    app.run = _run
-    app.exited = False
+    app = _FakeSignalExitApp(run=_run)
 
     monkeypatch.setattr(client_main.signal, "getsignal", lambda _sig: previous_handler)
 
@@ -45,19 +53,18 @@ def test_run_app_with_sigint_exit_requests_clean_exit_and_restores_handler(
 
     assert app.exited is True
     assert restored_handlers == [previous_handler]
-    assert log_messages == ["Client shut down by user (KeyboardInterrupt)"]
+    assert log_messages == ["Client shut down by user (SIGINT/Ctrl+C)"]
 
 
 def test_run_app_with_sigint_exit_falls_back_to_keyboardinterrupt_when_signal_install_fails(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    app = SimpleNamespace()
     log_messages: list[str] = []
 
     def _run() -> None:
         raise KeyboardInterrupt
 
-    app.run = _run
+    app = _FakeSignalExitApp(run=_run)
 
     def _signal(*_args: Any, **_kwargs: Any) -> None:
         raise ValueError("signal only works in main thread")
@@ -77,19 +84,13 @@ def test_run_app_with_sigint_exit_restores_handler_when_run_raises_keyboardinter
     previous_handler = signal.default_int_handler
     installed_handlers: list[Any] = []
     restored_handlers: list[Any] = []
-    app = SimpleNamespace()
     log_messages: list[str] = []
-
-    def _exit() -> None:
-        app.exited = True
 
     def _run() -> None:
         installed_handlers[0](signal.SIGINT, None)
         raise KeyboardInterrupt
 
-    app.exit = _exit
-    app.run = _run
-    app.exited = False
+    app = _FakeSignalExitApp(run=_run)
 
     monkeypatch.setattr(client_main.signal, "getsignal", lambda _sig: previous_handler)
 

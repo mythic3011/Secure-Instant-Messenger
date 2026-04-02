@@ -87,7 +87,7 @@ def _run_app_with_sigint_exit(app: _SignalExitApp, log: logging.Logger) -> None:
         signal.signal(signal.SIGINT, previous_handler)
 
     if interrupted and not shutdown_logged:
-        log.info("Client shut down by user (KeyboardInterrupt)")
+        log.info("Client shut down by user (SIGINT/Ctrl+C)")
 
 
 def main() -> None:
