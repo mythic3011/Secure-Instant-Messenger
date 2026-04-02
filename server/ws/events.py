@@ -6,7 +6,14 @@ from datetime import datetime
 from typing import Any
 
 from server.models.message import Message
-from shared.protocol import DeliveryStatus, MessageEnvelope, MessageType
+from shared.protocol import (
+    DeliveryStatus,
+    FriendRequestPushPayload,
+    FriendRequestStatus,
+    MessageEnvelope,
+    MessageType,
+    WsPushType,
+)
 
 
 def _unix_timestamp(value: datetime | int) -> int:
@@ -49,6 +56,34 @@ def build_message_payload(message: Message | MessageEnvelope) -> dict[str, Any]:
 
 def build_message_event(message: Message | MessageEnvelope) -> dict[str, Any]:
     return {
-        "type": MessageType.MESSAGE.value,
+        "type": WsPushType.MESSAGE.value,
         "payload": build_message_payload(message),
+    }
+
+
+def build_friend_request_event(
+    *,
+    event: FriendRequestStatus,
+    request_id: str,
+    sender_id: str,
+    recipient_id: str,
+    conversation_id: str | None = None,
+) -> dict[str, Any]:
+    """Build a payload for the existing ``friend_request`` websocket branch.
+
+    ``event="accepted"`` gives the client an explicit post-commit refresh
+    signal without introducing a new top-level websocket message type.
+    """
+
+    payload = FriendRequestPushPayload(
+        event=event,
+        request_id=request_id,
+        sender_id=sender_id,
+        recipient_id=recipient_id,
+        conversation_id=conversation_id,
+    ).model_dump()
+
+    return {
+        "type": WsPushType.FRIEND_REQUEST.value,
+        "payload": payload,
     }

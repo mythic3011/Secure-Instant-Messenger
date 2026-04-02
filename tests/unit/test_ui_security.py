@@ -28,6 +28,7 @@ from client.ui.screens.conversations import ConversationItem, ConversationListSc
 from client.ui.screens.login import LoginScreen
 from client.ui.screens.settings import SettingsScreen
 from client.use_cases.login import LoginSucceeded
+from shared.protocol import FriendRequestStatus
 from tests.secrets import TEST_ACCOUNT_PASSWORD
 
 
@@ -978,6 +979,60 @@ async def test_show_conversations_syncs_server_rows_and_rehydrates_peer_map(
     assert app._peer_usernames == {"bob-id": "bob"}
     assert len(pushed_screens) == 1
     assert len(populated) == 1
+
+
+@pytest.mark.asyncio
+async def test_friend_request_accept_push_refreshes_existing_conversation_lists(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app = IMApp("https://example.test", "alice")
+    screen = ConversationListScreen("alice")
+    app._screen_stack.append(screen)  # type: ignore[attr-defined]
+
+    synced = 0
+    populated: list[list[ConversationSummaryViewModel]] = []
+
+    async def _sync_conversations() -> None:
+        nonlocal synced
+        synced += 1
+
+    async def _get_conversations() -> list[dict[str, object]]:
+        return [
+            {
+                "id": "conv-1",
+                "peer_id": "bob-id",
+                "peer_username": "bob",
+                "last_message_at": 123,
+                "unread_count": 0,
+            }
+        ]
+
+    monkeypatch.setattr(app, "_sync_conversations_from_server", _sync_conversations)
+    monkeypatch.setattr(app_module, "get_conversations", _get_conversations)
+    monkeypatch.setattr(
+        ConversationListScreen,
+        "populate",
+        lambda self, conversations: populated.append(conversations),
+    )
+
+    await app._on_ws_message(
+        {
+            "type": "friend_request",
+            "payload": {
+                "event": FriendRequestStatus.ACCEPTED.value,
+                "request_id": "req-1",
+                "sender_id": "alice-id",
+                "recipient_id": "bob-id",
+                "conversation_id": "conv-1",
+            },
+        }
+    )
+
+    assert synced == 1
+    assert app._peer_usernames == {"bob-id": "bob"}
+    assert len(populated) == 1
+    assert len(populated[0]) == 1
+    assert populated[0][0].conv_id == "conv-1"
 
 
 async def _async_value(value: object) -> object:

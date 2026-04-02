@@ -90,6 +90,13 @@ class MessageType(StrEnum):
     SYSTEM = "system"  # key change warning, etc.
 
 
+class WsPushType(StrEnum):
+    MESSAGE = "message"
+    ACK = "ack"
+    FRIEND_REQUEST = "friend_request"
+    SYSTEM = "system"
+
+
 # ---------------------------------------------------------------------------
 # Auth
 # ---------------------------------------------------------------------------
@@ -270,7 +277,7 @@ class DeliveryAck(BaseModel):
 
 
 class WsPush(BaseModel):
-    type: Literal["message", "ack", "friend_request", "system"]
+    type: WsPushType
     payload: dict  # one of the above models, serialised
 
 
@@ -294,6 +301,14 @@ class FriendRequestOut(BaseModel):
     recipient_id: str
     status: FriendRequestStatus
     created_at: int
+
+
+class FriendRequestPushPayload(BaseModel):
+    event: FriendRequestStatus
+    request_id: str
+    sender_id: str
+    recipient_id: str
+    conversation_id: str | None = None
 
 
 # ---------------------------------------------------------------------------

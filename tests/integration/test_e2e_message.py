@@ -545,6 +545,72 @@ async def test_online_push_does_not_mark_delivered_before_ack(
 
 @pytest.mark.anyio
 @pytest.mark.asyncio
+async def test_accept_friend_request_pushes_accept_event_to_requester(
+    app_client: AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = app_client
+
+    _alice_id_kp, _alice_dh_kp, alice_totp = await _register(
+        client, "alice_accept_push", TEST_ACCOUNT_PASSWORD
+    )
+    _bob_id_kp, _bob_dh_kp, bob_totp = await _register(
+        client, "bob_accept_push", TEST_ACCOUNT_PASSWORD
+    )
+
+    alice_token = await _login(client, "alice_accept_push", TEST_ACCOUNT_PASSWORD, alice_totp)
+    bob_token = await _login(client, "bob_accept_push", TEST_ACCOUNT_PASSWORD, bob_totp)
+
+    pushed_events: list[tuple[str, dict[str, object]]] = []
+
+    async def _push_to_user(user_id: str, payload: dict[str, object]) -> bool:
+        pushed_events.append((user_id, payload))
+        return True
+
+    import server.api.friends as friends_api
+
+    monkeypatch.setattr(friends_api, "push_to_user", _push_to_user)
+
+    resp = await client.post(
+        "/v1/friends/request",
+        json={"recipient_username": "bob_accept_push"},
+        headers=_auth(alice_token),
+    )
+    assert resp.status_code == 201, resp.text
+    request_id = resp.json()["id"]
+    alice_user_id = resp.json()["sender_id"]
+    bob_user_id = resp.json()["recipient_id"]
+
+    resp = await client.put(
+        f"/v1/friends/request/{request_id}",
+        json={"action": "accept"},
+        headers=_auth(bob_token),
+    )
+    assert resp.status_code == 204, resp.text
+
+    resp = await client.get("/v1/conversations", headers=_auth(alice_token))
+    assert resp.status_code == 200, resp.text
+    conversation_id = resp.json()["conversations"][0]["id"]
+
+    assert pushed_events == [
+        (
+            alice_user_id,
+            {
+                "type": "friend_request",
+                "payload": {
+                    "event": "accepted",
+                    "request_id": request_id,
+                    "sender_id": alice_user_id,
+                    "recipient_id": bob_user_id,
+                    "conversation_id": conversation_id,
+                },
+            },
+        )
+    ]
+
+
+@pytest.mark.anyio
+@pytest.mark.asyncio
 async def test_fetch_messages_rejects_cursor_from_another_conversation(
     app_client: AsyncClient,
 ) -> None:
