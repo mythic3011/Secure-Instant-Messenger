@@ -205,6 +205,13 @@ class IMApp(App):
             save_sessions(self._username, self._password, self._sessions)
 
     @staticmethod
+    def _rehydrate_outbound_counters(sessions: dict[str, SessionState]) -> dict[str, int]:
+        return {
+            conversation_id: state.next_outbound_counter
+            for conversation_id, state in sessions.items()
+        }
+
+    @staticmethod
     def _render_register_error(screen: Any, message: str) -> None:
         try:
             screen.query_one("#error", Static).update(message)
@@ -477,6 +484,7 @@ class IMApp(App):
         self._local_keys = result.local_keys
         self._user_id = result.user_id
         self._sessions = result.sessions
+        self._counters = self._rehydrate_outbound_counters(result.sessions)
         return True
 
     @staticmethod
@@ -974,6 +982,7 @@ class IMApp(App):
                 recv_chain=recv_chain,
                 replay_protector=ReplayProtector(),
                 identity_key_cache=cache,
+                next_outbound_counter=0,
             )
             self._sessions[conv_id] = state
             self._persist_sessions()

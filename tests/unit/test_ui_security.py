@@ -1255,7 +1255,31 @@ async def test_login_waits_for_initial_websocket_startup_before_showing_conversa
     await task
 
     assert showed_conversations is True
-    assert app._client is fake_client
+
+
+def test_apply_login_result_rehydrates_counters_idempotently() -> None:
+    app = IMApp("https://example.test", "alice")
+    sessions = {
+        "conv-1": SimpleNamespace(next_outbound_counter=3),
+        "conv-2": SimpleNamespace(next_outbound_counter=0),
+    }
+    result = LoginSucceeded(
+        client=_as_any(object()),
+        username="alice",
+        password=TEST_ACCOUNT_PASSWORD,
+        user_id="alice-id",
+        local_keys=object(),
+        sessions=cast(Any, sessions),
+    )
+
+    applied_once = app._apply_login_result(result=result, login_screen=_FakeLoginScreen())
+    counters_after_first_apply = dict(app._counters)
+    applied_twice = app._apply_login_result(result=result, login_screen=_FakeLoginScreen())
+
+    assert applied_once is True
+    assert applied_twice is True
+    assert counters_after_first_apply == {"conv-1": 3, "conv-2": 0}
+    assert app._counters == {"conv-1": 3, "conv-2": 0}
 
 
 @pytest.mark.asyncio
