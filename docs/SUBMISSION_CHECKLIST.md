@@ -37,6 +37,8 @@ It is submission-facing and should stay aligned with `docs/Project.pdf`.
 - [ ] `docs/DEPLOY.md` can be followed from a clean Ubuntu machine
 - [ ] The deployment guide explicitly tells the reader how the database is initialized or imported
 - [ ] The deployment guide does not assume pre-installed project-specific tools beyond what it instructs the user to install
+- [ ] `README.md` and `docs/DEPLOY.md` agree on the standard local/demo run path
+- [ ] Any local TLS fallback wording is clearly marked as troubleshooting-only, not the standard path
 
 ## Report
 
@@ -61,5 +63,7 @@ It is submission-facing and should stay aligned with `docs/Project.pdf`.
 ## Final Gate
 
 - [ ] Submission-facing code batch is committed
+- [ ] Fresh test / verification command outputs are captured as evidence instead of relying on stale hard-coded counts
+- [ ] Remaining post-freeze issues are tracked with clean issue / PR scope
 - [ ] Submission artifacts are present and named correctly
 - [ ] `TeamID.zip` is built from the intended final contents

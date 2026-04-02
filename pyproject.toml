@@ -53,10 +53,17 @@ testpaths = ["tests"]
 [tool.ruff]
 target-version = "py312"
 line-length = 100
+extend-exclude = ["docs/Tutorial/Tutorial1.ipynb"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "S", "B"]
 ignore = ["S101"]   # allow assert in tests
+
+[tool.ruff.lint.per-file-ignores]
+"server/api/*.py" = ["B008"]  # FastAPI Depends(...) is the canonical route pattern here
+"docs/Tutorial/*.ipynb" = ["E501"]  # teaching notebook prose/examples are not app-code style gates
+"tests/integration/test_e2e_message.py" = ["S108"]  # fixed tmp DB path is an intentional local test fixture
+"tests/integration/test_offline_queue.py" = ["S108"]  # fixed tmp DB path is an intentional local test fixture
 
 [tool.mypy]
 python_version = "3.12"

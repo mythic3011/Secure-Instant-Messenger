@@ -8,8 +8,16 @@ import argparse
 import logging
 import logging.handlers
 import os
+import signal
 import sys
 from pathlib import Path
+from types import FrameType
+from typing import Protocol
+
+
+class _SignalExitApp(Protocol):
+    def run(self) -> None: ...
+    def exit(self) -> None: ...
 
 
 def _setup_logging(log_dir: Path, verbose: bool = False) -> None:
@@ -28,10 +36,12 @@ def _setup_logging(log_dir: Path, verbose: bool = False) -> None:
         encoding="utf-8",
     )
     fh.setLevel(logging.DEBUG)
-    fh.setFormatter(logging.Formatter(
-        "%(asctime)s %(levelname)-8s %(name)s: %(message)s",
-        datefmt="%Y-%m-%dT%H:%M:%S",
-    ))
+    fh.setFormatter(
+        logging.Formatter(
+            "%(asctime)s %(levelname)-8s %(name)s: %(message)s",
+            datefmt="%Y-%m-%dT%H:%M:%S",
+        )
+    )
     root.addHandler(fh)
 
     # Console handler — WARNING by default, DEBUG if --verbose
@@ -47,26 +57,83 @@ def _setup_logging(log_dir: Path, verbose: bool = False) -> None:
     log.debug("Logging initialised — file: %s", log_file)
 
 
+def _run_app_with_sigint_exit(app: _SignalExitApp, log: logging.Logger) -> None:
+    """Request a clean Textual exit on Ctrl+C instead of bubbling KeyboardInterrupt."""
+
+    interrupted = False
+    shutdown_logged = False
+    previous_handler = signal.getsignal(signal.SIGINT)
+
+    def _handle_sigint(_signum: int, _frame: FrameType | None) -> None:
+        nonlocal interrupted
+        interrupted = True
+        app.exit()
+
+    try:
+        signal.signal(signal.SIGINT, _handle_sigint)
+    except ValueError:
+        try:
+            app.run()
+        except KeyboardInterrupt:
+            log.info("Client shut down by user (KeyboardInterrupt)")
+        return
+
+    try:
+        app.run()
+    except KeyboardInterrupt:
+        log.info("Client shut down by user (KeyboardInterrupt)")
+        shutdown_logged = True
+    finally:
+        signal.signal(signal.SIGINT, previous_handler)
+
+    if interrupted and not shutdown_logged:
+        log.info("Client shut down by user (SIGINT/Ctrl+C)")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="COMP3334 Secure IM Client")
-    parser.add_argument("--server", default=None, help="Server base URL (or set SERVER_URL env)")
-    parser.add_argument("--username", default=None, help="Username (prompted if omitted or from USERNAME env)")
-    parser.add_argument("--log-dir", default=None, help="Directory for log files (default: ./logs)")
-    parser.add_argument("--verbose", "-v", action="store_true", help="Print DEBUG logs to stderr as well")
     parser.add_argument(
-        "--verify-tls", dest="verify_tls", action="store_true", default=True,
+        "--server",
+        default=None,
+        help="Server base URL (or set SERVER_URL env)",
+    )
+    parser.add_argument(
+        "--username",
+        default=None,
+        help="Username (prompted if omitted or from USERNAME env)",
+    )
+    parser.add_argument(
+        "--log-dir",
+        default=None,
+        help="Directory for log files (default: ./logs)",
+    )
+    parser.add_argument(
+        "--verbose",
+        "-v",
+        action="store_true",
+        help="Print DEBUG logs to stderr as well",
+    )
+    parser.add_argument(
+        "--verify-tls",
+        dest="verify_tls",
+        action="store_true",
+        default=True,
         help="Verify server TLS certificate (default: enabled)",
     )
     parser.add_argument(
-        "--no-verify-tls", dest="verify_tls", action="store_false",
+        "--no-verify-tls",
+        dest="verify_tls",
+        action="store_false",
         help="Disable TLS certificate verification (insecure; use --ca-cert instead)",
     )
     parser.add_argument(
-        "--ca-cert", default=None,
+        "--ca-cert",
+        default=None,
         help="Path to CA cert or self-signed cert to trust (use instead of --no-verify-tls)",
     )
     parser.add_argument(
-        "--pin-cert", default=None,
+        "--pin-cert",
+        default=None,
         help="Expected SHA256 fingerprint of server cert (hex, 64 chars) for cert pinning",
     )
     args = parser.parse_args()
@@ -91,19 +158,23 @@ def main() -> None:
     ca_cert = args.ca_cert
 
     log = logging.getLogger(__name__)
-    log.info("Starting client — server=%s username=%s verify_tls=%s", server, username or "(none)", verify_tls)
+    log.info(
+        "Starting client — server=%s username=%s verify_tls=%s",
+        server,
+        username or "(none)",
+        verify_tls,
+    )
 
     from client.ui.app import IMApp
-    try:
-        IMApp(
-            server_url=server,
-            username=username,
-            verify_tls=verify_tls,
-            ca_cert=ca_cert,
-            pin_sha256=args.pin_cert,
-        ).run()
-    except KeyboardInterrupt:
-        log.info("Client shut down by user (KeyboardInterrupt)")
+
+    app = IMApp(
+        server_url=server,
+        username=username,
+        verify_tls=verify_tls,
+        ca_cert=ca_cert,
+        pin_sha256=args.pin_cert,
+    )
+    _run_app_with_sigint_exit(app, log)
 
 
 if __name__ == "__main__":

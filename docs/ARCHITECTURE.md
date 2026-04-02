@@ -523,21 +523,34 @@ project/
 │   └── protocol.py                # Pydantic wire models and protocol enums
 ├── tests/
 │   ├── unit/
-│   │   ├── test_crypto.py         # 22 tests: Ed25519, X25519, AES-GCM, replay, fingerprint
-│   │   └── test_auth.py           # 10 tests: Argon2id, bearer tokens, TOTP encryption
+│   │   ├── test_crypto.py         # crypto primitives, replay, fingerprint
+│   │   ├── test_auth.py           # Argon2id, bearer tokens, TOTP encryption
+│   │   ├── test_client_tls.py     # TLS startup / verification behavior
+│   │   ├── test_ui_security.py    # UI security-state regressions
+│   │   └── ...                    # use-case, websocket, config, review helpers
 │   ├── integration/
-│   │   ├── test_e2e_message.py    # 2 tests: register->login->friend->send->decrypt + replay
-│   │   └── test_offline_queue.py  # 2 tests: offline queue store-and-forward + replay
+│   │   ├── test_e2e_message.py    # register -> login -> friend -> send -> decrypt + replay
+│   │   └── test_offline_queue.py  # offline queue store-and-forward + replay
 │   ├── security/
-│   │   └── test_replay_attack.py  # 13 tests: replay, ciphertext tampering, session key
-│   └── ui/
-│       └── test_textual.py        # TUI smoke test
+│   │   └── test_replay_attack.py  # replay, ciphertext tampering, session key
+│   └── secrets.py                 # shared test-only placeholder values
 ├── scripts/
 │   ├── bootstrap-env.sh           # auto-generates .env.local + TLS cert
-│   ├── docker-entrypoint.sh       # auto-generates self-signed TLS cert at container start
-│   ├── test-deploy.sh             # local deploy smoke test (mirrors CI)
+│   ├── bootstrap-env.bat          # Windows bootstrap entrypoint
+│   ├── bootstrap_env.py           # bootstrap helper for .env.local values
+│   ├── run-server.sh/.bat         # direct local server helper
+│   ├── run-client.sh/.bat         # direct local client helper
+│   ├── install-git-hooks.sh       # repo-owned git hook installer
+│   ├── git-hooks/pre-commit       # pre-commit hook wrapper
 │   └── seed.py                    # seeds alice/bob/charlie/dave with friendships + messages
-├── .github/workflows/ci.yml       # CI: unit+integration tests + Docker build + health check
+├── .github/workflows/
+│   ├── ci.yml                     # unit/integration checks + focused review helpers
+│   ├── lint.yml                   # Ruff + repo guardrails
+│   ├── security.yml               # Bandit, pip-audit, detect-secrets
+│   ├── submission-e2e.yml         # submission-facing smoke coverage
+│   ├── autolabel.yml              # PR path labels
+│   └── issue-autolabel.yml        # issue triage labels
+├── .pre-commit-config.yaml        # Ruff + hygiene hooks
 ├── docker-compose.yml
 ├── Dockerfile.server              # multi-stage, non-root, python:3.12.9-slim
 ├── .env.example
@@ -570,23 +583,36 @@ application at startup rather than by applying `server/migrations/001_init.sql`.
 
 ## 13. CI / Deploy
 
-### 13.1 GitHub Actions (`.github/workflows/ci.yml`)
+### 13.1 GitHub Actions
 
-Two jobs run on every push/PR to `main`:
+The current repository uses a split workflow model rather than a single all-in-one CI file:
 
-| Job            | What it does                                                                                          |
-| -------------- | ----------------------------------------------------------------------------------------------------- |
-| `test`         | `uv sync --extra dev` -> `pytest -v --tb=short`                                                        |
-| `docker-build` | bootstrap env -> `docker compose up --build -d` -> wait for healthcheck -> `curl /health` -> teardown |
+| Workflow                     | Purpose |
+| ---------------------------- | ------- |
+| `.github/workflows/ci.yml`   | unit/integration verification and focused review helpers |
+| `.github/workflows/lint.yml` | Ruff plus repository guardrails such as stale-claim / silent-except checks |
+| `.github/workflows/security.yml` | Bandit, pip-audit, and secret scanning |
+| `.github/workflows/submission-e2e.yml` | submission-facing smoke coverage on supported platforms |
+| `.github/workflows/autolabel.yml` | pull request path labels |
+| `.github/workflows/issue-autolabel.yml` | issue triage labels |
 
-### 13.2 Local Deploy Test (`scripts/test-deploy.sh`)
+The repo also includes a minimal `.pre-commit-config.yaml` so the same hygiene
+checks can run locally before push.
 
-Mirrors CI locally. Checks prerequisites, runs tests, builds Docker image, waits for health, smoke-tests `/health`, tears down.
+### 13.2 Local verification model
+
+Local verification is intentionally command-based rather than a single monolithic
+script. The common baseline is:
 
 ```bash
-./scripts/test-deploy.sh           # full test including Docker
-./scripts/test-deploy.sh --no-docker   # tests only, skip Docker
+uv sync --extra dev
+uv run --extra dev pytest -v
+UV_CACHE_DIR=$PWD/.uv-cache uv run python scripts/check_silent_excepts.py
+UV_CACHE_DIR=$PWD/.uv-cache uv run python scripts/check_stale_security_claims.py
 ```
+
+This keeps the source of truth aligned with the repo workflows and avoids a
+separate deploy-smoke script drifting from CI behavior.
 
 ### 13.3 Server Config (env vars)
 
@@ -606,16 +632,16 @@ Mirrors CI locally. Checks prerequisites, runs tests, builds Docker image, waits
 - Base image: `python:3.12.9-slim` (pinned — no `latest`)
 - Multi-stage build: `deps` stage resolves packages, `runtime` stage copies only the venv
 - Non-root user: `appuser:appgroup`
-- TLS cert auto-generated at container startup via `docker-entrypoint.sh` if not mounted
+- Local demo certs are generated by the bootstrap helpers and mounted via Compose
 - SQLite data persisted via named volume `server_data:/app/data`
-- Health check: HTTPS GET `https://localhost:8443/health` with SSL verify disabled (self-signed)
+- Health check: HTTPS GET `https://localhost:8443/health`
 
 ---
 
 _Threat model: HbC server + network attacker + malicious users_
 _Crypto: X25519 + HKDF-SHA256 + AES-256-GCM + Ed25519 + Argon2id + TOTP_
 _All primitives from well-reviewed libraries — no custom crypto_
-_Last updated: 2026-03-13_
+_Last updated: 2026-04-02_
 
 ---
 

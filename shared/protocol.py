@@ -90,6 +90,13 @@ class MessageType(StrEnum):
     SYSTEM = "system"  # key change warning, etc.
 
 
+class WsPushType(StrEnum):
+    MESSAGE = "message"
+    ACK = "ack"
+    FRIEND_REQUEST = "friend_request"
+    SYSTEM = "system"
+
+
 # ---------------------------------------------------------------------------
 # Auth
 # ---------------------------------------------------------------------------
@@ -106,7 +113,7 @@ class RegisterRequest(BaseModel):
     @field_validator("password")
     @classmethod
     def validate_password_complexity(cls, v: str) -> str:
-        """Enforce mixed-case, digit, and special-character password rules."""
+        """Enforce password complexity with mixed case, digit, and symbol."""
         if not any(c.isupper() for c in v):
             raise ValueError("Password must contain at least one uppercase letter")
         if not any(c.islower() for c in v):
@@ -270,7 +277,7 @@ class DeliveryAck(BaseModel):
 
 
 class WsPush(BaseModel):
-    type: Literal["message", "ack", "friend_request", "system"]
+    type: WsPushType
     payload: dict  # one of the above models, serialised
 
 

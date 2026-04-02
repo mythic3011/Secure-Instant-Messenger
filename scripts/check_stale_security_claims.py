@@ -55,8 +55,7 @@ RULES = (
 def _is_excluded(path: Path) -> bool:
     as_posix = path.as_posix()
     return any(
-        as_posix.startswith(excluded + "/") or as_posix == excluded
-        for excluded in EXCLUDED_DIRS
+        as_posix.startswith(excluded + "/") or as_posix == excluded for excluded in EXCLUDED_DIRS
     )
 
 
@@ -87,7 +86,8 @@ def iter_candidate_files(selected_paths: list[str] | None = None) -> list[Path]:
         if not base.exists():
             continue
         files.extend(
-            path for path in base.rglob("*")
+            path
+            for path in base.rglob("*")
             if path.is_file()
             and path.suffix in INCLUDED_SUFFIXES
             and ".venv" not in path.parts

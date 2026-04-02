@@ -165,9 +165,7 @@ class TestReplayAttack:
             ttl_seconds=None,
             sent_at=int(time.time()),
         )
-        decrypt_envelope(
-            recv_chain=bob_recv, envelope=env1, replay_protector=replay_protector
-        )
+        decrypt_envelope(recv_chain=bob_recv, envelope=env1, replay_protector=replay_protector)
 
         # Deliver many more to advance the window past replay threshold
         for i in range(6, 6 + 60):
@@ -181,9 +179,7 @@ class TestReplayAttack:
                 ttl_seconds=None,
                 sent_at=int(time.time()),
             )
-            decrypt_envelope(
-                recv_chain=bob_recv, envelope=env, replay_protector=replay_protector
-            )
+            decrypt_envelope(recv_chain=bob_recv, envelope=env, replay_protector=replay_protector)
 
         # Now try to replay counter=5 (outside window) — must be rejected
         env_replay = build_and_encrypt(
@@ -370,9 +366,9 @@ class TestSessionKeyDerivation:
 
     def test_both_sides_derive_same_key(self, session_keys):
         alice_session, bob_session, _, _, _, _, _ = session_keys
-        assert (
-            alice_session.raw == bob_session.raw
-        ), "Alice and Bob derived DIFFERENT session keys — protocol error!"
+        assert alice_session.raw == bob_session.raw, (
+            "Alice and Bob derived DIFFERENT session keys — protocol error!"
+        )
 
     def test_different_conversations_different_keys(self, alice_keys, bob_keys):
         alice_id_kp, alice_dh_kp = alice_keys
@@ -400,6 +396,6 @@ class TestSessionKeyDerivation:
             conversation_id=conv2,
         )
 
-        assert (
-            sess1.raw != sess2.raw
-        ), "Different conversations must produce different session keys!"
+        assert sess1.raw != sess2.raw, (
+            "Different conversations must produce different session keys!"
+        )

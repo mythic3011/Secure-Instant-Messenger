@@ -24,12 +24,8 @@ class Message(Base):
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)  # UUID v4
     conversation_id: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
-    sender_id: Mapped[str] = mapped_column(
-        String(32), ForeignKey("users.id"), nullable=False
-    )
-    recipient_id: Mapped[str] = mapped_column(
-        String(32), ForeignKey("users.id"), nullable=False
-    )
+    sender_id: Mapped[str] = mapped_column(String(32), ForeignKey("users.id"), nullable=False)
+    recipient_id: Mapped[str] = mapped_column(String(32), ForeignKey("users.id"), nullable=False)
     counter: Mapped[int] = mapped_column(Integer, nullable=False)
     nonce_b64: Mapped[str] = mapped_column(Text, nullable=False)
     ciphertext_b64: Mapped[str] = mapped_column(Text, nullable=False)

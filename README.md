@@ -87,11 +87,12 @@ below first and only read later sections if something fails.
 4. **Start the client in a new terminal**:
 
    ```bash
-   uv run python -m client.main --server https://localhost:8443 --no-verify-tls
+   uv run python -m client.main --server https://localhost:8443 --ca-cert ./certs/server.crt
    ```
 
-   This is the current reliable local/demo path. Local certificate trust via
-   `--ca-cert` is tracked separately in issue `#16`.
+   This is the standard local/demo path. Use `--no-verify-tls` only as a
+   temporary local fallback if a specific machine still rejects the generated
+   demo certificate.
 
 Do not mix Docker mode and ad-hoc direct local server runs in the same session
 unless you are explicitly debugging config or database paths.
@@ -124,6 +125,18 @@ uv run --extra dev pytest tests/integration/ -v
 Avoid hard-coding a test total in submission docs. Use fresh `pytest` output as
 the evidence source because the suite evolves during fixes/refactors.
 
+## Repo workflow
+
+The repository now uses lightweight governance automation for reviewability:
+
+- PRs should use the built-in PR template and state behavior / contract impact explicitly.
+- PR auto-labeling applies path labels such as `client`, `server`, `ui`,
+  `security`, `docs`, `testing`, `ci`, and `mixed-scope`.
+- Issue auto-labeling applies a narrower inferred label set for triage.
+
+If app behavior or a wire / state contract changes, update or add the related
+tests before requesting review again.
+
 ## Alternative run paths
 
 ### Docker mode
@@ -133,14 +146,14 @@ terminal.
 
 ```bash
 docker compose up --build
-uv run python -m client.main --server https://localhost:8443 --no-verify-tls
+uv run python -m client.main --server https://localhost:8443 --ca-cert ./certs/server.crt
 ```
 
 ### Direct server run (debug only)
 
 ```bash
 uv run python -m server.main
-uv run python -m client.main --server https://localhost:8443 --no-verify-tls
+uv run python -m client.main --server https://localhost:8443 --ca-cert ./certs/server.crt
 ```
 
 This is not the primary grading/demo path.
@@ -163,8 +176,8 @@ See `docs/DEPLOY.md` for step-by-step instructions for Windows 11 and Ubuntu.
 | ----------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
 | `PermissionError: '/app/data'`                        | Stale `.env.local` with container path. Delete it or remove the `DATABASE_URL` line and restart.                                            |
 | TLS cert files missing                                | Run `bash scripts/bootstrap-env.sh` or `scripts\bootstrap-env.bat`, then restart the server.                                                 |
-| `ConnectionError` / "Cannot reach server" with Docker | Confirm Docker is running, then use `https://localhost:8443`. For local/demo use, the current reliable client path is `--no-verify-tls`.    |
-| `--ca-cert` or `--pin-cert` still fails locally       | Known local/demo cert issue: bootstrap-generated cert trust is tracked in issue `#16`. Use `--no-verify-tls` only as the current workaround. |
+| `ConnectionError` / "Cannot reach server" with Docker | Confirm Docker is running, then use `https://localhost:8443` with `--ca-cert ./certs/server.crt` as the standard local client path. |
+| `--ca-cert` or `--pin-cert` still fails locally       | Local trust should work with the SAN-enabled demo certs. If a specific machine still rejects them, use `--no-verify-tls` only as a temporary local fallback and capture the failure details. |
 
 **Data directory contract:**
 
