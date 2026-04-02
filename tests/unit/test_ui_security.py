@@ -287,13 +287,14 @@ async def test_store_fetched_history_envelope_bootstraps_session_and_persists(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     app = IMApp("https://example.test", "alice")
-    app._client = _as_any(SimpleNamespace(get_keys=None))
+    app._client = _as_any(SimpleNamespace(get_keys=None, send_ack=None))
     app._user_id = "alice-id"
     app._local_keys = SimpleNamespace(identity_kp=object(), dh_kp=object())
     app._peer_usernames = {"bob-id": "bob"}
     persisted: list[str] = []
     saved_messages: list[dict[str, object]] = []
     upserted: list[dict[str, object]] = []
+    acked: list[tuple[str, str]] = []
 
     envelope = _history_envelope(
         message_id="msg-1",
@@ -316,7 +317,11 @@ async def test_store_fetched_history_envelope_bootstraps_session_and_persists(
     async def _upsert_conversation(**kwargs) -> None:
         upserted.append(kwargs)
 
+    async def _send_ack(ack) -> None:
+        acked.append((ack.message_id, ack.conversation_id))
+
     monkeypatch.setattr(app._client, "get_keys", _get_keys)
+    monkeypatch.setattr(app._client, "send_ack", _send_ack)
     monkeypatch.setattr(
         app_module,
         "derive_session_key_as_responder",
@@ -354,6 +359,59 @@ async def test_store_fetched_history_envelope_bootstraps_session_and_persists(
     ]
     assert upserted[0]["peer_username"] == "bob"
     assert persisted == ["persist", "persist"]
+    assert acked == [("msg-1", "conv-1")]
+
+
+@pytest.mark.asyncio
+async def test_store_fetched_history_envelope_invalid_bootstrap_material_is_skipped(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app = IMApp("https://example.test", "alice")
+    app._client = _as_any(SimpleNamespace(get_keys=None, send_ack=None))
+    app._user_id = "alice-id"
+    app._local_keys = SimpleNamespace(identity_kp=object(), dh_kp=object())
+    app._peer_usernames = {"bob-id": "bob"}
+    warning_events: list[tuple[tuple, dict]] = []
+    saved_messages: list[dict[str, object]] = []
+    acked: list[tuple[str, str]] = []
+
+    envelope = _history_envelope(
+        message_id="msg-bad",
+        sender_id="bob-id",
+        counter=0,
+        sent_at=100,
+        eph_pub_b64="***not-base64***",
+        conv_dh_pub_b64=base64.b64encode(b"peer-conv").decode(),
+    )
+
+    async def _get_keys(_peer_username: str):
+        return SimpleNamespace(
+            identity_pub_b64=base64.b64encode(b"peer-identity").decode(),
+            dh_pub_b64=base64.b64encode(b"peer-dh").decode(),
+        )
+
+    async def _save_message(**kwargs) -> None:
+        saved_messages.append(kwargs)
+
+    async def _send_ack(ack) -> None:
+        acked.append((ack.message_id, ack.conversation_id))
+
+    monkeypatch.setattr(app._client, "get_keys", _get_keys)
+    monkeypatch.setattr(app._client, "send_ack", _send_ack)
+    monkeypatch.setattr(app_module, "save_message", _save_message)
+    monkeypatch.setattr(
+        app_module.log,
+        "warning",
+        lambda *args, **kwargs: warning_events.append((args, kwargs)),
+    )
+
+    await app._store_fetched_history_envelope(envelope)
+
+    assert "conv-1" not in app._sessions
+    assert saved_messages == []
+    assert acked == []
+    assert warning_events
+    assert warning_events[0][0][0] == "history_sync_session_bootstrap_failed"
 
 
 @pytest.mark.asyncio

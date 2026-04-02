@@ -8,6 +8,7 @@ Handles all message events from screens and dispatches WebSocket pushes.
 from __future__ import annotations
 
 import base64
+import binascii
 from pathlib import Path
 from typing import Any, Protocol, cast, runtime_checkable
 
@@ -445,23 +446,31 @@ class IMApp(App):
                 )
                 return
 
-            peer_identity_pub = base64.b64decode(peer_bundle.identity_pub_b64)
-            peer_dh_pub = base64.b64decode(peer_bundle.dh_pub_b64)
-            eph_pub = base64.b64decode(envelope.eph_pub_b64)
-            conv_dh_pub = base64.b64decode(envelope.conv_dh_pub_b64)
-
-            session_key = derive_session_key_as_responder(
-                my_identity_kp=self._local_keys.identity_kp,
-                my_dh_kp=self._local_keys.dh_kp,
-                peer_identity_pub_bytes=peer_identity_pub,
-                peer_dh_pub_bytes=peer_dh_pub,
-                eph_pub_bytes=eph_pub,
-                conv_dh_pub_bytes=conv_dh_pub,
-                my_user_id=my_id,
-                peer_user_id=peer_id,
-                conversation_id=conv_id,
-            )
-            send_chain, recv_chain = derive_ratchet_chains(session_key.raw, initiator=False)
+            try:
+                peer_identity_pub = base64.b64decode(peer_bundle.identity_pub_b64, validate=True)
+                peer_dh_pub = base64.b64decode(peer_bundle.dh_pub_b64, validate=True)
+                eph_pub = base64.b64decode(envelope.eph_pub_b64, validate=True)
+                conv_dh_pub = base64.b64decode(envelope.conv_dh_pub_b64, validate=True)
+                session_key = derive_session_key_as_responder(
+                    my_identity_kp=self._local_keys.identity_kp,
+                    my_dh_kp=self._local_keys.dh_kp,
+                    peer_identity_pub_bytes=peer_identity_pub,
+                    peer_dh_pub_bytes=peer_dh_pub,
+                    eph_pub_bytes=eph_pub,
+                    conv_dh_pub_bytes=conv_dh_pub,
+                    my_user_id=my_id,
+                    peer_user_id=peer_id,
+                    conversation_id=conv_id,
+                )
+                send_chain, recv_chain = derive_ratchet_chains(session_key.raw, initiator=False)
+            except (binascii.Error, ValueError) as exc:
+                log.warning(
+                    "history_sync_session_bootstrap_failed",
+                    conversation_id=conv_id,
+                    message_id=envelope.id,
+                    error=type(exc).__name__,
+                )
+                return
             cache = IdentityKeyCache()
             cache.check_and_update(peer_id, peer_identity_pub)
             state = SessionState(
@@ -526,6 +535,7 @@ class IMApp(App):
             last_message_at=envelope.sent_at,
             unread_count=0,
         )
+        await self._send_delivery_ack(envelope.id, conv_id)
 
     async def send_message_state(
         self,
@@ -1260,28 +1270,32 @@ class IMApp(App):
                         )
 
         # Send delivery ACK
-        if self._client:
-            try:
-                await self._client.send_ack(
-                    DeliveryAck(
-                        message_id=envelope.id,
-                        conversation_id=conv_id,
-                    )
-                )
-            except IMClientError as exc:
-                log.warning("delivery_ack_failed", message_id=envelope.id, err=str(exc))
-            except (httpx.ConnectError, httpx.TimeoutException, httpx.NetworkError) as exc:
-                log.warning(
-                    "delivery_ack_network_error",
-                    message_id=envelope.id,
-                    err=str(exc),
-                )
+        await self._send_delivery_ack(envelope.id, conv_id)
 
     async def _handle_ack(self, payload: dict) -> None:
         message_id = payload.get("message_id")
         if not message_id:
             return
         await update_delivery_status(message_id, "delivered")
+
+    async def _send_delivery_ack(self, message_id: str, conversation_id: str) -> None:
+        if self._client is None:
+            return
+        try:
+            await self._client.send_ack(
+                DeliveryAck(
+                    message_id=message_id,
+                    conversation_id=conversation_id,
+                )
+            )
+        except IMClientError as exc:
+            log.warning("delivery_ack_failed", message_id=message_id, err=str(exc))
+        except (httpx.ConnectError, httpx.TimeoutException, httpx.NetworkError) as exc:
+            log.warning(
+                "delivery_ack_network_error",
+                message_id=message_id,
+                err=str(exc),
+            )
 
     # ------------------------------------------------------------------
     # Session establishment helper
