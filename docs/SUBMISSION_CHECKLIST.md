@@ -29,6 +29,9 @@ It is submission-facing and should stay aligned with `docs/Project.pdf`.
 - [ ] Conversation list and unread counters
 - [ ] Replay protection / de-duplication
 - [ ] Key change visibility
+- [ ] Fetched peer bundles are admitted only through the centralized trust gate
+- [ ] Invalid or mismatched fetched bundles fail closed without trust/session mutation
+- [ ] Wrong-peer valid bundle rejection is captured as a submission evidence case
 - [ ] TLS remains enabled for client-server transport
 
 ## Deployment / Usage Evidence
@@ -48,8 +51,10 @@ It is submission-facing and should stay aligned with `docs/Project.pdf`.
 - [ ] Report includes threat model and assumptions
 - [ ] Report includes architecture and trust boundaries
 - [ ] Report includes protocol design
+- [ ] Report describes the centralized peer-bundle trust gate with signature verification and expected-peer binding
 - [ ] Report includes cryptographic choices, rationale, libraries, and versions
 - [ ] Report includes security analysis and limitations
+- [ ] Report states that formal revocation / invalidation lifecycle is future work, not implemented scope
 - [ ] Report includes testing and evaluation
 - [ ] Report includes at least 2 security test cases
 - [ ] Report includes references
@@ -64,6 +69,7 @@ It is submission-facing and should stay aligned with `docs/Project.pdf`.
 
 - [ ] Submission-facing code batch is committed
 - [ ] Fresh test / verification command outputs are captured as evidence instead of relying on stale hard-coded counts
+- [ ] Architecture, README, deploy guide, and evidence notes all match the same trust-boundary contract
 - [ ] Remaining post-freeze issues are tracked with clean issue / PR scope
 - [ ] Submission artifacts are present and named correctly
 - [ ] `TeamID.zip` is built from the intended final contents
