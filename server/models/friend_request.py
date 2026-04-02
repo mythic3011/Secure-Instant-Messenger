@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from enum import Enum as PyEnum
+from enum import StrEnum
 from typing import TYPE_CHECKING
 
 from sqlalchemy import Enum, ForeignKey, String, UniqueConstraint
@@ -14,7 +14,7 @@ if TYPE_CHECKING:
     from server.models.user import User
 
 
-class FriendRequestStatus(str, PyEnum):
+class FriendRequestStatus(StrEnum):
     """Status of a friend request."""
 
     PENDING = "pending"
@@ -51,4 +51,7 @@ class FriendRequest(Base, TimestampMixin):
     )
 
     def __repr__(self) -> str:
-        return f"<FriendRequest(id={self.id!r}, sender={self.sender_id!r}, recipient={self.recipient_id!r}, status={self.status!r})>"
+        return (
+            f"<FriendRequest(id={self.id!r}, sender={self.sender_id!r}, "
+            f"recipient={self.recipient_id!r}, status={self.status!r})>"
+        )

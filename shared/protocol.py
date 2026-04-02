@@ -8,8 +8,8 @@ DO NOT add business logic here. This file defines data shapes only.
 from __future__ import annotations
 
 import base64
-import enum
 import uuid
+from enum import StrEnum
 from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator
@@ -19,12 +19,12 @@ from pydantic import BaseModel, Field, field_validator
 # ---------------------------------------------------------------------------
 
 PROTOCOL_VERSION = "1"
-KDF_INFO_PREFIX  = "COMP3334-IM-v1"
-NONCE_BYTES      = 12     # AES-GCM nonce size
-KEY_BYTES        = 32     # AES-256 key size
+KDF_INFO_PREFIX = "COMP3334-IM-v1"
+NONCE_BYTES = 12  # AES-GCM nonce size
+KEY_BYTES = 32  # AES-256 key size
 MAX_MESSAGE_BYTES = 64_000  # ~64 KB plaintext limit
-REPLAY_WINDOW    = 50     # accept counters within last 50 of max seen
-MAX_SKIP         = 50     # max skipped messages in ratchet chain
+REPLAY_WINDOW = 50  # accept counters within last 50 of max seen
+MAX_SKIP = 50  # max skipped messages in ratchet chain
 
 # ---------------------------------------------------------------------------
 # Session lifecycle limits
@@ -70,41 +70,43 @@ MAX_SESSION_MESSAGES = 500  # force re-key after this many messages per session
 # Enums
 # ---------------------------------------------------------------------------
 
-class DeliveryStatus(str, enum.Enum):
-    SENT      = "sent"       # server acknowledged receipt
+
+class DeliveryStatus(StrEnum):
+    SENT = "sent"  # server acknowledged receipt
     DELIVERED = "delivered"  # recipient client acknowledged
-    READ      = "read"       # reserved for future UX/protocol extension, not currently implemented
+    READ = "read"  # reserved for future UX/protocol extension, not currently implemented
 
 
-class FriendRequestStatus(str, enum.Enum):
-    PENDING   = "pending"
-    ACCEPTED  = "accepted"
-    DECLINED  = "declined"
+class FriendRequestStatus(StrEnum):
+    PENDING = "pending"
+    ACCEPTED = "accepted"
+    DECLINED = "declined"
     CANCELLED = "cancelled"
 
 
-class MessageType(str, enum.Enum):
+class MessageType(StrEnum):
     MESSAGE = "message"
-    ACK     = "ack"        # delivery acknowledgement event
-    SYSTEM  = "system"     # key change warning, etc.
+    ACK = "ack"  # delivery acknowledgement event
+    SYSTEM = "system"  # key change warning, etc.
 
 
 # ---------------------------------------------------------------------------
 # Auth
 # ---------------------------------------------------------------------------
 
+
 class RegisterRequest(BaseModel):
     username: str = Field(min_length=3, max_length=32, pattern=r"^[a-zA-Z0-9_\-]+$")
     password: str = Field(min_length=12, max_length=128)
     identity_pub_b64: str  # Ed25519 public key, base64
-    dh_pub_b64: str        # X25519 public key, base64
-    key_sig_b64: str       # Ed25519 sig over (identity_pub || dh_pub), base64
+    dh_pub_b64: str  # X25519 public key, base64
+    key_sig_b64: str  # Ed25519 sig over (identity_pub || dh_pub), base64
     totp_uri: str | None = None  # returned by server after provisioning
 
     @field_validator("password")
     @classmethod
     def validate_password_complexity(cls, v: str) -> str:
-        """Enforce password complexity: at least one uppercase, lowercase, digit, and special char."""
+        """Enforce password complexity with mixed case, digit, and symbol."""
         if not any(c.isupper() for c in v):
             raise ValueError("Password must contain at least one uppercase letter")
         if not any(c.islower() for c in v):
@@ -112,13 +114,15 @@ class RegisterRequest(BaseModel):
         if not any(c.isdigit() for c in v):
             raise ValueError("Password must contain at least one digit")
         if not any(c in "!@#$%^&*()_+-=[]{}|;:,.<>?" for c in v):
-            raise ValueError("Password must contain at least one special character (!@#$%^&*()_+-=[]{}|;:,.<>?)")
+            raise ValueError(
+                "Password must contain at least one special character (!@#$%^&*()_+-=[]{}|;:,.<>?)"
+            )
         return v
 
 
 class RegisterResponse(BaseModel):
     user_id: str
-    totp_provisioning_uri: str   # otpauth:// URI for QR code scan
+    totp_provisioning_uri: str  # otpauth:// URI for QR code scan
 
 
 class LoginRequest(BaseModel):
@@ -129,16 +133,17 @@ class LoginRequest(BaseModel):
 
 class LoginResponse(BaseModel):
     access_token: str
-    expires_at: int   # unix timestamp
+    expires_at: int  # unix timestamp
 
 
 class LogoutRequest(BaseModel):
-    pass   # token comes from Authorization header
+    pass  # token comes from Authorization header
 
 
 # ---------------------------------------------------------------------------
 # Key management
 # ---------------------------------------------------------------------------
+
 
 class PublicKeyBundle(BaseModel):
     """
@@ -146,17 +151,19 @@ class PublicKeyBundle(BaseModel):
     Server stores and distributes this.
     Clients verify key_sig before using the keys.
     """
-    user_id:          str
-    username:         str
-    identity_pub_b64: str   # Ed25519 pub
-    dh_pub_b64:       str   # X25519 pub
-    key_sig_b64:      str   # Ed25519 sig over (identity_pub || dh_pub)
-    uploaded_at:      int   # unix timestamp
+
+    user_id: str
+    username: str
+    identity_pub_b64: str  # Ed25519 pub
+    dh_pub_b64: str  # X25519 pub
+    key_sig_b64: str  # Ed25519 sig over (identity_pub || dh_pub)
+    uploaded_at: int  # unix timestamp
 
 
 # ---------------------------------------------------------------------------
 # Messages
 # ---------------------------------------------------------------------------
+
 
 class MessageEnvelope(BaseModel):
     """
@@ -170,19 +177,20 @@ class MessageEnvelope(BaseModel):
 
     Tampering with any AD field invalidates the GCM authentication tag.
     """
-    id:              str = Field(default_factory=lambda: str(uuid.uuid4()))
-    type:            MessageType = MessageType.MESSAGE
-    sender_id:       str
-    recipient_id:    str
-    conversation_id: str          # server-assigned random ID
-    counter:         int = Field(ge=0)
-    nonce_b64:       str          # base64(12 random bytes) — never reuse per key
-    ciphertext_b64:  str          # base64(AES-256-GCM output)
-    eph_pub_b64:     str | None = None   # X25519 ephemeral pub, first message only
-    conv_dh_pub_b64: str | None = None   # X25519 per-conversation DH pub, first message only
-    chain_index:     int = 0             # ratchet chain index for this message
-    ttl_seconds:     int | None = None   # None = no expiry
-    sent_at:         int          # unix timestamp (client clock)
+
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    type: MessageType = MessageType.MESSAGE
+    sender_id: str
+    recipient_id: str
+    conversation_id: str  # server-assigned random ID
+    counter: int = Field(ge=0)
+    nonce_b64: str  # base64(12 random bytes) — never reuse per key
+    ciphertext_b64: str  # base64(AES-256-GCM output)
+    eph_pub_b64: str | None = None  # X25519 ephemeral pub, first message only
+    conv_dh_pub_b64: str | None = None  # X25519 per-conversation DH pub, first message only
+    chain_index: int = 0  # ratchet chain index for this message
+    ttl_seconds: int | None = None  # None = no expiry
+    sent_at: int  # unix timestamp (client clock)
     delivery_status: DeliveryStatus = DeliveryStatus.SENT
 
     @field_validator("nonce_b64", "ciphertext_b64")
@@ -190,8 +198,8 @@ class MessageEnvelope(BaseModel):
     def must_be_base64(cls, v: str) -> str:
         try:
             base64.b64decode(v, validate=True)
-        except Exception:
-            raise ValueError("field must be valid base64")
+        except Exception as exc:
+            raise ValueError("field must be valid base64") from exc
         return v
 
     def compute_ad(self) -> bytes:
@@ -220,26 +228,27 @@ class SendMessageRequest(BaseModel):
 
 
 class SendMessageResponse(BaseModel):
-    id:           str
-    stored_at:    int
+    id: str
+    stored_at: int
     delivered_at: int | None = None
 
 
 class FetchMessagesRequest(BaseModel):
     conversation_id: str
-    before_id:       str | None = None   # cursor for pagination
-    limit:           int = Field(default=50, le=100)
+    before_id: str | None = None  # cursor for pagination
+    limit: int = Field(default=50, le=100)
 
 
 class FetchMessagesResponse(BaseModel):
-    messages:    list[MessageEnvelope]
-    has_more:    bool
+    messages: list[MessageEnvelope]
+    has_more: bool
     next_cursor: str | None = None
 
 
 # ---------------------------------------------------------------------------
 # Delivery ACK (sent by recipient, E2EE-protected)
 # ---------------------------------------------------------------------------
+
 
 class DeliveryAck(BaseModel):
     """
@@ -250,7 +259,8 @@ class DeliveryAck(BaseModel):
     blobs to the sender, adding complexity without meaningful privacy gain
     (the server already knows sender, recipient, and timing).
     """
-    message_id:      str
+
+    message_id: str
     conversation_id: str
 
 
@@ -258,14 +268,16 @@ class DeliveryAck(BaseModel):
 # WebSocket push messages (server -> client)
 # ---------------------------------------------------------------------------
 
+
 class WsPush(BaseModel):
-    type:    Literal["message", "ack", "friend_request", "system"]
-    payload: dict   # one of the above models, serialised
+    type: Literal["message", "ack", "friend_request", "system"]
+    payload: dict  # one of the above models, serialised
 
 
 # ---------------------------------------------------------------------------
 # Friends
 # ---------------------------------------------------------------------------
+
 
 class FriendRequestCreate(BaseModel):
     recipient_username: str
@@ -276,24 +288,25 @@ class FriendRequestAction(BaseModel):
 
 
 class FriendRequestOut(BaseModel):
-    id:           str
-    sender_id:    str
-    sender_name:  str
+    id: str
+    sender_id: str
+    sender_name: str
     recipient_id: str
-    status:       FriendRequestStatus
-    created_at:   int
+    status: FriendRequestStatus
+    created_at: int
 
 
 # ---------------------------------------------------------------------------
 # Conversations
 # ---------------------------------------------------------------------------
 
+
 class ConversationOut(BaseModel):
-    id:              str
-    peer_id:         str
-    peer_username:   str
+    id: str
+    peer_id: str
+    peer_username: str
     last_message_at: int | None
-    unread_count:    int
+    unread_count: int
 
 
 class ConversationListResponse(BaseModel):

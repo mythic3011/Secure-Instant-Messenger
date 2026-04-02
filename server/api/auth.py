@@ -43,6 +43,7 @@ log = structlog.get_logger()
 # Dependency — extract and validate bearer token
 # ---------------------------------------------------------------------------
 
+
 async def require_auth(request: Request, db: AsyncSession = Depends(get_db)) -> dict:
     """
     FastAPI dependency. Validates the Authorization: Bearer <token> header.
@@ -73,7 +74,10 @@ async def require_auth(request: Request, db: AsyncSession = Depends(get_db)) -> 
 
     if row is None:
         log.warning("auth_rejected", reason="invalid_or_expired_token", path=request.url.path)
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or expired token")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or expired token",
+        )
 
     session, user = row
     return {"session_id": session.id, "user_id": user.id, "username": user.username}
@@ -82,6 +86,7 @@ async def require_auth(request: Request, db: AsyncSession = Depends(get_db)) -> 
 # ---------------------------------------------------------------------------
 # R1 — Registration
 # ---------------------------------------------------------------------------
+
 
 @router.post("/register", response_model=RegisterResponse, status_code=status.HTTP_201_CREATED)
 async def register(
@@ -105,7 +110,10 @@ async def register(
     )
     if not allowed:
         log.warning("rate_limit_exceeded", endpoint="register", client_ip=client_ip)
-        raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail="Rate limit exceeded")
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Rate limit exceeded",
+        )
 
     # Check username uniqueness (case-insensitive via COLLATE NOCASE in schema)
     stmt = select(User).where(User.username == body.username)
@@ -155,6 +163,7 @@ async def register(
 # R2 — Login with password + TOTP
 # ---------------------------------------------------------------------------
 
+
 @router.post("/login", response_model=LoginResponse)
 async def login(
     body: LoginRequest, request: Request, db: AsyncSession = Depends(get_db)
@@ -173,7 +182,10 @@ async def login(
     )
     if not allowed:
         log.warning("rate_limit_exceeded", endpoint="login", client_ip=client_ip)
-        raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail="Rate limit exceeded")
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Rate limit exceeded",
+        )
 
     # Query user using ORM
     stmt = select(User).where(User.username == body.username, User.deleted_at.is_(None))
@@ -181,7 +193,11 @@ async def login(
     user = result.scalar_one_or_none()
 
     # Constant-time: always verify password even if user not found (dummy hash)
-    _DUMMY_HASH = "$argon2id$v=19$m=65536,t=3,p=1$AAAAAAAAAAAAAAAAAAAAAA$AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+    _DUMMY_HASH = (
+        "$argon2id$v=19$m=65536,t=3,p=1$"
+        "AAAAAAAAAAAAAAAAAAAAAA$"
+        "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+    )
     pw_hash = user.pw_hash if user else _DUMMY_HASH
 
     if not verify_password(body.password, pw_hash) or user is None:
@@ -215,10 +231,9 @@ async def login(
 # R3 — Logout / token revocation
 # ---------------------------------------------------------------------------
 
+
 @router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)
-async def logout(
-    session: dict = Depends(require_auth), db: AsyncSession = Depends(get_db)
-) -> None:
+async def logout(session: dict = Depends(require_auth), db: AsyncSession = Depends(get_db)) -> None:
     """Revoke the current session token immediately."""
     stmt = select(Session).where(Session.id == session["session_id"])
     result = await db.execute(stmt)
