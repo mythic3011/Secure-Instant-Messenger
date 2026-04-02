@@ -6,8 +6,8 @@ Covers: R5 (fingerprint), R10/R11 (TTL display + deletion), R17 (delivery status
 
 from __future__ import annotations
 
-import time
 import datetime
+import time
 from typing import TYPE_CHECKING, Any, cast
 
 from textual.app import ComposeResult
@@ -130,7 +130,7 @@ class ChatScreen(Screen):
         margin: 1 0;
         height: auto;
         /* Replaced border-radius with border: round for Textual compatibility */
-        border: round gray 0%; 
+        border: round gray 0%;
         max-width: 85%;
     }
 
@@ -323,11 +323,13 @@ class ChatScreen(Screen):
 
     async def _sweep_ttl(self) -> None:
         from client.state.store import sweep_expired
+
         await sweep_expired()
         now = int(time.time())
         lv = self.query_one("#messages", ListView)
         expired = [
-            item for item in lv.children
+            item
+            for item in lv.children
             if isinstance(item, MessageItem)
             and item._expires_at is not None
             and item._expires_at <= now
@@ -372,6 +374,7 @@ class ChatScreen(Screen):
             self._send()
         elif event.button.id == "btn_settings":
             from client.ui.screens.settings import SettingsScreen
+
             self.app.push_screen(
                 SettingsScreen(
                     conversation_id=self.conversation_id,

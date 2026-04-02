@@ -65,14 +65,14 @@ async def test_db_does_not_contain_plaintext(monkeypatch, tmp_path):
     await store.init_store("testuser_cipher")
     store.set_storage_key(b"b" * 32)
 
-    secret = "top secret ciphertext-only payload"
+    plaintext_payload = "top secret ciphertext-only payload"
     await store.save_message(
         id="cipher-msg-1",
         conversation_id="conv-cipher",
         sender_id="alice",
         recipient_id="bob",
         counter=0,
-        plaintext=secret,
+        plaintext=plaintext_payload,
         sent_at=int(time.time()),
         ttl_seconds=None,
     )
@@ -82,7 +82,7 @@ async def test_db_does_not_contain_plaintext(monkeypatch, tmp_path):
     try:
         rows = conn.execute(
             "SELECT id FROM local_messages WHERE ciphertext LIKE ?",
-            (f"%{secret}%",),
+            (f"%{plaintext_payload}%",),
         ).fetchall()
     finally:
         conn.close()
@@ -186,9 +186,7 @@ async def test_init_store_migrates_plaintext_rows(monkeypatch, tmp_path):
 
     conn = sqlite3.connect(db_path)
     try:
-        columns = {
-            row[1] for row in conn.execute("PRAGMA table_info(local_messages)").fetchall()
-        }
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(local_messages)").fetchall()}
     finally:
         conn.close()
 

@@ -83,9 +83,7 @@ class IdentityKeypair:
         return cls(private_key=priv, public_key=priv.public_key())
 
     def private_bytes(self) -> bytes:
-        return self.private_key.private_bytes(
-            Encoding.Raw, PrivateFormat.Raw, NoEncryption()
-        )
+        return self.private_key.private_bytes(Encoding.Raw, PrivateFormat.Raw, NoEncryption())
 
     def public_bytes(self) -> bytes:
         return self.public_key.public_bytes(Encoding.Raw, PublicFormat.Raw)
@@ -119,9 +117,7 @@ class DHKeypair:
         return cls(private_key=priv, public_key=priv.public_key())
 
     def private_bytes(self) -> bytes:
-        return self.private_key.private_bytes(
-            Encoding.Raw, PrivateFormat.Raw, NoEncryption()
-        )
+        return self.private_key.private_bytes(Encoding.Raw, PrivateFormat.Raw, NoEncryption())
 
     def public_bytes(self) -> bytes:
         return self.public_key.public_bytes(Encoding.Raw, PublicFormat.Raw)
@@ -303,9 +299,7 @@ def derive_session_key_as_responder(
 
     raw_key = _hkdf_derive(ikm, peer_user_id, my_user_id, conversation_id)
 
-    return SessionKey(
-        raw=raw_key, conversation_id=conversation_id, peer_id=peer_user_id
-    )
+    return SessionKey(raw=raw_key, conversation_id=conversation_id, peer_id=peer_user_id)
 
 
 def _hkdf_derive(
@@ -385,9 +379,7 @@ class RatchetChain:
         if target < self.index:
             raise ValueError(f"Target index {target} is behind current {self.index}")
         if target - self.index > MAX_SKIP:
-            raise ValueError(
-                f"Too many skipped messages: target={target}, current={self.index}"
-            )
+            raise ValueError(f"Too many skipped messages: target={target}, current={self.index}")
         while self.index < target:
             skipped_key = self.advance()
             self.skipped_keys[self.index - 1] = skipped_key
@@ -410,15 +402,11 @@ class RatchetChain:
         return cls(
             chain_key=bytes.fromhex(d["chain_key_hex"]),
             index=d["index"],
-            skipped_keys={
-                int(k): bytes.fromhex(v) for k, v in d.get("skipped_keys", {}).items()
-            },
+            skipped_keys={int(k): bytes.fromhex(v) for k, v in d.get("skipped_keys", {}).items()},
         )
 
 
-def derive_ratchet_chains(
-    root_key: bytes, initiator: bool
-) -> tuple[RatchetChain, RatchetChain]:
+def derive_ratchet_chains(root_key: bytes, initiator: bool) -> tuple[RatchetChain, RatchetChain]:
     """
     Derive send and receive ratchet chains from the root session key.
 
@@ -633,9 +621,7 @@ class IdentityKeyCache:
                 continue
             store[peer_id] = bytes.fromhex(pub_hex)
             trust_states[peer_id] = TrustState(
-                fingerprint=str(
-                    entry.get("fingerprint", _peer_fingerprint(store[peer_id]))
-                ),
+                fingerprint=str(entry.get("fingerprint", _peer_fingerprint(store[peer_id]))),
                 verified=bool(entry.get("verified", False)),
                 key_changed=bool(entry.get("key_changed", False)),
             )
@@ -696,7 +682,11 @@ class ReplayProtector:
             raise ReplayError(f"Duplicate message ID: {message_id}")
         if counter <= self._max_counter - REPLAY_WINDOW:
             log.warning(
-                "security_event type=replay_attack reason=counter_outside_window message_id=%s counter=%s max_seen=%s",
+                (
+                    "security_event type=replay_attack "
+                    "reason=counter_outside_window "
+                    "message_id=%s counter=%s max_seen=%s"
+                ),
                 message_id,
                 counter,
                 self._max_counter,
@@ -763,9 +753,7 @@ def build_and_encrypt(
     )
 
     ad = env.compute_ad()
-    msg_sk = SessionKey(
-        raw=msg_key, conversation_id=conversation_id, peer_id=recipient_id
-    )
+    msg_sk = SessionKey(raw=msg_key, conversation_id=conversation_id, peer_id=recipient_id)
     ciphertext, nonce = encrypt_message(msg_sk, plaintext.encode("utf-8"), ad)
 
     env.nonce_b64 = base64.b64encode(nonce).decode()
@@ -815,9 +803,7 @@ def decrypt_envelope(
             envelope.id,
             envelope.conversation_id,
         )
-        raise IntegrityError(
-            "Ciphertext or authenticated metadata was tampered with"
-        ) from exc
+        raise IntegrityError("Ciphertext or authenticated metadata was tampered with") from exc
 
     # Step 4: commit only after successful decryption
     replay_protector.commit(envelope.id, envelope.counter)
