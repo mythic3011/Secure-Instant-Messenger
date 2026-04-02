@@ -1,12 +1,15 @@
 """
-tests/unit/test_crypto.py — Unit tests for client/crypto/session.py
+tests/unit/test_crypto.py — Unit tests for client crypto trust/session helpers.
 Uses the same cryptography library as Tutorial1.ipynb (PyCA cryptography).
 """
 
 from __future__ import annotations
 
+import base64
 import os
 import secrets
+from dataclasses import FrozenInstanceError
+from types import MappingProxyType
 from typing import cast
 
 import pytest
@@ -17,7 +20,10 @@ from client.crypto.session import (
     IdentityKeyCache,
     IdentityKeypair,
     IntegrityError,
+    InvalidPeerBundleError,
     KeyChangeWarning,
+    MalformedPeerBundleError,
+    PeerBundleSignatureError,
     RatchetChain,
     ReplayError,
     ReplayProtector,
@@ -32,8 +38,10 @@ from client.crypto.session import (
     derive_session_key_as_responder,
     encrypt_message,
     make_key_signature,
+    validate_and_decode_peer_bundle,
     verify_key_bundle,
 )
+from shared.protocol import PublicKeyBundle
 
 
 def _random_conv_id() -> str:
@@ -81,6 +89,130 @@ def test_key_bundle_wrong_key():
     sig = make_key_signature(id_kp, dh_kp)
     # Sig is over dh_kp but we pass dh_kp2
     assert verify_key_bundle(id_kp.public_bytes(), dh_kp2.public_bytes(), sig) is False
+
+
+def _public_key_bundle(
+    *,
+    identity_pub: bytes | None = None,
+    dh_pub: bytes | None = None,
+    key_sig: bytes | None = None,
+) -> PublicKeyBundle:
+    identity_kp = IdentityKeypair.generate()
+    dh_kp = DHKeypair.generate()
+    identity_pub = identity_pub if identity_pub is not None else identity_kp.public_bytes()
+    dh_pub = dh_pub if dh_pub is not None else dh_kp.public_bytes()
+    key_sig = key_sig if key_sig is not None else identity_kp.sign(identity_pub + dh_pub)
+    return PublicKeyBundle(
+        user_id="bob-id",
+        username="bob",
+        identity_pub_b64=base64.b64encode(identity_pub).decode(),
+        dh_pub_b64=base64.b64encode(dh_pub).decode(),
+        key_sig_b64=base64.b64encode(key_sig).decode(),
+        uploaded_at=123,
+    )
+
+
+def test_validate_and_decode_peer_bundle_returns_verified_material():
+    identity_kp = IdentityKeypair.generate()
+    dh_kp = DHKeypair.generate()
+    bundle = PublicKeyBundle(
+        user_id="bob-id",
+        username="bob",
+        identity_pub_b64=base64.b64encode(identity_kp.public_bytes()).decode(),
+        dh_pub_b64=base64.b64encode(dh_kp.public_bytes()).decode(),
+        key_sig_b64=base64.b64encode(make_key_signature(identity_kp, dh_kp)).decode(),
+        uploaded_at=123,
+    )
+
+    verified = validate_and_decode_peer_bundle(bundle)
+
+    assert verified.user_id == "bob-id"
+    assert verified.username == "bob"
+    assert verified.identity_pub == identity_kp.public_bytes()
+    assert verified.dh_pub == dh_kp.public_bytes()
+    assert verified.fingerprint_input == identity_kp.public_bytes()
+    with pytest.raises(FrozenInstanceError):
+        verified.identity_pub = b"x" * 32  # type: ignore[misc]
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("identity_pub_b64", "***bad-base64***"),
+        ("dh_pub_b64", "***bad-base64***"),
+        ("key_sig_b64", "***bad-base64***"),
+        ("identity_pub_b64", ""),
+        ("dh_pub_b64", ""),
+        ("key_sig_b64", ""),
+    ],
+)
+def test_validate_and_decode_peer_bundle_rejects_malformed_base64(
+    field: str,
+    value: str,
+):
+    bundle = _public_key_bundle()
+    payload = bundle.model_dump()
+    payload[field] = value
+
+    with pytest.raises(MalformedPeerBundleError):
+        validate_and_decode_peer_bundle(PublicKeyBundle.model_construct(**payload))
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("identity_pub_b64", 123),
+        ("dh_pub_b64", None),
+        ("key_sig_b64", MappingProxyType({})),
+    ],
+)
+def test_validate_and_decode_peer_bundle_rejects_wrong_field_types(
+    field: str,
+    value: object,
+):
+    bundle = _public_key_bundle()
+    payload = bundle.model_dump()
+    payload[field] = value
+
+    with pytest.raises(MalformedPeerBundleError):
+        validate_and_decode_peer_bundle(PublicKeyBundle.model_construct(**payload))
+
+
+def test_validate_and_decode_peer_bundle_rejects_decoded_length_mismatch():
+    identity_kp = IdentityKeypair.generate()
+    dh_kp = DHKeypair.generate()
+    bad_dh_pub = dh_kp.public_bytes()[:-1]
+    bundle = _public_key_bundle(
+        identity_pub=identity_kp.public_bytes(),
+        dh_pub=bad_dh_pub,
+        key_sig=identity_kp.sign(identity_kp.public_bytes() + bad_dh_pub),
+    )
+
+    with pytest.raises(MalformedPeerBundleError):
+        validate_and_decode_peer_bundle(bundle)
+
+
+def test_validate_and_decode_peer_bundle_rejects_signature_mismatch():
+    identity_kp = IdentityKeypair.generate()
+    dh_kp = DHKeypair.generate()
+    other_dh = DHKeypair.generate()
+    bundle = _public_key_bundle(
+        identity_pub=identity_kp.public_bytes(),
+        dh_pub=dh_kp.public_bytes(),
+        key_sig=identity_kp.sign(identity_kp.public_bytes() + other_dh.public_bytes()),
+    )
+
+    with pytest.raises(PeerBundleSignatureError):
+        validate_and_decode_peer_bundle(bundle)
+
+
+def test_validate_and_decode_peer_bundle_exposes_only_invalid_peer_bundle_family():
+    bundle = _public_key_bundle()
+    payload = bundle.model_dump()
+    payload["key_sig_b64"] = object()
+
+    with pytest.raises(InvalidPeerBundleError):
+        validate_and_decode_peer_bundle(PublicKeyBundle.model_construct(**payload))
 
 
 # ---------------------------------------------------------------------------

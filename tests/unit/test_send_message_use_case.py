@@ -7,7 +7,7 @@ import httpx
 import pytest
 
 from client.api.client import IMClientError
-from client.crypto.session import LocalStorageSecurityError
+from client.crypto.session import InvalidPeerBundleError, LocalStorageSecurityError
 from client.crypto.storage import SessionState
 from client.use_cases.results import LocalSecurityFailure, NetworkFailure, ServerFailure
 from client.use_cases.send_message import (
@@ -141,6 +141,40 @@ async def test_execute_send_message_returns_network_failure_for_session_error() 
     )
 
     assert result == NetworkFailure()
+
+
+@pytest.mark.asyncio
+async def test_execute_send_message_returns_local_security_block_for_invalid_peer_bundle() -> None:
+    context = SendMessageContext(
+        client=SimpleNamespace(send_message=None),
+        local_keys=SimpleNamespace(),
+        username="alice",
+        user_id="alice-id",
+        sessions={},
+        peer_usernames={"bob-id": "bob"},
+        ttl_settings={},
+        counters={},
+        persist_sessions=lambda: None,
+    )
+
+    async def _raise_session(*_args, **_kwargs):
+        raise InvalidPeerBundleError("bundle rejected")
+
+    result = await execute_send_message(
+        context,
+        conversation_id="conv-1",
+        peer_id="bob-id",
+        plaintext="hello",
+        ensure_session_fn=_raise_session,
+    )
+
+    assert result == SendMessageBlocked(
+        reason=LocalSecurityFailure(
+            message="Unable to verify peer key bundle. Session setup was blocked for your safety."
+        ),
+        sent_at=None,
+        disable_send=True,
+    )
 
 
 @pytest.mark.asyncio
