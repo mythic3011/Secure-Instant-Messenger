@@ -92,6 +92,7 @@ async def ensure_session(
         recv_chain=recv_chain,
         replay_protector=ReplayProtector(),
         identity_key_cache=cache,
+        next_outbound_counter=0,
     )
     state._eph_pub_b64 = base64.b64encode(eph_pub_bytes).decode()  # type: ignore[attr-defined]
     state._conv_dh_pub_b64 = base64.b64encode(conv_dh_pub_bytes).decode()  # type: ignore[attr-defined]
@@ -119,7 +120,6 @@ async def execute_send_message(
         return ServerFailure(message="The message could not be sent.")
 
     ttl = context.ttl_settings.get(conversation_id)
-    counter = context.counters.get(conversation_id, 0)
     my_id = context.user_id or context.username
 
     try:
@@ -131,6 +131,9 @@ async def execute_send_message(
 
     if session_state is None:
         return ServerFailure(message="The message could not be sent.")
+
+    restored_next_counter = getattr(session_state, "next_outbound_counter", 0)
+    counter = context.counters.get(conversation_id, restored_next_counter)
 
     sent_at = int(now())
     envelope = build_and_encrypt_fn(
@@ -168,7 +171,10 @@ async def execute_send_message(
             disable_send=True,
         )
 
-    context.counters[conversation_id] = counter + 1
+    next_outbound_counter = counter + 1
+    context.counters[conversation_id] = next_outbound_counter
+    session_state.next_outbound_counter = next_outbound_counter
+    context.persist_sessions()
     await upsert_conversation_fn(
         id=conversation_id,
         peer_id=peer_id,
