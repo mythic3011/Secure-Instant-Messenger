@@ -45,6 +45,12 @@ All 19 identified security vulnerabilities have been fixed. See [`docs/SECURITY_
 └── docker-compose.yml
 ```
 
+Client source-of-truth paths:
+
+- entrypoint: `python -m client.main`
+- app controller: `client/ui/app.py`
+- Textual screens: `client/ui/screens/`
+
 ## Quick start
 
 Choose one setup path only. For teammates and graders, use the standard path

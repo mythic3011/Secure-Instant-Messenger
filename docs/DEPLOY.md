@@ -51,6 +51,8 @@ uv run python -m client.main --server https://localhost:8443 --ca-cert ./certs/s
 ```
 
 That is the standard local/demo run path for this project.
+The canonical client entrypoint is `python -m client.main`; the UI source files
+live under `client/ui/` and `client/ui/screens/`.
 
 > **TLS note:** Bootstrap-generated demo certs include SAN entries for
 > `localhost` and `127.0.0.1`, so `--ca-cert ./certs/server.crt` is the
@@ -412,6 +414,9 @@ Confirm these files exist:
 
 | File                                     | Purpose                                                  |
 | ---------------------------------------- | -------------------------------------------------------- |
+| `client/main.py`                         | Canonical client entrypoint                              |
+| `client/ui/app.py`                       | Main Textual app controller                              |
+| `client/ui/screens/`                     | Authoritative Textual screen implementations             |
 | `scripts/bootstrap-env.sh` / `scripts/bootstrap-env.bat` | Auto-generates `.env.local`, secrets, and local TLS material when possible |
 | `scripts/run-server.sh` / `scripts/run-server.bat` | Starts the direct development server with prerequisite checks |
 | `scripts/run-client.sh` / `scripts/run-client.bat` | Starts the client with prerequisite checks |
