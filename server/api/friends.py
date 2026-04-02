@@ -24,6 +24,8 @@ from server.models import (
 from server.models import (
     FriendRequestStatus as DBFriendRequestStatus,
 )
+from server.ws.events import build_friend_request_event
+from server.ws.handler import push_to_user
 from shared.protocol import (
     FriendRequestAction,
     FriendRequestCreate,
@@ -206,6 +208,7 @@ async def handle_request(
         "cancel": DBFriendRequestStatus.CANCELLED,
     }
     req.status = status_map[action]
+    conversation_id: str | None = None
 
     if action == "accept":
         a, b = sorted([req.sender_id, req.recipient_id])
@@ -216,16 +219,29 @@ async def handle_request(
             friendship = Friendship(user_a_id=a, user_b_id=b)
             db.add(friendship)
 
-        # Create conversation with random ID
-        conv_id = secrets.token_hex(16)
         # Check if conversation already exists
         stmt = select(Conversation).where(Conversation.user_a_id == a, Conversation.user_b_id == b)
         result = await db.execute(stmt)
-        if result.scalar_one_or_none() is None:
-            conversation = Conversation(id=conv_id, user_a_id=a, user_b_id=b)
+        conversation = result.scalar_one_or_none()
+        if conversation is None:
+            conversation = Conversation(id=secrets.token_hex(16), user_a_id=a, user_b_id=b)
             db.add(conversation)
+        conversation_id = conversation.id
 
     await db.commit()
+
+    if action == "accept":
+        await push_to_user(
+            req.sender_id,
+            build_friend_request_event(
+                event="accepted",
+                request_id=req.id,
+                sender_id=req.sender_id,
+                recipient_id=req.recipient_id,
+                conversation_id=conversation_id,
+            ),
+        )
+
     log.info("friend_request_action", request_id=request_id, action=action, user_id=user_id)
 
 
