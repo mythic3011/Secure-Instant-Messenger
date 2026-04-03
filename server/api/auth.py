@@ -24,7 +24,6 @@ from server.core.security import (
     hash_password,
     hash_token,
     make_totp_provisioning_uri,
-    reset_rate_limit,
     verify_password,
     verify_totp,
 )
@@ -172,7 +171,7 @@ async def login(
         rate_limit_key,
         settings.rate_limit_login_max,
         settings.rate_limit_login_window,
-        is_failed_attempt=False,
+        is_failed_attempt=True,
     )
     if not allowed:
         log.warning("rate_limit_exceeded", endpoint="login", client_ip=client_ip)
@@ -228,9 +227,6 @@ async def login(
         expires_at=expires_at,
     )
     db.add(session)
-
-    # Successful authentication clears accumulated failure count for this IP.
-    await reset_rate_limit(rate_limit_key)
 
     await db.commit()
 
