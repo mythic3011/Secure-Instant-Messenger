@@ -46,7 +46,13 @@ class SecurityBadge(Static):
     }}
     """
 
-    def __init__(self, label: str = "", *, tone: BadgeTone = "neutral", id: str | None = None) -> None:
+    def __init__(
+        self,
+        label: str = "",
+        *,
+        tone: BadgeTone = "neutral",
+        id: str | None = None,
+    ) -> None:
         super().__init__(label, id=id)
         self.label = label
         self.tone: BadgeTone = "neutral"

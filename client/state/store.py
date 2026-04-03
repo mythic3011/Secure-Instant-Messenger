@@ -1,10 +1,10 @@
-from __future__ import annotations
-
 """
 client/state/store.py — Local SQLite store for message history, session state,
 and conversation metadata. Message bodies are encrypted at rest; plaintext is
 never written to disk.
 """
+
+from __future__ import annotations
 
 import logging
 import os
@@ -118,9 +118,7 @@ async def _ensure_message_schema(db: aiosqlite.Connection) -> None:
     if "plaintext" in columns and not {"nonce", "ciphertext"}.intersection(columns):
         await _migrate_plaintext_messages(db)
         return
-    raise LocalStorageSecurityError(
-        f"Unsupported local_messages schema columns: {sorted(columns)}"
-    )
+    raise LocalStorageSecurityError(f"Unsupported local_messages schema columns: {sorted(columns)}")
 
 
 async def _migrate_plaintext_messages(db: aiosqlite.Connection) -> None:
@@ -166,7 +164,9 @@ async def _create_message_indexes(db: aiosqlite.Connection) -> None:
         "CREATE INDEX IF NOT EXISTS idx_lm_conv ON local_messages(conversation_id, sent_at DESC)"
     )
     await db.execute(
-        "CREATE INDEX IF NOT EXISTS idx_lm_expires ON local_messages(expires_at) WHERE expires_at IS NOT NULL"
+        "CREATE INDEX IF NOT EXISTS idx_lm_expires "
+        "ON local_messages(expires_at) "
+        "WHERE expires_at IS NOT NULL"
     )
 
 
@@ -303,11 +303,14 @@ async def upsert_conversation(
 ) -> None:
     db = _get_db()
     await db.execute(
-        """INSERT INTO local_conversations (id, peer_id, peer_username, last_message_at, unread_count)
+        """
+           INSERT INTO local_conversations
+               (id, peer_id, peer_username, last_message_at, unread_count)
            VALUES (?, ?, ?, ?, ?)
            ON CONFLICT(id) DO UPDATE SET
              last_message_at = excluded.last_message_at,
-             unread_count    = excluded.unread_count""",
+             unread_count    = excluded.unread_count
+        """,
         (id, peer_id, peer_username, last_message_at, unread_count),
     )
     await db.commit()

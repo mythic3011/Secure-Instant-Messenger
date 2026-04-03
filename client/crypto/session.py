@@ -19,11 +19,14 @@ IMPORTANT: Never use this module's output as input to another cipher
 from __future__ import annotations
 
 import base64
+import binascii
 import hashlib
 import logging
+import math
 import os
 from collections import deque
 from dataclasses import dataclass, field
+from typing import Final
 
 from cryptography.exceptions import InvalidSignature, InvalidTag
 from cryptography.hazmat.primitives.asymmetric.ed25519 import (
@@ -51,9 +54,17 @@ from shared.protocol import (
     NONCE_BYTES,
     REPLAY_WINDOW,
     MessageEnvelope,
+    PublicKeyBundle,
 )
 
 log = logging.getLogger(__name__)
+
+IDENTITY_PUB_KEY_LEN: Final[int] = 32
+DH_PUB_KEY_LEN: Final[int] = 32
+KEY_BUNDLE_SIG_LEN: Final[int] = 64
+PEER_BUNDLE_BLOCKED_MESSAGE: Final[str] = (
+    "Unable to verify peer key bundle. Session setup was blocked for your safety."
+)
 
 # ---------------------------------------------------------------------------
 # Identity keypair
@@ -83,9 +94,7 @@ class IdentityKeypair:
         return cls(private_key=priv, public_key=priv.public_key())
 
     def private_bytes(self) -> bytes:
-        return self.private_key.private_bytes(
-            Encoding.Raw, PrivateFormat.Raw, NoEncryption()
-        )
+        return self.private_key.private_bytes(Encoding.Raw, PrivateFormat.Raw, NoEncryption())
 
     def public_bytes(self) -> bytes:
         return self.public_key.public_bytes(Encoding.Raw, PublicFormat.Raw)
@@ -119,9 +128,7 @@ class DHKeypair:
         return cls(private_key=priv, public_key=priv.public_key())
 
     def private_bytes(self) -> bytes:
-        return self.private_key.private_bytes(
-            Encoding.Raw, PrivateFormat.Raw, NoEncryption()
-        )
+        return self.private_key.private_bytes(Encoding.Raw, PrivateFormat.Raw, NoEncryption())
 
     def public_bytes(self) -> bytes:
         return self.public_key.public_bytes(Encoding.Raw, PublicFormat.Raw)
@@ -199,6 +206,128 @@ class LocalStorageSecurityError(SecurityError):
 
 class TrustStateError(SecurityError):
     """Raised when trust-state policy blocks a key transition."""
+
+
+class InvalidPeerBundleError(SecurityError):
+    """Raised when fetched peer bundle material cannot be trusted."""
+
+
+class MalformedPeerBundleError(InvalidPeerBundleError):
+    """Raised when a fetched peer bundle is missing, malformed, or length-invalid."""
+
+
+class PeerBundleSignatureError(InvalidPeerBundleError):
+    """Raised when a fetched peer bundle signature does not verify."""
+
+
+@dataclass(frozen=True)
+class VerifiedPeerBundle:
+    """
+    Immutable view of fetched peer key material.
+
+    Security notes:
+      - Only identity_pub and dh_pub are authenticated by the peer signature
+        over identity_pub || dh_pub.
+      - user_id and username are copied from the fetched bundle and must still
+        be bound to the expected peer before trust/session use.
+    """
+
+    user_id: str
+    username: str
+    identity_pub: bytes
+    dh_pub: bytes
+
+    @property
+    def fingerprint_input(self) -> bytes:
+        return self.identity_pub
+
+
+def _require_non_empty_string(value: object, field_name: str) -> str:
+    if not isinstance(value, str) or not value:
+        raise MalformedPeerBundleError(f"{field_name} must be a non-empty string")
+    return value
+
+
+def _max_base64_len_for_decoded_size(decoded_len: int) -> int:
+    return 4 * math.ceil(decoded_len / 3)
+
+
+def _decode_bundle_field(value: object, field_name: str, expected_len: int) -> bytes:
+    encoded = _require_non_empty_string(value, field_name)
+    if len(encoded) > _max_base64_len_for_decoded_size(expected_len):
+        raise MalformedPeerBundleError(f"{field_name} is too long")
+    try:
+        decoded = base64.b64decode(encoded, validate=True)
+    except (ValueError, binascii.Error) as exc:
+        raise MalformedPeerBundleError(f"{field_name} is not valid base64") from exc
+    if len(decoded) != expected_len:
+        raise MalformedPeerBundleError(f"{field_name} has invalid decoded length")
+    return decoded
+
+
+def validate_and_decode_peer_bundle(bundle: PublicKeyBundle) -> VerifiedPeerBundle:
+    """
+    Convert untrusted wire bundle data into immutable verified key material.
+
+    The signed payload is the raw-byte concatenation: identity_pub || dh_pub.
+    """
+    try:
+        user_id = _require_non_empty_string(getattr(bundle, "user_id", None), "user_id")
+        username = _require_non_empty_string(getattr(bundle, "username", None), "username")
+        identity_pub = _decode_bundle_field(
+            getattr(bundle, "identity_pub_b64", None),
+            "identity_pub_b64",
+            IDENTITY_PUB_KEY_LEN,
+        )
+        dh_pub = _decode_bundle_field(
+            getattr(bundle, "dh_pub_b64", None),
+            "dh_pub_b64",
+            DH_PUB_KEY_LEN,
+        )
+        key_sig = _decode_bundle_field(
+            getattr(bundle, "key_sig_b64", None),
+            "key_sig_b64",
+            KEY_BUNDLE_SIG_LEN,
+        )
+    except InvalidPeerBundleError:
+        raise
+    except Exception as exc:
+        raise MalformedPeerBundleError("Peer bundle fields are malformed") from exc
+
+    if not verify_key_bundle(identity_pub, dh_pub, key_sig):
+        raise PeerBundleSignatureError("Peer bundle signature verification failed")
+
+    return VerifiedPeerBundle(
+        user_id=user_id,
+        username=username,
+        identity_pub=identity_pub,
+        dh_pub=dh_pub,
+    )
+
+
+def validate_decode_and_bind_peer_bundle(
+    bundle: PublicKeyBundle,
+    *,
+    expected_peer_id: str,
+    expected_username: str | None = None,
+) -> VerifiedPeerBundle:
+    """
+    Admit fetched peer bundle material only if it is both signature-valid and
+    bound to the expected peer identity.
+    """
+    verified_bundle = validate_and_decode_peer_bundle(bundle)
+    if verified_bundle.user_id != expected_peer_id:
+        raise InvalidPeerBundleError("Peer bundle user_id does not match expected peer")
+    if expected_username is not None and verified_bundle.username != expected_username:
+        raise InvalidPeerBundleError("Peer bundle username does not match expected peer")
+    return verified_bundle
+
+
+def check_and_update_verified_peer_bundle(
+    cache: IdentityKeyCache, peer_id: str, verified_bundle: VerifiedPeerBundle
+) -> bool:
+    """Update identity trust state using only verified fetched bundle material."""
+    return cache.check_and_update(peer_id, verified_bundle.fingerprint_input)
 
 
 # ---------------------------------------------------------------------------
@@ -303,9 +432,7 @@ def derive_session_key_as_responder(
 
     raw_key = _hkdf_derive(ikm, peer_user_id, my_user_id, conversation_id)
 
-    return SessionKey(
-        raw=raw_key, conversation_id=conversation_id, peer_id=peer_user_id
-    )
+    return SessionKey(raw=raw_key, conversation_id=conversation_id, peer_id=peer_user_id)
 
 
 def _hkdf_derive(
@@ -385,9 +512,7 @@ class RatchetChain:
         if target < self.index:
             raise ValueError(f"Target index {target} is behind current {self.index}")
         if target - self.index > MAX_SKIP:
-            raise ValueError(
-                f"Too many skipped messages: target={target}, current={self.index}"
-            )
+            raise ValueError(f"Too many skipped messages: target={target}, current={self.index}")
         while self.index < target:
             skipped_key = self.advance()
             self.skipped_keys[self.index - 1] = skipped_key
@@ -410,15 +535,11 @@ class RatchetChain:
         return cls(
             chain_key=bytes.fromhex(d["chain_key_hex"]),
             index=d["index"],
-            skipped_keys={
-                int(k): bytes.fromhex(v) for k, v in d.get("skipped_keys", {}).items()
-            },
+            skipped_keys={int(k): bytes.fromhex(v) for k, v in d.get("skipped_keys", {}).items()},
         )
 
 
-def derive_ratchet_chains(
-    root_key: bytes, initiator: bool
-) -> tuple[RatchetChain, RatchetChain]:
+def derive_ratchet_chains(root_key: bytes, initiator: bool) -> tuple[RatchetChain, RatchetChain]:
     """
     Derive send and receive ratchet chains from the root session key.
 
@@ -633,9 +754,7 @@ class IdentityKeyCache:
                 continue
             store[peer_id] = bytes.fromhex(pub_hex)
             trust_states[peer_id] = TrustState(
-                fingerprint=str(
-                    entry.get("fingerprint", _peer_fingerprint(store[peer_id]))
-                ),
+                fingerprint=str(entry.get("fingerprint", _peer_fingerprint(store[peer_id]))),
                 verified=bool(entry.get("verified", False)),
                 key_changed=bool(entry.get("key_changed", False)),
             )
@@ -696,7 +815,11 @@ class ReplayProtector:
             raise ReplayError(f"Duplicate message ID: {message_id}")
         if counter <= self._max_counter - REPLAY_WINDOW:
             log.warning(
-                "security_event type=replay_attack reason=counter_outside_window message_id=%s counter=%s max_seen=%s",
+                (
+                    "security_event type=replay_attack "
+                    "reason=counter_outside_window "
+                    "message_id=%s counter=%s max_seen=%s"
+                ),
                 message_id,
                 counter,
                 self._max_counter,
@@ -763,9 +886,7 @@ def build_and_encrypt(
     )
 
     ad = env.compute_ad()
-    msg_sk = SessionKey(
-        raw=msg_key, conversation_id=conversation_id, peer_id=recipient_id
-    )
+    msg_sk = SessionKey(raw=msg_key, conversation_id=conversation_id, peer_id=recipient_id)
     ciphertext, nonce = encrypt_message(msg_sk, plaintext.encode("utf-8"), ad)
 
     env.nonce_b64 = base64.b64encode(nonce).decode()
@@ -815,9 +936,7 @@ def decrypt_envelope(
             envelope.id,
             envelope.conversation_id,
         )
-        raise IntegrityError(
-            "Ciphertext or authenticated metadata was tampered with"
-        ) from exc
+        raise IntegrityError("Ciphertext or authenticated metadata was tampered with") from exc
 
     # Step 4: commit only after successful decryption
     replay_protector.commit(envelope.id, envelope.counter)

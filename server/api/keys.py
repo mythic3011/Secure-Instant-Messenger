@@ -35,26 +35,45 @@ def _verify_key_bundle(identity_pub_b64: str, dh_pub_b64: str, key_sig_b64: str)
         identity_pub_bytes = base64.b64decode(identity_pub_b64, validate=True)
         dh_pub_bytes = base64.b64decode(dh_pub_b64, validate=True)
         sig_bytes = base64.b64decode(key_sig_b64, validate=True)
-    except Exception:
+    except Exception as exc:
         log.warning("key_bundle_rejected", reason="invalid_base64")
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid base64 in key bundle")
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Invalid base64 in key bundle",
+        ) from exc
 
     if len(identity_pub_bytes) != _ED25519_PUB_LEN:
-        log.warning("key_bundle_rejected", reason="identity_pub_wrong_length", got=len(identity_pub_bytes))
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="identity_pub must be 32 bytes")
+        log.warning(
+            "key_bundle_rejected",
+            reason="identity_pub_wrong_length",
+            got=len(identity_pub_bytes),
+        )
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="identity_pub must be 32 bytes",
+        )
     if len(dh_pub_bytes) != _X25519_PUB_LEN:
         log.warning("key_bundle_rejected", reason="dh_pub_wrong_length", got=len(dh_pub_bytes))
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="dh_pub must be 32 bytes")
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="dh_pub must be 32 bytes",
+        )
 
     try:
         pub = Ed25519PublicKey.from_public_bytes(identity_pub_bytes)
         pub.verify(sig_bytes, identity_pub_bytes + dh_pub_bytes)
-    except InvalidSignature:
+    except InvalidSignature as exc:
         log.warning("key_bundle_rejected", reason="invalid_signature")
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Key bundle signature invalid")
-    except Exception:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Key bundle signature invalid",
+        ) from exc
+    except Exception as exc:
         log.warning("key_bundle_rejected", reason="malformed_public_key")
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Malformed public key")
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Malformed public key",
+        ) from exc
 
 
 @router.post("/upload", status_code=status.HTTP_204_NO_CONTENT)

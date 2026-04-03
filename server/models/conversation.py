@@ -36,4 +36,6 @@ class Conversation(Base):
     unread_count_b: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
 
     def __repr__(self) -> str:
-        return f"<Conversation(id={self.id!r}, user_a={self.user_a_id!r}, user_b={self.user_b_id!r})>"
+        return (
+            f"<Conversation(id={self.id!r}, user_a={self.user_a_id!r}, user_b={self.user_b_id!r})>"
+        )

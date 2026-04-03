@@ -2,7 +2,7 @@
 
 Date: 2026-03-26
 Status: Recommended repo management baseline
-Scope: pull request checks, review routing, auto labeling
+Scope: pull request checks, review routing, PR labeling, issue labeling
 
 ## Goal
 
@@ -47,6 +47,7 @@ The repo now includes:
 
 - `.github/workflows/autolabel.yml`
 - `.github/labeler.yml`
+- `.github/workflows/issue-autolabel.yml`
 
 Design choices:
 
@@ -59,15 +60,20 @@ Labels expected to exist in the repository:
 - `ui`
 - `client`
 - `server`
+- `mixed-scope`
 - `security`
 - `docs`
-- `tests`
+- `testing`
 - `ci`
+- `bug`
+- `enhancement`
+- `question`
 
-This is intentionally smaller than a full label taxonomy.
+PR auto-labeling uses path rules. Issue auto-labeling uses lightweight title/body
+inference and only applies labels that already exist in the repo.
 
-Size labels and other automation can be added later if there is a concrete
-review need.
+This is still intentionally smaller than a full label taxonomy; the goal is
+triage clarity, not automation sprawl.
 
 ## CODEOWNERS
 
@@ -87,6 +93,6 @@ Not included in this baseline:
 - stale bot
 - auto-close bots
 - path-filtered required checks
-- new workflow families beyond labeling
+- broad policy bots beyond focused labeling / submission workflows
 
 These add maintenance cost and are not needed for the current freeze baseline.

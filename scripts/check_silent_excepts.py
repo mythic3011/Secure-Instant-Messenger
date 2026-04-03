@@ -27,9 +27,7 @@ class SilentExceptVisitor(ast.NodeVisitor):
         if not self._is_broad_except(handler):
             return
         if self._is_silent_body(handler.body):
-            self.issues.append(
-                f"{self.path}:{handler.lineno}: broad except with silent body"
-            )
+            self.issues.append(f"{self.path}:{handler.lineno}: broad except with silent body")
 
     def _is_whitelisted(self, handler: ast.ExceptHandler) -> bool:
         if handler.lineno - 1 >= len(self.source_lines):

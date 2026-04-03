@@ -51,6 +51,7 @@ class SendResult:
     state: UIScreenState
     sent_at: int | None = None
 
+
 @dataclass(frozen=True)
 class TrustViewModel:
     fingerprint: str

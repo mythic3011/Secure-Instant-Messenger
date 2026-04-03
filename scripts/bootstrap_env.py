@@ -5,7 +5,6 @@ import secrets
 import sys
 from pathlib import Path
 
-
 WEAK_VALUES = {
     "replace_with_random_64_hex_chars",
     "changeme",
@@ -36,7 +35,11 @@ def main() -> int:
         if mode == "production" or not value or len(value) < 64 or value.lower() in WEAK_VALUES:
             text = update_assignment(text, name, secrets.token_hex(32))
 
-    app_env = "production" if mode == "production" else current.get("APP_ENV", "development") or "development"
+    app_env = (
+        "production"
+        if mode == "production"
+        else current.get("APP_ENV", "development") or "development"
+    )
     text = update_assignment(text, "APP_ENV", app_env)
     text = update_assignment(text, "DATABASE_URL", "sqlite+aiosqlite:///./data/im.db")
     text = update_assignment(text, "TLS_CERT_FILE", "./certs/server.crt")

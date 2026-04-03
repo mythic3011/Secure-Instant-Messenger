@@ -20,7 +20,9 @@ def test_banner_stores_current_banner_and_formats_title_message() -> None:
 
     assert widget.current_banner == banner
     assert widget.current_severity == "error"
-    assert widget.current_text == "Identity key changed\nVerify this contact before trusting new messages."
+    assert widget.current_text == (
+        "Identity key changed\nVerify this contact before trusting new messages."
+    )
 
 
 def test_banner_clears_to_empty_state() -> None:

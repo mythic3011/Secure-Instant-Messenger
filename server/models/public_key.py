@@ -25,9 +25,7 @@ class PublicKey(Base):
     identity_pub: Mapped[str] = mapped_column(Text, nullable=False)
     dh_pub: Mapped[str] = mapped_column(Text, nullable=False)
     key_sig: Mapped[str] = mapped_column(Text, nullable=False)
-    uploaded_at: Mapped[datetime] = mapped_column(
-        DateTime, default=func.now(), nullable=False
-    )
+    uploaded_at: Mapped[datetime] = mapped_column(DateTime, default=func.now(), nullable=False)
 
     # Relationships
     user: Mapped[User] = relationship("User", back_populates="public_keys")

@@ -21,9 +21,7 @@ class User(Base, TimestampMixin, SoftDeleteMixin):
     __tablename__ = "users"
 
     id: Mapped[str] = mapped_column(String(32), primary_key=True)
-    username: Mapped[str] = mapped_column(
-        String(255), unique=True, nullable=False, index=True
-    )
+    username: Mapped[str] = mapped_column(String(255), unique=True, nullable=False, index=True)
     pw_hash: Mapped[str] = mapped_column(Text, nullable=False)
     totp_secret: Mapped[str] = mapped_column(Text, nullable=False)
 

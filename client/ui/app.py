@@ -8,6 +8,9 @@ Handles all message events from screens and dispatches WebSocket pushes.
 from __future__ import annotations
 
 import base64
+import binascii
+import hashlib
+from collections import OrderedDict
 from pathlib import Path
 from typing import Any, Protocol, cast, runtime_checkable
 
@@ -15,24 +18,29 @@ import httpx
 import structlog
 from pydantic import ValidationError
 from textual.app import App, ComposeResult
+from textual.css.query import NoMatches
 from textual.widgets import Static
 
 from client.api.client import IMClient, IMClientError
 from client.crypto.session import (
+    PEER_BUNDLE_BLOCKED_MESSAGE,
     DHKeypair,
     IdentityKeyCache,
     IdentityKeypair,
     IntegrityError,
+    InvalidPeerBundleError,
     KeyChangeWarning,
     LocalStorageSecurityError,
     ReplayProtector,
     SecurityError,
     build_and_encrypt,
+    check_and_update_verified_peer_bundle,
     compute_fingerprint,
     decrypt_envelope,
     derive_ratchet_chains,
     derive_session_key_as_responder,
     make_key_signature,
+    validate_decode_and_bind_peer_bundle,
 )
 from client.crypto.storage import (
     LocalKeys,
@@ -95,6 +103,8 @@ from client.use_cases.open_conversation import (
 )
 from shared.protocol import (
     DeliveryAck,
+    FriendRequestPushPayload,
+    FriendRequestStatus,
     MessageEnvelope,
     RegisterRequest,
 )
@@ -147,6 +157,16 @@ MESSAGE_SEND_FAILED_BANNER = UIBanner(
     title="Send failed",
     message="The message could not be sent.",
 )
+_INVALID_BUNDLE_LOG_KEY_LIMIT = 256
+_INVALID_BUNDLE_HASH_FIELD_CHARS = 128
+PEER_BUNDLE_BLOCKED_BANNER = UIBanner(
+    code="message_send_blocked",
+    severity="error",
+    title="Session setup blocked",
+    message=PEER_BUNDLE_BLOCKED_MESSAGE,
+    persistent=True,
+    dismissible=False,
+)
 
 
 def _clean_validation_error_message(message: str) -> str:
@@ -196,10 +216,25 @@ class IMApp(App):
         self._counters: dict[str, int] = {}
         # peer_id -> username cache (for get_keys lookups)
         self._peer_usernames: dict[str, str] = {}
+        self._invalid_peer_bundle_log_keys: OrderedDict[str, None] = OrderedDict()
 
     def _persist_sessions(self) -> None:
         if self._local_keys and self._password and self._username:
             save_sessions(self._username, self._password, self._sessions)
+
+    @staticmethod
+    def _rehydrate_outbound_counters(sessions: dict[str, SessionState]) -> dict[str, int]:
+        return {
+            conversation_id: state.next_outbound_counter
+            for conversation_id, state in sessions.items()
+        }
+
+    @staticmethod
+    def _render_register_error(screen: Any, message: str) -> None:
+        try:
+            screen.query_one("#error", Static).update(message)
+        except NoMatches as exc:
+            log.warning("register_error_render_failed", err=str(exc))
 
     def _derive_and_set_storage_key(self, username: str, password: str) -> None:
         keystore_path = Path.home() / ".comp3334im" / username / "keystore.json"
@@ -235,6 +270,24 @@ class IMApp(App):
             message=message,
         )
 
+    @staticmethod
+    def _local_security_banner(message: str) -> UIBanner:
+        if message in {
+            LOCAL_STORAGE_UNAVAILABLE.message,
+            "Local secure storage is unavailable.",
+        }:
+            return LOCAL_STORAGE_UNAVAILABLE
+        if message == PEER_BUNDLE_BLOCKED_MESSAGE:
+            return PEER_BUNDLE_BLOCKED_BANNER
+        return UIBanner(
+            code="message_send_blocked",
+            severity="error",
+            title="Message blocked",
+            message=message,
+            persistent=True,
+            dismissible=False,
+        )
+
     def build_screen_state(
         self,
         kind: str,
@@ -265,15 +318,57 @@ class IMApp(App):
                 message="A message failed integrity checks and was rejected.",
             )
         if isinstance(exc, SecurityError):
-            return UIBanner(
-                code="message_send_blocked",
-                severity="error",
-                title="Message blocked",
-                message="A security policy blocked this action.",
-            )
+            if isinstance(exc, InvalidPeerBundleError):
+                return PEER_BUNDLE_BLOCKED_BANNER
+            return self._local_security_banner("A security policy blocked this action.")
         if isinstance(exc, IMClientError):
             return self._server_error_banner(exc.detail)
         return MESSAGE_SEND_FAILED_BANNER
+
+    def _invalid_peer_bundle_log_key(self, *, peer_id: str, bundle: object) -> str:
+        digest = hashlib.sha256()
+        digest.update(peer_id.encode())
+        for field_name in ("identity_pub_b64", "dh_pub_b64", "key_sig_b64"):
+            value = getattr(bundle, field_name, "")
+            if isinstance(value, str):
+                prefix = value[:_INVALID_BUNDLE_HASH_FIELD_CHARS]
+                digest.update(field_name.encode())
+                digest.update(str(len(value)).encode())
+                digest.update(prefix.encode())
+        return digest.hexdigest()
+
+    def _should_log_invalid_peer_bundle(self, key: str) -> bool:
+        if key in self._invalid_peer_bundle_log_keys:
+            self._invalid_peer_bundle_log_keys.move_to_end(key)
+            return False
+        self._invalid_peer_bundle_log_keys[key] = None
+        if len(self._invalid_peer_bundle_log_keys) > _INVALID_BUNDLE_LOG_KEY_LIMIT:
+            self._invalid_peer_bundle_log_keys.popitem(last=False)
+        return True
+
+    def _log_invalid_peer_bundle(
+        self,
+        *,
+        event: str,
+        peer_id: str,
+        bundle: object,
+        exc: InvalidPeerBundleError,
+        conversation_id: str | None = None,
+        message_id: str | None = None,
+        peer_username: str | None = None,
+    ) -> None:
+        log_key = self._invalid_peer_bundle_log_key(peer_id=peer_id, bundle=bundle)
+        if not self._should_log_invalid_peer_bundle(log_key):
+            return
+        log.warning(
+            event,
+            conversation_id=conversation_id,
+            message_id=message_id,
+            peer_id=peer_id,
+            peer=peer_username,
+            error=type(exc).__name__,
+            diagnostic_key=log_key,
+        )
 
     def trust_state_to_view_model(self, conversation_id: str) -> TrustViewModel | None:
         state = self._sessions.get(conversation_id)
@@ -355,6 +450,199 @@ class IMApp(App):
                 messages=(),
             )
 
+    async def _sync_chat_history_from_server(self, conversation_id: str) -> None:
+        if self._client is None:
+            return
+
+        pages: list[list[MessageEnvelope]] = []
+        before_id: str | None = None
+        while True:
+            try:
+                response = await self._client.fetch_messages(conversation_id, before_id=before_id)
+            except IMClientError as exc:
+                log.warning(
+                    "history_sync_fetch_failed",
+                    conversation_id=conversation_id,
+                    error=exc.detail,
+                )
+                return
+            except (httpx.ConnectError, httpx.TimeoutException, httpx.NetworkError) as exc:
+                log.warning(
+                    "history_sync_fetch_network_error",
+                    conversation_id=conversation_id,
+                    error=str(exc),
+                )
+                return
+            pages.append(list(response.messages))
+            if not response.has_more or response.next_cursor is None:
+                break
+            before_id = response.next_cursor
+
+        my_id = self._user_id or self._username
+        for page in reversed(pages):
+            for envelope in reversed(page):
+                if envelope.sender_id == my_id:
+                    continue
+                await self._store_fetched_history_envelope(envelope)
+
+    async def _store_fetched_history_envelope(self, envelope: MessageEnvelope) -> None:
+        if self._client is None:
+            return
+
+        conv_id = envelope.conversation_id
+        peer_id = envelope.sender_id
+        my_id = self._user_id or self._username
+
+        state = self._sessions.get(conv_id)
+        if state is None:
+            if (
+                envelope.eph_pub_b64 is None
+                or envelope.conv_dh_pub_b64 is None
+                or self._local_keys is None
+            ):
+                log.warning(
+                    "history_sync_session_unavailable",
+                    conversation_id=conv_id,
+                    message_id=envelope.id,
+                )
+                return
+
+            peer_username = self._peer_usernames.get(peer_id)
+            if peer_username is None:
+                log.warning(
+                    "history_sync_missing_peer_username",
+                    conversation_id=conv_id,
+                    message_id=envelope.id,
+                    peer_id=peer_id,
+                )
+                return
+
+            try:
+                peer_bundle = await self._client.get_keys(peer_username)
+            except (httpx.ConnectError, httpx.TimeoutException, httpx.NetworkError) as exc:
+                log.warning(
+                    "history_sync_get_keys_network_error",
+                    conversation_id=conv_id,
+                    message_id=envelope.id,
+                    peer=peer_username,
+                    err=str(exc),
+                )
+                return
+            except IMClientError as exc:
+                log.warning(
+                    "history_sync_get_keys_failed",
+                    conversation_id=conv_id,
+                    message_id=envelope.id,
+                    peer=peer_username,
+                    err=str(exc),
+                )
+                return
+
+            try:
+                verified_bundle = validate_decode_and_bind_peer_bundle(
+                    peer_bundle,
+                    expected_peer_id=peer_id,
+                    expected_username=peer_username,
+                )
+                eph_pub = base64.b64decode(envelope.eph_pub_b64, validate=True)
+                conv_dh_pub = base64.b64decode(envelope.conv_dh_pub_b64, validate=True)
+                session_key = derive_session_key_as_responder(
+                    my_identity_kp=self._local_keys.identity_kp,
+                    my_dh_kp=self._local_keys.dh_kp,
+                    peer_identity_pub_bytes=verified_bundle.identity_pub,
+                    peer_dh_pub_bytes=verified_bundle.dh_pub,
+                    eph_pub_bytes=eph_pub,
+                    conv_dh_pub_bytes=conv_dh_pub,
+                    my_user_id=my_id,
+                    peer_user_id=peer_id,
+                    conversation_id=conv_id,
+                )
+                send_chain, recv_chain = derive_ratchet_chains(session_key.raw, initiator=False)
+            except InvalidPeerBundleError as exc:
+                self._log_invalid_peer_bundle(
+                    event="history_sync_peer_bundle_rejected",
+                    peer_id=peer_id,
+                    bundle=peer_bundle,
+                    exc=exc,
+                    conversation_id=conv_id,
+                    message_id=envelope.id,
+                    peer_username=peer_username,
+                )
+                return
+            except (binascii.Error, ValueError) as exc:
+                log.warning(
+                    "history_sync_session_bootstrap_failed",
+                    conversation_id=conv_id,
+                    message_id=envelope.id,
+                    error=type(exc).__name__,
+                )
+                return
+            cache = IdentityKeyCache()
+            check_and_update_verified_peer_bundle(cache, peer_id, verified_bundle)
+            state = SessionState(
+                session_key=session_key,
+                send_chain=send_chain,
+                recv_chain=recv_chain,
+                replay_protector=ReplayProtector(),
+                identity_key_cache=cache,
+            )
+            self._sessions[conv_id] = state
+            self._persist_sessions()
+
+        try:
+            plaintext = decrypt_envelope(
+                recv_chain=state.recv_chain,
+                envelope=envelope,
+                replay_protector=state.replay_protector,
+            )
+        except SecurityError as exc:
+            log.warning(
+                "history_sync_message_rejected",
+                conversation_id=conv_id,
+                message_id=envelope.id,
+                error=type(exc).__name__,
+            )
+            return
+        except ValueError as exc:
+            log.warning(
+                "history_sync_message_malformed",
+                conversation_id=conv_id,
+                message_id=envelope.id,
+                err=str(exc),
+            )
+            return
+
+        try:
+            await save_message(
+                id=envelope.id,
+                conversation_id=conv_id,
+                sender_id=peer_id,
+                recipient_id=my_id,
+                counter=envelope.counter,
+                plaintext=plaintext,
+                sent_at=envelope.sent_at,
+                ttl_seconds=envelope.ttl_seconds,
+                delivery_status="delivered",
+            )
+        except (LocalStorageSecurityError, SecurityError) as exc:
+            log.warning(
+                "history_sync_store_failed",
+                conversation_id=conv_id,
+                message_id=envelope.id,
+                error=type(exc).__name__,
+            )
+            return
+
+        self._persist_sessions()
+        await upsert_conversation(
+            id=conv_id,
+            peer_id=peer_id,
+            peer_username=self._peer_usernames.get(peer_id, peer_id),
+            last_message_at=envelope.sent_at,
+            unread_count=0,
+        )
+        await self._send_delivery_ack(envelope.id, conv_id)
+
     async def send_message_state(
         self,
         *,
@@ -432,7 +720,7 @@ class IMApp(App):
                 ok=False,
                 state=self.build_screen_state(
                     "blocked",
-                    LOCAL_STORAGE_UNAVAILABLE,
+                    self._local_security_banner(result.reason.message),
                     disabled_actions=("send",) if result.disable_send else (),
                 ),
                 sent_at=result.sent_at,
@@ -467,6 +755,7 @@ class IMApp(App):
         self._local_keys = result.local_keys
         self._user_id = result.user_id
         self._sessions = result.sessions
+        self._counters = self._rehydrate_outbound_counters(result.sessions)
         return True
 
     @staticmethod
@@ -502,6 +791,15 @@ class IMApp(App):
             friends.show_status(result.status_message)
             return
         friends.show_error(result.message)
+
+    async def _refresh_open_conversation_lists(self) -> None:
+        await self._sync_conversations_from_server()
+        conversations = await get_conversations()
+        self._rehydrate_peer_usernames(conversations)
+
+        for screen in self.screen_stack:
+            if isinstance(screen, ConversationListScreen):
+                screen.populate(self._build_conversation_summaries(conversations))
 
     def compose(self) -> ComposeResult:
         yield from []  # app has no persistent widgets; screens handle layout
@@ -577,6 +875,7 @@ class IMApp(App):
     async def on_register_screen_register_request(self, msg: Any) -> None:
         username = msg.username
         password = msg.password
+        register_screen = self.screen
 
         identity_kp = IdentityKeypair.generate()
         dh_kp = DHKeypair.generate()
@@ -601,35 +900,19 @@ class IMApp(App):
                     )
                 )
             except (httpx.ConnectError, httpx.TimeoutException, httpx.NetworkError) as e:
-                try:
-                    self.screen.query_one("#error", Static).update(
-                        f"Cannot reach server — is it running? ({type(e).__name__})"
-                    )
-                except Exception as exc:  # allow-silent-except
-                    log.warning("register_error_render_failed", err=str(exc))
+                self._render_register_error(
+                    register_screen,
+                    f"Cannot reach server — is it running? ({type(e).__name__})",
+                )
                 return
             except IMClientError as e:
-                try:
-                    self.screen.query_one("#error", Static).update(
-                        f"Registration failed: {e.detail}"
-                    )
-                except Exception as exc:  # allow-silent-except
-                    log.warning("register_error_render_failed", err=str(exc))
+                self._render_register_error(register_screen, f"Registration failed: {e.detail}")
                 return
             except ValidationError as e:
-                try:
-                    self.screen.query_one("#error", Static).update(
-                        "Registration failed: "
-                        f"{_clean_validation_error_message(e.errors()[0]['msg'])}"
-                    )
-                except Exception as exc:  # allow-silent-except
-                    log.warning("register_error_render_failed", err=str(exc))
-                return
-            except Exception as e:
-                try:
-                    self.screen.query_one("#error", Static).update(f"Unexpected error: {e}")
-                except Exception as exc:  # allow-silent-except
-                    log.warning("register_error_render_failed", err=str(exc))
+                self._render_register_error(
+                    register_screen,
+                    f"Registration failed: {_clean_validation_error_message(e.errors()[0]['msg'])}",
+                )
                 return
 
         save_keystore(username, password, local_keys)
@@ -684,12 +967,18 @@ class IMApp(App):
 
     async def on_conversation_list_screen_logout(self, msg: ConversationListScreen.Logout) -> None:
         if self._client:
+            unexpected_logout_error: Exception | None = None
             try:
                 await self._client.logout()
-            except Exception as exc:  # allow-silent-except
+            except (IMClientError, httpx.HTTPError) as exc:
                 log.warning("logout_failed", err=str(exc))
-            await self._client.__aexit__(None, None, None)
-            self._client = None
+            except Exception as exc:
+                unexpected_logout_error = exc
+            finally:
+                await self._client.__aexit__(None, None, None)
+                self._client = None
+            if unexpected_logout_error is not None:
+                raise unexpected_logout_error
         self._persist_sessions()
         self.pop_screen()
 
@@ -742,17 +1031,14 @@ class IMApp(App):
         """Handler for FriendsScreen._LoadPending (internal load trigger)."""
         if self._client is None:
             return
-        try:
-            friends = self.screen
-        except Exception as exc:  # allow-silent-except
-            log.warning("friends_screen_lookup_failed", err=str(exc))
+        friends = self._current_friends_screen()
+        if friends is None:
             return
         result = await execute_load_pending_requests(self._friends_context())
-        try:
-            self._apply_pending_requests_result(friends=friends, result=result)
-        except Exception as exc:  # allow-silent-except
-            log.warning("friends_screen_update_failed", err=str(exc))
+        friends = self._current_friends_screen()
+        if friends is None:
             return
+        self._apply_pending_requests_result(friends=friends, result=result)
         if not isinstance(result, PendingRequestsLoaded):
             log.warning("friends_pending_load_failed", err=result.message)
 
@@ -785,6 +1071,9 @@ class IMApp(App):
             action="accept",
         )
         self._apply_friend_request_result(friends=friends, result=result)
+        if isinstance(result, FriendRequestHandled):
+            await self._refresh_open_conversation_lists()
+            return
         if not isinstance(result, FriendRequestHandled):
             log.warning(
                 "friend_request_accept_failed",
@@ -818,6 +1107,7 @@ class IMApp(App):
         chat = self.screen
         if not isinstance(chat, ChatScreen):
             return
+        await self._sync_chat_history_from_server(msg.conversation_id)
         result = await self.load_chat_history_state(msg.conversation_id)
         trust_state = self.trust_state_to_view_model(msg.conversation_id)
         if trust_state and trust_state.banner is not None:
@@ -885,6 +1175,20 @@ class IMApp(App):
             await self._handle_incoming_message(msg.get("payload", {}))
         elif msg_type == "ack":
             await self._handle_ack(msg.get("payload", {}))
+        elif msg_type == "friend_request":
+            await self._handle_friend_request_push(msg.get("payload", {}))
+
+    async def _handle_friend_request_push(self, payload: dict[str, Any]) -> None:
+        try:
+            push = FriendRequestPushPayload.model_validate(payload)
+        except ValidationError as exc:
+            log.warning("friend_request_push_invalid", err=str(exc))
+            return
+
+        if push.event != FriendRequestStatus.ACCEPTED:
+            return
+
+        await self._refresh_open_conversation_lists()
 
     async def _handle_incoming_message(self, payload: dict) -> None:
         try:
@@ -925,31 +1229,55 @@ class IMApp(App):
                 log.warning("get_keys failed", peer=peer_username, err=str(e))
                 return
 
-            peer_identity_pub = base64.b64decode(peer_bundle.identity_pub_b64)
-            peer_dh_pub = base64.b64decode(peer_bundle.dh_pub_b64)
-            eph_pub = base64.b64decode(envelope.eph_pub_b64)
-            conv_dh_pub = base64.b64decode(envelope.conv_dh_pub_b64)
+            try:
+                verified_bundle = validate_decode_and_bind_peer_bundle(
+                    peer_bundle,
+                    expected_peer_id=peer_id,
+                    expected_username=peer_username,
+                )
+                eph_pub = base64.b64decode(envelope.eph_pub_b64, validate=True)
+                conv_dh_pub = base64.b64decode(envelope.conv_dh_pub_b64, validate=True)
+                session_key = derive_session_key_as_responder(
+                    my_identity_kp=self._local_keys.identity_kp,
+                    my_dh_kp=self._local_keys.dh_kp,
+                    peer_identity_pub_bytes=verified_bundle.identity_pub,
+                    peer_dh_pub_bytes=verified_bundle.dh_pub,
+                    eph_pub_bytes=eph_pub,
+                    conv_dh_pub_bytes=conv_dh_pub,
+                    my_user_id=my_id,
+                    peer_user_id=peer_id,
+                    conversation_id=conv_id,
+                )
+                send_chain, recv_chain = derive_ratchet_chains(session_key.raw, initiator=False)
+            except InvalidPeerBundleError as exc:
+                self._log_invalid_peer_bundle(
+                    event="incoming_peer_bundle_rejected",
+                    peer_id=peer_id,
+                    bundle=peer_bundle,
+                    exc=exc,
+                    conversation_id=conv_id,
+                    message_id=envelope.id,
+                    peer_username=peer_username,
+                )
+                return
+            except (binascii.Error, ValueError) as exc:
+                log.warning(
+                    "incoming_session_bootstrap_failed",
+                    conversation_id=conv_id,
+                    message_id=envelope.id,
+                    error=type(exc).__name__,
+                )
+                return
 
-            session_key = derive_session_key_as_responder(
-                my_identity_kp=self._local_keys.identity_kp,
-                my_dh_kp=self._local_keys.dh_kp,
-                peer_identity_pub_bytes=peer_identity_pub,
-                peer_dh_pub_bytes=peer_dh_pub,
-                eph_pub_bytes=eph_pub,
-                conv_dh_pub_bytes=conv_dh_pub,
-                my_user_id=my_id,
-                peer_user_id=peer_id,
-                conversation_id=conv_id,
-            )
-            send_chain, recv_chain = derive_ratchet_chains(session_key.raw, initiator=False)
             cache = IdentityKeyCache()
-            cache.check_and_update(peer_id, peer_identity_pub)
+            check_and_update_verified_peer_bundle(cache, peer_id, verified_bundle)
             state = SessionState(
                 session_key=session_key,
                 send_chain=send_chain,
                 recv_chain=recv_chain,
                 replay_protector=ReplayProtector(),
                 identity_key_cache=cache,
+                next_outbound_counter=0,
             )
             self._sessions[conv_id] = state
             self._persist_sessions()
@@ -960,16 +1288,31 @@ class IMApp(App):
             peer_username = self._peer_usernames.get(peer_id)
             client = self._client
             if peer_username and client:
+                peer_bundle: object | None = None
                 try:
                     peer_bundle = await client.get_keys(peer_username)
-                    peer_identity_pub = base64.b64decode(peer_bundle.identity_pub_b64)
-                    key_changed = state.identity_key_cache.check_and_update(
-                        peer_id, peer_identity_pub
+                    verified_bundle = validate_decode_and_bind_peer_bundle(
+                        peer_bundle,
+                        expected_peer_id=peer_id,
+                        expected_username=peer_username,
+                    )
+                    key_changed = check_and_update_verified_peer_bundle(
+                        state.identity_key_cache, peer_id, verified_bundle
                     )
                     self._persist_sessions()
                 except KeyChangeWarning:
                     key_changed = True
                     self._persist_sessions()
+                except InvalidPeerBundleError as exc:
+                    self._log_invalid_peer_bundle(
+                        event="key_bundle_refresh_rejected",
+                        peer_id=peer_id,
+                        bundle=peer_bundle,
+                        exc=exc,
+                        conversation_id=conv_id,
+                        message_id=envelope.id,
+                        peer_username=peer_username,
+                    )
                 except IMClientError as exc:
                     log.warning("key_bundle_refresh_failed", peer=peer_username, err=str(exc))
                 except (httpx.ConnectError, httpx.TimeoutException, httpx.NetworkError) as exc:
@@ -1073,28 +1416,32 @@ class IMApp(App):
                         )
 
         # Send delivery ACK
-        if self._client:
-            try:
-                await self._client.send_ack(
-                    DeliveryAck(
-                        message_id=envelope.id,
-                        conversation_id=conv_id,
-                    )
-                )
-            except IMClientError as exc:
-                log.warning("delivery_ack_failed", message_id=envelope.id, err=str(exc))
-            except (httpx.ConnectError, httpx.TimeoutException, httpx.NetworkError) as exc:
-                log.warning(
-                    "delivery_ack_network_error",
-                    message_id=envelope.id,
-                    err=str(exc),
-                )
+        await self._send_delivery_ack(envelope.id, conv_id)
 
     async def _handle_ack(self, payload: dict) -> None:
         message_id = payload.get("message_id")
         if not message_id:
             return
         await update_delivery_status(message_id, "delivered")
+
+    async def _send_delivery_ack(self, message_id: str, conversation_id: str) -> None:
+        if self._client is None:
+            return
+        try:
+            await self._client.send_ack(
+                DeliveryAck(
+                    message_id=message_id,
+                    conversation_id=conversation_id,
+                )
+            )
+        except IMClientError as exc:
+            log.warning("delivery_ack_failed", message_id=message_id, err=str(exc))
+        except (httpx.ConnectError, httpx.TimeoutException, httpx.NetworkError) as exc:
+            log.warning(
+                "delivery_ack_network_error",
+                message_id=message_id,
+                err=str(exc),
+            )
 
     # ------------------------------------------------------------------
     # Session establishment helper

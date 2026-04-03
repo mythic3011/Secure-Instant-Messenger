@@ -29,6 +29,7 @@ Session cache (~/.comp3334im/<username>/sessions.json):
       "session_key_nonce_b64": "...",
       "session_key_ct_b64":    "...",   # AES-GCM encrypted 32-byte session key
       "peer_id":               "...",
+      "next_outbound_counter": 3,        # next sender counter for this conversation
       "replay_state":          { "max_counter": N, "seen_ids": [...] },
       "identity_key_cache":    { "<peer_id>": "<hex pub key>" }
     }
@@ -236,6 +237,7 @@ class SessionState:
     recv_chain: RatchetChain
     replay_protector: ReplayProtector
     identity_key_cache: IdentityKeyCache
+    next_outbound_counter: int = 0
 
 
 def save_sessions(
@@ -259,6 +261,7 @@ def save_sessions(
             "session_key_nonce_b64": base64.b64encode(sk_nonce).decode(),
             "session_key_ct_b64": base64.b64encode(sk_ct).decode(),
             "peer_id": state.session_key.peer_id,
+            "next_outbound_counter": state.next_outbound_counter,
             "replay_state": state.replay_protector.as_dict(),
             "send_chain": state.send_chain.as_dict(),
             "recv_chain": state.recv_chain.as_dict(),
@@ -312,9 +315,14 @@ def load_sessions(
             send_chain=RatchetChain.from_dict(entry["send_chain"]),
             recv_chain=RatchetChain.from_dict(entry["recv_chain"]),
             replay_protector=ReplayProtector(state=entry.get("replay_state")),
-            identity_key_cache=IdentityKeyCache.from_dict(
-                entry.get("identity_key_cache", {})
-            ),
+            identity_key_cache=IdentityKeyCache.from_dict(entry.get("identity_key_cache", {})),
+            next_outbound_counter=_load_next_outbound_counter(entry),
         )
 
     return result
+
+
+def _load_next_outbound_counter(entry: dict[str, object]) -> int:
+    """Backward-compatible restore for the next outbound sender counter."""
+    value = entry.get("next_outbound_counter", 0)
+    return value if isinstance(value, int) and value >= 0 else 0

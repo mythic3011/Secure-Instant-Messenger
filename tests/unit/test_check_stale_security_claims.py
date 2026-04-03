@@ -19,7 +19,10 @@ def test_scan_file_flags_hashed_conversation_id_claim(tmp_path: Path) -> None:
     issues = check_stale_security_claims.scan_file(target)
 
     assert issues == [
-        f"{target}:1: stale claim: conversation_id must not be documented as sha256(sorted(...)); it is server-issued"
+        (
+            f"{target}:1: stale claim: conversation_id must not be documented "
+            "as sha256(sorted(...)); it is server-issued"
+        )
     ]
 
 
@@ -32,7 +35,10 @@ def test_scan_file_flags_delivered_read_claim(tmp_path: Path) -> None:
     issues = check_stale_security_claims.scan_file(target)
 
     assert issues == [
-        f"{target}:1: stale claim: delivery status should match current sent/delivered semantics; read is reserved only"
+        (
+            f"{target}:1: stale claim: delivery status should match current "
+            "sent/delivered semantics; read is reserved only"
+        )
     ]
 
 
@@ -40,7 +46,10 @@ def test_scan_file_allows_server_main_query_param_rationale(tmp_path: Path) -> N
     (tmp_path / "server").mkdir()
     target = _write(
         tmp_path / "server" / "main.py",
-        "Why first-frame auth instead of query-parameter token:\nTokens in ?token=<token> appear in server access logs.\n",
+        (
+            "Why first-frame auth instead of query-parameter token:\n"
+            "Tokens in ?token=<token> appear in server access logs.\n"
+        ),
     )
 
     issues = check_stale_security_claims.scan_file(target)

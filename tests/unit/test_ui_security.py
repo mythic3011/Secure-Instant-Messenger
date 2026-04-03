@@ -1,17 +1,23 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 from types import SimpleNamespace
 from typing import Any, cast
 
 import httpx
 import pytest
+from textual.css.query import NoMatches
 
 from client.api.client import IMClientConnectionError, IMClientError
 from client.crypto.session import (
+    DHKeypair,
     IdentityKeyCache,
+    IdentityKeypair,
+    InvalidPeerBundleError,
     KeyChangeWarning,
     LocalStorageSecurityError,
+    make_key_signature,
 )
 from client.ui import app as app_module
 from client.ui.app import IMApp
@@ -25,9 +31,12 @@ from client.ui.contracts import (
 )
 from client.ui.screens.chat import ChatScreen
 from client.ui.screens.conversations import ConversationItem, ConversationListScreen
+from client.ui.screens.friends import FriendsScreen
 from client.ui.screens.login import LoginScreen
 from client.ui.screens.settings import SettingsScreen
+from client.use_cases.friends import FriendRequestHandled
 from client.use_cases.login import LoginSucceeded
+from shared.protocol import FetchMessagesResponse, FriendRequestStatus, MessageEnvelope
 from tests.secrets import TEST_ACCOUNT_PASSWORD
 
 
@@ -97,6 +106,24 @@ class _FakeLoginScreen:
         raise KeyError(msg)
 
 
+class _FakeRegisterScreen:
+    def __init__(self, *, query_error: Exception | None = None) -> None:
+        self.error = _FakeStatic()
+        self._query_error = query_error
+        self.totp_uri: str | None = None
+
+    def query_one(self, selector: str, *_args, **_kwargs):
+        if selector == "#error":
+            if self._query_error is not None:
+                raise self._query_error
+            return self.error
+        msg = f"unexpected selector: {selector}"
+        raise KeyError(msg)
+
+    def show_totp_setup(self, totp_uri: str) -> None:
+        self.totp_uri = totp_uri
+
+
 def _patch_chat_widgets(
     monkeypatch: pytest.MonkeyPatch,
     chat: ChatScreen,
@@ -142,6 +169,32 @@ def _identity_cache_raw(value: dict[str, dict[str, object]]) -> dict[str, object
     return cast(dict[str, object], value)
 
 
+def _history_envelope(
+    *,
+    message_id: str,
+    sender_id: str,
+    recipient_id: str = "alice-id",
+    conversation_id: str = "conv-1",
+    counter: int = 0,
+    sent_at: int = 100,
+    eph_pub_b64: str | None = None,
+    conv_dh_pub_b64: str | None = None,
+) -> MessageEnvelope:
+    return MessageEnvelope(
+        id=message_id,
+        sender_id=sender_id,
+        recipient_id=recipient_id,
+        conversation_id=conversation_id,
+        counter=counter,
+        nonce_b64=base64.b64encode(b"0" * 12).decode(),
+        ciphertext_b64=base64.b64encode(b"ciphertext").decode(),
+        eph_pub_b64=eph_pub_b64,
+        conv_dh_pub_b64=conv_dh_pub_b64,
+        chain_index=counter,
+        sent_at=sent_at,
+    )
+
+
 @pytest.mark.asyncio
 async def test_chat_history_local_decrypt_failure_is_handled(
     monkeypatch: pytest.MonkeyPatch,
@@ -172,6 +225,266 @@ async def test_chat_history_local_decrypt_failure_is_handled(
     assert "Local chat history is unavailable" in warning_widget.value
     assert len(messages.items) == 1
     assert send_button.disabled is False
+
+
+@pytest.mark.asyncio
+async def test_chat_history_request_syncs_before_render(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app = IMApp("https://example.test", "alice")
+    chat = ChatScreen("conv-1", "bob-id", "bob", "alice-id")
+    app._screen_stack.append(chat)  # type: ignore[attr-defined]
+    call_order: list[str] = []
+    result = ChatHistoryResult(state=UIScreenState(kind="ok"), messages=())
+    rendered: list[ChatHistoryResult] = []
+
+    async def _sync_history(conversation_id: str) -> None:
+        call_order.append(f"sync:{conversation_id}")
+
+    async def _load_history(conversation_id: str) -> ChatHistoryResult:
+        call_order.append(f"load:{conversation_id}")
+        return result
+
+    monkeypatch.setattr(app, "_sync_chat_history_from_server", _sync_history)
+    monkeypatch.setattr(app, "load_chat_history_state", _load_history)
+    monkeypatch.setattr(chat, "render_history_result", lambda history: rendered.append(history))
+
+    await app.on_chat_screen_request_history(SimpleNamespace(conversation_id="conv-1"))
+
+    assert call_order == ["sync:conv-1", "load:conv-1"]
+    assert rendered == [result]
+
+
+@pytest.mark.asyncio
+async def test_history_sync_processes_oldest_peer_messages_only(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app = IMApp("https://example.test", "alice")
+    app._client = _as_any(SimpleNamespace(fetch_messages=None))
+    app._user_id = "alice-id"
+    processed: list[str] = []
+
+    newest_own = _history_envelope(message_id="msg-3", sender_id="alice-id", sent_at=300)
+    middle_peer = _history_envelope(message_id="msg-2", sender_id="bob-id", sent_at=200)
+    oldest_peer = _history_envelope(message_id="msg-1", sender_id="bob-id", sent_at=100)
+
+    async def _fetch_messages(
+        _conversation_id: str,
+        before_id: str | None = None,
+        limit: int = 50,
+    ) -> FetchMessagesResponse:
+        assert before_id is None
+        assert limit == 50
+        return FetchMessagesResponse(
+            messages=[newest_own, middle_peer, oldest_peer],
+            has_more=False,
+            next_cursor=None,
+        )
+
+    async def _store_history(envelope: MessageEnvelope) -> None:
+        processed.append(envelope.id)
+
+    monkeypatch.setattr(app._client, "fetch_messages", _fetch_messages)
+    monkeypatch.setattr(app, "_store_fetched_history_envelope", _store_history)
+
+    await app._sync_chat_history_from_server("conv-1")
+
+    assert processed == ["msg-1", "msg-2"]
+
+
+@pytest.mark.asyncio
+async def test_history_sync_pages_all_messages_oldest_to_newest(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app = IMApp("https://example.test", "alice")
+    app._client = _as_any(SimpleNamespace(fetch_messages=None))
+    app._user_id = "alice-id"
+    processed: list[str] = []
+    cursors: list[str | None] = []
+
+    page_one = [
+        _history_envelope(message_id="msg-4", sender_id="alice-id", sent_at=400),
+        _history_envelope(message_id="msg-3", sender_id="bob-id", sent_at=300),
+    ]
+    page_two = [
+        _history_envelope(message_id="msg-2", sender_id="bob-id", sent_at=200),
+        _history_envelope(message_id="msg-1", sender_id="bob-id", sent_at=100),
+    ]
+
+    async def _fetch_messages(
+        _conversation_id: str,
+        before_id: str | None = None,
+        limit: int = 50,
+    ) -> FetchMessagesResponse:
+        assert limit == 50
+        cursors.append(before_id)
+        if before_id is None:
+            return FetchMessagesResponse(
+                messages=page_one,
+                has_more=True,
+                next_cursor="msg-3",
+            )
+        if before_id == "msg-3":
+            return FetchMessagesResponse(
+                messages=page_two,
+                has_more=False,
+                next_cursor=None,
+            )
+        msg = f"unexpected cursor: {before_id}"
+        raise AssertionError(msg)
+
+    async def _store_history(envelope: MessageEnvelope) -> None:
+        processed.append(envelope.id)
+
+    monkeypatch.setattr(app._client, "fetch_messages", _fetch_messages)
+    monkeypatch.setattr(app, "_store_fetched_history_envelope", _store_history)
+
+    await app._sync_chat_history_from_server("conv-1")
+
+    assert cursors == [None, "msg-3"]
+    assert processed == ["msg-1", "msg-2", "msg-3"]
+
+
+@pytest.mark.asyncio
+async def test_store_fetched_history_envelope_bootstraps_session_and_persists(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app = IMApp("https://example.test", "alice")
+    app._client = _as_any(SimpleNamespace(get_keys=None, send_ack=None))
+    app._user_id = "alice-id"
+    app._local_keys = _as_any(SimpleNamespace(identity_kp=object(), dh_kp=object()))
+    app._peer_usernames = {"bob-id": "bob"}
+    persisted: list[str] = []
+    saved_messages: list[dict[str, object]] = []
+    upserted: list[dict[str, object]] = []
+    acked: list[tuple[str, str]] = []
+
+    envelope = _history_envelope(
+        message_id="msg-1",
+        sender_id="bob-id",
+        counter=0,
+        sent_at=100,
+        eph_pub_b64=base64.b64encode(b"peer-eph").decode(),
+        conv_dh_pub_b64=base64.b64encode(b"peer-conv").decode(),
+    )
+    peer_identity = IdentityKeypair.generate()
+    peer_dh = DHKeypair.generate()
+
+    async def _get_keys(_peer_username: str):
+        return SimpleNamespace(
+            identity_pub_b64=base64.b64encode(peer_identity.public_bytes()).decode(),
+            dh_pub_b64=base64.b64encode(peer_dh.public_bytes()).decode(),
+            key_sig_b64=base64.b64encode(make_key_signature(peer_identity, peer_dh)).decode(),
+            user_id="bob-id",
+            username="bob",
+            uploaded_at=123,
+        )
+
+    async def _save_message(**kwargs) -> None:
+        saved_messages.append(kwargs)
+
+    async def _upsert_conversation(**kwargs) -> None:
+        upserted.append(kwargs)
+
+    async def _send_ack(ack) -> None:
+        acked.append((ack.message_id, ack.conversation_id))
+
+    monkeypatch.setattr(app._client, "get_keys", _get_keys)
+    monkeypatch.setattr(app._client, "send_ack", _send_ack)
+    monkeypatch.setattr(
+        app_module,
+        "derive_session_key_as_responder",
+        lambda **_kwargs: SimpleNamespace(
+            raw=b"k" * 32,
+            conversation_id="conv-1",
+            peer_id="bob-id",
+        ),
+    )
+    monkeypatch.setattr(
+        app_module,
+        "derive_ratchet_chains",
+        lambda *_args, **_kwargs: (SimpleNamespace(), SimpleNamespace()),
+    )
+    monkeypatch.setattr(app_module, "decrypt_envelope", lambda **_kwargs: "hello from history")
+    monkeypatch.setattr(app_module, "save_message", _save_message)
+    monkeypatch.setattr(app_module, "upsert_conversation", _upsert_conversation)
+    monkeypatch.setattr(app, "_persist_sessions", lambda: persisted.append("persist"))
+
+    await app._store_fetched_history_envelope(envelope)
+
+    assert "conv-1" in app._sessions
+    assert saved_messages == [
+        {
+            "id": "msg-1",
+            "conversation_id": "conv-1",
+            "sender_id": "bob-id",
+            "recipient_id": "alice-id",
+            "counter": 0,
+            "plaintext": "hello from history",
+            "sent_at": 100,
+            "ttl_seconds": None,
+            "delivery_status": "delivered",
+        }
+    ]
+    assert upserted[0]["peer_username"] == "bob"
+    assert persisted == ["persist", "persist"]
+    assert acked == [("msg-1", "conv-1")]
+
+
+@pytest.mark.asyncio
+async def test_store_fetched_history_envelope_invalid_bootstrap_material_is_skipped(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app = IMApp("https://example.test", "alice")
+    app._client = _as_any(SimpleNamespace(get_keys=None, send_ack=None))
+    app._user_id = "alice-id"
+    app._local_keys = _as_any(SimpleNamespace(identity_kp=object(), dh_kp=object()))
+    app._peer_usernames = {"bob-id": "bob"}
+    warning_events: list[tuple[tuple, dict]] = []
+    saved_messages: list[dict[str, object]] = []
+    acked: list[tuple[str, str]] = []
+
+    envelope = _history_envelope(
+        message_id="msg-bad",
+        sender_id="bob-id",
+        counter=0,
+        sent_at=100,
+        eph_pub_b64="***not-base64***",
+        conv_dh_pub_b64=base64.b64encode(b"peer-conv").decode(),
+    )
+
+    async def _get_keys(_peer_username: str):
+        return SimpleNamespace(
+            identity_pub_b64=base64.b64encode(b"peer-identity").decode(),
+            dh_pub_b64=base64.b64encode(b"peer-dh").decode(),
+            key_sig_b64=base64.b64encode(b"bad-signature").decode(),
+            user_id="bob-id",
+            username="bob",
+            uploaded_at=123,
+        )
+
+    async def _save_message(**kwargs) -> None:
+        saved_messages.append(kwargs)
+
+    async def _send_ack(ack) -> None:
+        acked.append((ack.message_id, ack.conversation_id))
+
+    monkeypatch.setattr(app._client, "get_keys", _get_keys)
+    monkeypatch.setattr(app._client, "send_ack", _send_ack)
+    monkeypatch.setattr(app_module, "save_message", _save_message)
+    monkeypatch.setattr(
+        app_module.log,
+        "warning",
+        lambda *args, **kwargs: warning_events.append((args, kwargs)),
+    )
+
+    await app._store_fetched_history_envelope(envelope)
+
+    assert "conv-1" not in app._sessions
+    assert saved_messages == []
+    assert acked == []
+    assert warning_events
+    assert warning_events[0][0][0] == "history_sync_peer_bundle_rejected"
 
 
 @pytest.mark.asyncio
@@ -284,6 +597,399 @@ async def test_ensure_session_propagates_key_fetch_failure() -> None:
 
 
 @pytest.mark.asyncio
+async def test_send_message_invalid_peer_bundle_uses_generic_security_banner(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app = IMApp("https://example.test", "alice")
+    app._client = SimpleNamespace(send_message=None)  # type: ignore[assignment]
+    app._user_id = "alice"
+
+    async def _raise_session(*_args, **_kwargs):
+        raise InvalidPeerBundleError("bad bundle")
+
+    monkeypatch.setattr(app, "_ensure_session", _raise_session)
+
+    result = await app.send_message_state(
+        conversation_id="conv-1",
+        peer_id="bob",
+        plaintext="hello",
+    )
+
+    assert result.ok is False
+    assert result.state.kind == "blocked"
+    assert result.state.primary_banner is not None
+    assert result.state.primary_banner.code == "message_send_blocked"
+    assert (
+        result.state.primary_banner.message
+        == "Unable to verify peer key bundle. Session setup was blocked for your safety."
+    )
+
+
+@pytest.mark.asyncio
+async def test_store_fetched_history_envelope_invalid_bundle_skips_without_side_effects(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app = IMApp("https://example.test", "alice")
+    app._client = _as_any(SimpleNamespace(get_keys=None, send_ack=None))
+    app._user_id = "alice-id"
+    app._local_keys = _as_any(SimpleNamespace(identity_kp=object(), dh_kp=object()))
+    app._peer_usernames = {"bob-id": "bob"}
+    warning_events: list[tuple[tuple, dict]] = []
+    saved_messages: list[dict[str, object]] = []
+    acked: list[tuple[str, str]] = []
+    persisted: list[str] = []
+
+    envelope = _history_envelope(
+        message_id="msg-verify-fail",
+        sender_id="bob-id",
+        counter=0,
+        sent_at=100,
+        eph_pub_b64=base64.b64encode(b"peer-eph").decode(),
+        conv_dh_pub_b64=base64.b64encode(b"peer-conv").decode(),
+    )
+
+    async def _get_keys(_peer_username: str):
+        return SimpleNamespace(
+            identity_pub_b64=base64.b64encode(b"peer-identity").decode(),
+            dh_pub_b64=base64.b64encode(b"peer-dh").decode(),
+            key_sig_b64=base64.b64encode(b"bad-signature").decode(),
+            user_id="bob-id",
+            username="bob",
+            uploaded_at=123,
+        )
+
+    async def _save_message(**kwargs) -> None:
+        saved_messages.append(kwargs)
+
+    async def _send_ack(ack) -> None:
+        acked.append((ack.message_id, ack.conversation_id))
+
+    monkeypatch.setattr(app._client, "get_keys", _get_keys)
+    monkeypatch.setattr(app._client, "send_ack", _send_ack)
+    monkeypatch.setattr(app_module, "save_message", _save_message)
+    monkeypatch.setattr(app, "_persist_sessions", lambda: persisted.append("persist"))
+    monkeypatch.setattr(
+        app_module.log,
+        "warning",
+        lambda *args, **kwargs: warning_events.append((args, kwargs)),
+    )
+
+    await app._store_fetched_history_envelope(envelope)
+
+    assert "conv-1" not in app._sessions
+    assert saved_messages == []
+    assert acked == []
+    assert persisted == []
+    assert warning_events
+
+
+@pytest.mark.asyncio
+async def test_store_fetched_history_envelope_rejects_mismatched_peer_binding(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app = IMApp("https://example.test", "alice")
+    app._client = _as_any(SimpleNamespace(get_keys=None, send_ack=None))
+    app._user_id = "alice-id"
+    app._local_keys = _as_any(SimpleNamespace(identity_kp=object(), dh_kp=object()))
+    app._peer_usernames = {"bob-id": "bob"}
+    warning_events: list[tuple[tuple, dict]] = []
+    acked: list[tuple[str, str]] = []
+    persisted: list[str] = []
+
+    envelope = _history_envelope(
+        message_id="msg-binding-fail",
+        sender_id="bob-id",
+        counter=0,
+        sent_at=100,
+        eph_pub_b64=base64.b64encode(b"peer-eph").decode(),
+        conv_dh_pub_b64=base64.b64encode(b"peer-conv").decode(),
+    )
+    peer_identity = IdentityKeypair.generate()
+    peer_dh = DHKeypair.generate()
+
+    async def _get_keys(_peer_username: str):
+        return SimpleNamespace(
+            identity_pub_b64=base64.b64encode(peer_identity.public_bytes()).decode(),
+            dh_pub_b64=base64.b64encode(peer_dh.public_bytes()).decode(),
+            key_sig_b64=base64.b64encode(make_key_signature(peer_identity, peer_dh)).decode(),
+            user_id="carol-id",
+            username="carol",
+            uploaded_at=123,
+        )
+
+    async def _send_ack(ack) -> None:
+        acked.append((ack.message_id, ack.conversation_id))
+
+    monkeypatch.setattr(app._client, "get_keys", _get_keys)
+    monkeypatch.setattr(app._client, "send_ack", _send_ack)
+    monkeypatch.setattr(app, "_persist_sessions", lambda: persisted.append("persist"))
+    monkeypatch.setattr(
+        app_module.log,
+        "warning",
+        lambda *args, **kwargs: warning_events.append((args, kwargs)),
+    )
+
+    await app._store_fetched_history_envelope(envelope)
+
+    assert "conv-1" not in app._sessions
+    assert acked == []
+    assert persisted == []
+    assert warning_events
+    assert warning_events[0][0][0] == "history_sync_peer_bundle_rejected"
+
+
+@pytest.mark.asyncio
+async def test_incoming_rekey_refresh_invalid_bundle_keeps_existing_session(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app = IMApp("https://example.test", "alice")
+    warning_events: list[tuple[tuple, dict]] = []
+    original_identity = b"a" * 32
+    cache = IdentityKeyCache(store={"bob-id": original_identity})
+    cache.mark_verified("bob-id", original_identity)
+    session = SimpleNamespace(
+        session_key=SimpleNamespace(peer_id="bob-id"),
+        recv_chain=object(),
+        replay_protector=object(),
+        identity_key_cache=cache,
+    )
+    app._sessions["conv-1"] = cast(Any, session)
+    app._user_id = "alice-id"
+    app._client = _as_any(SimpleNamespace(get_keys=None))
+    app._peer_usernames["bob-id"] = "bob"
+    app._screen_stack.append(_FakeLoginScreen())  # type: ignore[attr-defined]
+
+    envelope = MessageEnvelope(
+        id="msg-1",
+        sender_id="bob-id",
+        recipient_id="alice-id",
+        conversation_id="conv-1",
+        counter=0,
+        nonce_b64=base64.b64encode(b"0" * 12).decode(),
+        ciphertext_b64=base64.b64encode(b"cipher").decode(),
+        eph_pub_b64=base64.b64encode(b"rekey").decode(),
+        chain_index=0,
+        sent_at=100,
+    )
+
+    async def _get_keys(_peer_username: str):
+        return SimpleNamespace(
+            identity_pub_b64=base64.b64encode(original_identity).decode(),
+            dh_pub_b64=base64.b64encode(b"b" * 32).decode(),
+            key_sig_b64=base64.b64encode(b"bad-signature").decode(),
+            user_id="bob-id",
+            username="bob",
+            uploaded_at=123,
+        )
+
+    monkeypatch.setattr(app._client, "get_keys", _get_keys)
+    monkeypatch.setattr(app_module, "decrypt_envelope", lambda **_kwargs: "hello")
+
+    async def _save_message(**_kwargs) -> None:
+        return None
+
+    async def _send_delivery_ack(*_args, **_kwargs) -> None:
+        return None
+
+    monkeypatch.setattr(app_module, "save_message", _save_message)
+    monkeypatch.setattr(app, "_send_delivery_ack", _send_delivery_ack)
+
+    async def _upsert_conversation(**_kwargs) -> None:
+        return None
+
+    async def _increment_unread(*_args, **_kwargs) -> None:
+        return None
+
+    monkeypatch.setattr(app_module, "upsert_conversation", _upsert_conversation)
+    monkeypatch.setattr(app_module, "increment_unread", _increment_unread)
+    monkeypatch.setattr(
+        app_module.log,
+        "warning",
+        lambda *args, **kwargs: warning_events.append((args, kwargs)),
+    )
+
+    await app._handle_incoming_message(envelope.model_dump())
+
+    assert session.identity_key_cache.get("bob-id") == original_identity
+    assert warning_events
+
+
+@pytest.mark.asyncio
+async def test_incoming_bootstrap_rejects_mismatched_peer_binding(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app = IMApp("https://example.test", "alice")
+    warning_events: list[tuple[tuple, dict]] = []
+    saved_messages: list[dict[str, object]] = []
+    app._user_id = "alice-id"
+    app._local_keys = _as_any(SimpleNamespace(identity_kp=object(), dh_kp=object()))
+    app._client = _as_any(SimpleNamespace(get_keys=None))
+    app._peer_usernames["bob-id"] = "bob"
+    app._screen_stack.append(_FakeLoginScreen())  # type: ignore[attr-defined]
+
+    envelope = MessageEnvelope(
+        id="msg-bootstrap-fail",
+        sender_id="bob-id",
+        recipient_id="alice-id",
+        conversation_id="conv-1",
+        counter=0,
+        nonce_b64=base64.b64encode(b"0" * 12).decode(),
+        ciphertext_b64=base64.b64encode(b"cipher").decode(),
+        eph_pub_b64=base64.b64encode(b"peer-eph").decode(),
+        conv_dh_pub_b64=base64.b64encode(b"peer-conv").decode(),
+        chain_index=0,
+        sent_at=100,
+    )
+    peer_identity = IdentityKeypair.generate()
+    peer_dh = DHKeypair.generate()
+
+    async def _get_keys(_peer_username: str):
+        return SimpleNamespace(
+            identity_pub_b64=base64.b64encode(peer_identity.public_bytes()).decode(),
+            dh_pub_b64=base64.b64encode(peer_dh.public_bytes()).decode(),
+            key_sig_b64=base64.b64encode(make_key_signature(peer_identity, peer_dh)).decode(),
+            user_id="carol-id",
+            username="carol",
+            uploaded_at=123,
+        )
+
+    async def _save_message(**kwargs) -> None:
+        saved_messages.append(kwargs)
+
+    monkeypatch.setattr(app._client, "get_keys", _get_keys)
+    monkeypatch.setattr(app_module, "save_message", _save_message)
+    monkeypatch.setattr(
+        app_module.log,
+        "warning",
+        lambda *args, **kwargs: warning_events.append((args, kwargs)),
+    )
+
+    await app._handle_incoming_message(envelope.model_dump())
+
+    assert "conv-1" not in app._sessions
+    assert saved_messages == []
+    assert warning_events
+    assert warning_events[0][0][0] == "incoming_peer_bundle_rejected"
+
+
+@pytest.mark.asyncio
+async def test_incoming_rekey_refresh_rejects_mismatched_peer_binding(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app = IMApp("https://example.test", "alice")
+    warning_events: list[tuple[tuple, dict]] = []
+    original_identity = b"a" * 32
+    cache = IdentityKeyCache(store={"bob-id": original_identity})
+    cache.mark_verified("bob-id", original_identity)
+    session = SimpleNamespace(
+        session_key=SimpleNamespace(peer_id="bob-id"),
+        recv_chain=object(),
+        replay_protector=object(),
+        identity_key_cache=cache,
+    )
+    app._sessions["conv-1"] = cast(Any, session)
+    app._user_id = "alice-id"
+    app._client = _as_any(SimpleNamespace(get_keys=None))
+    app._peer_usernames["bob-id"] = "bob"
+    app._screen_stack.append(_FakeLoginScreen())  # type: ignore[attr-defined]
+
+    envelope = MessageEnvelope(
+        id="msg-1",
+        sender_id="bob-id",
+        recipient_id="alice-id",
+        conversation_id="conv-1",
+        counter=0,
+        nonce_b64=base64.b64encode(b"0" * 12).decode(),
+        ciphertext_b64=base64.b64encode(b"cipher").decode(),
+        eph_pub_b64=base64.b64encode(b"rekey").decode(),
+        chain_index=0,
+        sent_at=100,
+    )
+    peer_identity = IdentityKeypair.generate()
+    peer_dh = DHKeypair.generate()
+
+    async def _get_keys(_peer_username: str):
+        return SimpleNamespace(
+            identity_pub_b64=base64.b64encode(peer_identity.public_bytes()).decode(),
+            dh_pub_b64=base64.b64encode(peer_dh.public_bytes()).decode(),
+            key_sig_b64=base64.b64encode(make_key_signature(peer_identity, peer_dh)).decode(),
+            user_id="carol-id",
+            username="carol",
+            uploaded_at=123,
+        )
+
+    monkeypatch.setattr(app._client, "get_keys", _get_keys)
+    monkeypatch.setattr(app_module, "decrypt_envelope", lambda **_kwargs: "hello")
+
+    async def _save_message(**_kwargs) -> None:
+        return None
+
+    async def _send_delivery_ack(*_args, **_kwargs) -> None:
+        return None
+
+    async def _upsert_conversation(**_kwargs) -> None:
+        return None
+
+    async def _increment_unread(*_args, **_kwargs) -> None:
+        return None
+
+    monkeypatch.setattr(app_module, "save_message", _save_message)
+    monkeypatch.setattr(app, "_send_delivery_ack", _send_delivery_ack)
+    monkeypatch.setattr(app_module, "upsert_conversation", _upsert_conversation)
+    monkeypatch.setattr(app_module, "increment_unread", _increment_unread)
+    monkeypatch.setattr(
+        app_module.log,
+        "warning",
+        lambda *args, **kwargs: warning_events.append((args, kwargs)),
+    )
+
+    await app._handle_incoming_message(envelope.model_dump())
+
+    assert session.identity_key_cache.get("bob-id") == original_identity
+    assert warning_events
+    assert warning_events[0][0][0] == "key_bundle_refresh_rejected"
+
+
+def test_invalid_peer_bundle_log_key_uses_bounded_prefix_and_length() -> None:
+    app = IMApp("https://example.test", "alice")
+    bundle_a = SimpleNamespace(
+        identity_pub_b64="A" * 128 + "tail-a",
+        dh_pub_b64="B" * 128 + "tail-a",
+        key_sig_b64="C" * 128 + "tail-a",
+    )
+    bundle_b = SimpleNamespace(
+        identity_pub_b64="A" * 128 + "tail-b",
+        dh_pub_b64="B" * 128 + "tail-b",
+        key_sig_b64="C" * 128 + "tail-b",
+    )
+    bundle_c = SimpleNamespace(
+        identity_pub_b64="A" * 127,
+        dh_pub_b64="B" * 127,
+        key_sig_b64="C" * 127,
+    )
+
+    assert app._invalid_peer_bundle_log_key(
+        peer_id="bob-id", bundle=bundle_a
+    ) == app._invalid_peer_bundle_log_key(peer_id="bob-id", bundle=bundle_b)
+    assert app._invalid_peer_bundle_log_key(
+        peer_id="bob-id", bundle=bundle_a
+    ) != app._invalid_peer_bundle_log_key(peer_id="bob-id", bundle=bundle_c)
+
+
+def test_should_log_invalid_peer_bundle_evicts_oldest_entry() -> None:
+    app = IMApp("https://example.test", "alice")
+    keys = [f"key-{index}" for index in range(257)]
+
+    for key in keys:
+        assert app._should_log_invalid_peer_bundle(key) is True
+
+    assert len(app._invalid_peer_bundle_log_keys) == 256
+    assert "key-0" not in app._invalid_peer_bundle_log_keys
+    assert "key-256" in app._invalid_peer_bundle_log_keys
+    assert app._should_log_invalid_peer_bundle("key-1") is False
+
+
+@pytest.mark.asyncio
 async def test_security_ui_paths_do_not_silently_swallow(monkeypatch: pytest.MonkeyPatch) -> None:
     app = IMApp("https://example.test", "alice")
     app._client = _as_any(SimpleNamespace(send_message=None))
@@ -367,6 +1073,175 @@ async def test_friends_pending_load_failure_is_shown(
 
     assert screen.pending_payloads == []
     assert screen.error == expected_error
+
+
+@pytest.mark.asyncio
+async def test_friends_pending_load_ignores_screen_change_after_await(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app = IMApp("https://example.test", "alice")
+    friends_screen = _FakeFriendsScreen()
+    app._screen_stack.append(friends_screen)  # type: ignore[attr-defined]
+
+    async def _load_pending(_context) -> app_module.PendingRequestsLoaded:
+        app._screen_stack.append(_FakeLoginScreen())  # type: ignore[attr-defined]
+        return app_module.PendingRequestsLoaded(requests=[{"id": "r1", "sender_name": "bob"}])
+
+    monkeypatch.setattr(app_module, "execute_load_pending_requests", _load_pending)
+    app._client = _as_any(SimpleNamespace())
+
+    await app.on_friends_screen__load_pending(SimpleNamespace())
+
+    assert friends_screen.pending_payloads == []
+    assert friends_screen.error == ""
+    assert friends_screen.status == ""
+
+
+@pytest.mark.asyncio
+async def test_friends_pending_load_propagates_unexpected_screen_contract_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app = IMApp("https://example.test", "alice")
+
+    class _BrokenFriendsScreen(_FakeFriendsScreen):
+        def populate_pending(self, requests: list[dict]) -> None:
+            raise RuntimeError("broken friends screen")
+
+    screen = _BrokenFriendsScreen()
+    app._screen_stack.append(screen)  # type: ignore[attr-defined]
+
+    async def _load_pending(_context) -> app_module.PendingRequestsLoaded:
+        return app_module.PendingRequestsLoaded(requests=[{"id": "r1", "sender_name": "bob"}])
+
+    monkeypatch.setattr(app_module, "execute_load_pending_requests", _load_pending)
+    app._client = _as_any(SimpleNamespace())
+
+    with pytest.raises(RuntimeError, match="broken friends screen"):
+        await app.on_friends_screen__load_pending(SimpleNamespace())
+
+
+async def test_register_request_logs_and_returns_on_expected_error_widget_miss(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app = IMApp("https://example.test", "alice")
+    warnings: list[tuple[tuple, dict]] = []
+    screen = _FakeRegisterScreen(query_error=NoMatches("missing #error"))
+    app._screen_stack.append(screen)  # type: ignore[attr-defined]
+
+    class _FakeClient:
+        def __init__(self, *_args, **_kwargs) -> None:
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args) -> None:
+            return None
+
+        async def register(self, _body):
+            raise _imclient_error(409, "Still pending")
+
+    monkeypatch.setattr(app_module, "IMClient", _FakeClient)
+    monkeypatch.setattr(app_module, "save_keystore", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        app_module.log,
+        "warning",
+        lambda *args, **kwargs: warnings.append((args, kwargs)),
+    )
+
+    await app.on_register_screen_register_request(
+        SimpleNamespace(username="alice", password=TEST_ACCOUNT_PASSWORD)
+    )
+
+    assert screen.error.value == ""
+    assert any(args and args[0] == "register_error_render_failed" for args, _ in warnings)
+
+
+@pytest.mark.asyncio
+async def test_register_request_propagates_unexpected_error_widget_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app = IMApp("https://example.test", "alice")
+    screen = _FakeRegisterScreen(query_error=RuntimeError("boom"))
+    app._screen_stack.append(screen)  # type: ignore[attr-defined]
+
+    class _FakeClient:
+        def __init__(self, *_args, **_kwargs) -> None:
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args) -> None:
+            return None
+
+        async def register(self, _body):
+            raise _imclient_error(409, "Still pending")
+
+    monkeypatch.setattr(app_module, "IMClient", _FakeClient)
+    monkeypatch.setattr(app_module, "save_keystore", lambda *_args, **_kwargs: None)
+
+    with pytest.raises(RuntimeError, match="boom"):
+        await app.on_register_screen_register_request(
+            SimpleNamespace(username="alice", password=TEST_ACCOUNT_PASSWORD)
+        )
+
+
+@pytest.mark.asyncio
+async def test_register_request_propagates_unexpected_register_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app = IMApp("https://example.test", "alice")
+    screen = _FakeRegisterScreen()
+    app._screen_stack.append(screen)  # type: ignore[attr-defined]
+
+    class _FakeClient:
+        def __init__(self, *_args, **_kwargs) -> None:
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args) -> None:
+            return None
+
+        async def register(self, _body):
+            raise RuntimeError("unexpected register bug")
+
+    monkeypatch.setattr(app_module, "IMClient", _FakeClient)
+    monkeypatch.setattr(app_module, "save_keystore", lambda *_args, **_kwargs: None)
+
+    with pytest.raises(RuntimeError, match="unexpected register bug"):
+        await app.on_register_screen_register_request(
+            SimpleNamespace(username="alice", password=TEST_ACCOUNT_PASSWORD)
+        )
+
+    assert screen.error.value == ""
+
+
+async def test_logout_propagates_unexpected_client_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app = IMApp("https://example.test", "alice")
+    exited: list[tuple[object, ...]] = []
+    popped: list[bool] = []
+
+    async def _raise_logout() -> None:
+        raise ValueError("unexpected bug")
+
+    async def _noop_aexit(*_args) -> None:
+        exited.append(_args)
+        return None
+
+    app._client = _as_any(SimpleNamespace(logout=_raise_logout, __aexit__=_noop_aexit))
+    monkeypatch.setattr(app, "pop_screen", lambda: popped.append(True))
+
+    with pytest.raises(ValueError, match="unexpected bug"):
+        await app.on_conversation_list_screen_logout(ConversationListScreen.Logout())
+
+    assert exited == [(None, None, None)]
+    assert app._client is None
+    assert popped == []
 
 
 def test_banner_priority_prefers_key_changed() -> None:
@@ -696,6 +1571,108 @@ def test_conversation_summary_refresh_updates_banner_and_secondary_text_together
     assert detail.value == "Identity key changed"
 
 
+def test_conversation_list_summary_reports_counts() -> None:
+    screen = ConversationListScreen("alice")
+    conversations = [
+        ConversationSummaryViewModel(
+            conv_id="conv-1",
+            peer_id="bob-id",
+            peer_username="bob",
+            unread_count=3,
+            requires_action=False,
+        ),
+        ConversationSummaryViewModel(
+            conv_id="conv-2",
+            peer_id="carol-id",
+            peer_username="carol",
+            unread_count=0,
+            requires_action=True,
+        ),
+    ]
+
+    assert (
+        screen.render_summary_line(conversations)
+        == "2 conversations  ·  3 unread  ·  1 needs review"
+    )
+
+
+def test_conversation_list_summary_keeps_unread_label_consistent() -> None:
+    screen = ConversationListScreen("alice")
+    conversations = [
+        ConversationSummaryViewModel(
+            conv_id="conv-1",
+            peer_id="bob-id",
+            peer_username="bob",
+            unread_count=1,
+            requires_action=False,
+        )
+    ]
+
+    assert (
+        screen.render_summary_line(conversations)
+        == "1 conversation  ·  1 unread  ·  0 needs review"
+    )
+
+
+def test_conversation_list_empty_state_guides_next_step() -> None:
+    screen = ConversationListScreen("alice")
+
+    assert (
+        screen.render_empty_state()
+        == "No conversations yet.\nAccepted friends will appear here immediately."
+    )
+
+
+def test_friends_screen_pending_summary_reports_count() -> None:
+    screen = FriendsScreen()
+    requests = [
+        {"id": "req-1", "sender_name": "bob"},
+        {"id": "req-2", "sender_name": "carol"},
+    ]
+
+    assert (
+        screen.render_pending_summary(requests)
+        == "2 incoming requests  ·  respond to start chatting"
+    )
+
+
+def test_friends_screen_empty_state_guides_sending_request() -> None:
+    screen = FriendsScreen()
+
+    assert (
+        screen.render_empty_state()
+        == "No pending requests.\nSend an invite below to start a secure conversation."
+    )
+
+
+def test_friends_screen_populate_pending_updates_summary_and_empty_state(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    screen = FriendsScreen()
+    pending_list = _FakeListView()
+    pending_summary = _FakeStatic()
+    empty_state = _FakeStatic()
+    widgets = {
+        "#pending_list": pending_list,
+        "#pending_summary": pending_summary,
+        "#pending_empty": empty_state,
+    }
+    monkeypatch.setattr(screen, "query_one", lambda selector, *_args, **_kwargs: widgets[selector])
+
+    screen.populate_pending([])
+    assert pending_summary.value == "No incoming requests right now"
+    assert (
+        empty_state.value
+        == "No pending requests.\nSend an invite below to start a secure conversation."
+    )
+    assert pending_list.items == []
+
+    screen.populate_pending([{"id": "req-1", "sender_name": "bob"}])
+    assert pending_summary.value == "1 incoming request  ·  respond to start chatting"
+    assert empty_state.value == ""
+    assert len(pending_list.items) == 1
+
+
 def test_verified_warning_persists_until_reverified() -> None:
     cache = IdentityKeyCache()
     pub1 = b"a" * 32
@@ -768,6 +1745,59 @@ async def test_friend_accept_server_error_is_shown(monkeypatch: pytest.MonkeyPat
 
     assert screen.error == "Already handled"
     assert screen.pending_payloads == []
+
+
+@pytest.mark.asyncio
+async def test_friend_accept_refreshes_existing_conversation_lists_for_acceptor(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app = IMApp("https://example.test", "alice")
+    friends = _FakeFriendsScreen()
+    conversation_screen = ConversationListScreen("alice")
+    app._screen_stack.append(conversation_screen)  # type: ignore[attr-defined]
+    app._screen_stack.append(friends)  # type: ignore[attr-defined]
+    app._client = _as_any(SimpleNamespace(handle_friend_request=None, list_pending_requests=None))
+
+    async def _execute_handle_friend_request(*_args, **_kwargs):
+        return FriendRequestHandled(
+            requests=[],
+            status_message="Friend request accepted.",
+        )
+
+    synced = 0
+    populated: list[list[ConversationSummaryViewModel]] = []
+
+    async def _sync_conversations() -> None:
+        nonlocal synced
+        synced += 1
+
+    async def _get_conversations() -> list[dict[str, object]]:
+        return [
+            {
+                "id": "conv-1",
+                "peer_id": "bob-id",
+                "peer_username": "bob",
+                "last_message_at": 123,
+                "unread_count": 0,
+            }
+        ]
+
+    monkeypatch.setattr(app_module, "execute_handle_friend_request", _execute_handle_friend_request)
+    monkeypatch.setattr(app, "_sync_conversations_from_server", _sync_conversations)
+    monkeypatch.setattr(app_module, "get_conversations", _get_conversations)
+    monkeypatch.setattr(
+        ConversationListScreen,
+        "populate",
+        lambda self, conversations: populated.append(conversations),
+    )
+
+    await app.on_friends_screen_accept_request(SimpleNamespace(request_id="req-1"))
+
+    assert friends.status == "Friend request accepted."
+    assert synced == 1
+    assert app._peer_usernames == {"bob-id": "bob"}
+    assert len(populated) == 1
+    assert populated[0][0].conv_id == "conv-1"
 
 
 @pytest.mark.asyncio
@@ -909,7 +1939,31 @@ async def test_login_waits_for_initial_websocket_startup_before_showing_conversa
     await task
 
     assert showed_conversations is True
-    assert app._client is fake_client
+
+
+def test_apply_login_result_rehydrates_counters_idempotently() -> None:
+    app = IMApp("https://example.test", "alice")
+    sessions = {
+        "conv-1": SimpleNamespace(next_outbound_counter=3),
+        "conv-2": SimpleNamespace(next_outbound_counter=0),
+    }
+    result = LoginSucceeded(
+        client=_as_any(object()),
+        username="alice",
+        password=TEST_ACCOUNT_PASSWORD,
+        user_id="alice-id",
+        local_keys=object(),
+        sessions=cast(Any, sessions),
+    )
+
+    applied_once = app._apply_login_result(result=result, login_screen=_FakeLoginScreen())
+    counters_after_first_apply = dict(app._counters)
+    applied_twice = app._apply_login_result(result=result, login_screen=_FakeLoginScreen())
+
+    assert applied_once is True
+    assert applied_twice is True
+    assert counters_after_first_apply == {"conv-1": 3, "conv-2": 0}
+    assert app._counters == {"conv-1": 3, "conv-2": 0}
 
 
 @pytest.mark.asyncio
@@ -978,6 +2032,60 @@ async def test_show_conversations_syncs_server_rows_and_rehydrates_peer_map(
     assert app._peer_usernames == {"bob-id": "bob"}
     assert len(pushed_screens) == 1
     assert len(populated) == 1
+
+
+@pytest.mark.asyncio
+async def test_friend_request_accept_push_refreshes_existing_conversation_lists(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app = IMApp("https://example.test", "alice")
+    screen = ConversationListScreen("alice")
+    app._screen_stack.append(screen)  # type: ignore[attr-defined]
+
+    synced = 0
+    populated: list[list[ConversationSummaryViewModel]] = []
+
+    async def _sync_conversations() -> None:
+        nonlocal synced
+        synced += 1
+
+    async def _get_conversations() -> list[dict[str, object]]:
+        return [
+            {
+                "id": "conv-1",
+                "peer_id": "bob-id",
+                "peer_username": "bob",
+                "last_message_at": 123,
+                "unread_count": 0,
+            }
+        ]
+
+    monkeypatch.setattr(app, "_sync_conversations_from_server", _sync_conversations)
+    monkeypatch.setattr(app_module, "get_conversations", _get_conversations)
+    monkeypatch.setattr(
+        ConversationListScreen,
+        "populate",
+        lambda self, conversations: populated.append(conversations),
+    )
+
+    await app._on_ws_message(
+        {
+            "type": "friend_request",
+            "payload": {
+                "event": FriendRequestStatus.ACCEPTED.value,
+                "request_id": "req-1",
+                "sender_id": "alice-id",
+                "recipient_id": "bob-id",
+                "conversation_id": "conv-1",
+            },
+        }
+    )
+
+    assert synced == 1
+    assert app._peer_usernames == {"bob-id": "bob"}
+    assert len(populated) == 1
+    assert len(populated[0]) == 1
+    assert populated[0][0].conv_id == "conv-1"
 
 
 async def _async_value(value: object) -> object:
