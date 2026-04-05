@@ -1,12 +1,8 @@
-# COMP3334 Secure Instant Messenger
+# Secure Instant Messenger
 
-End-to-end encrypted instant messaging application built for COMP3334. Demonstrates strong cryptographic practices, replay protection, and an honest-but-curious server model.
+End-to-end encrypted instant messaging application. Demonstrates strong cryptographic practices, replay protection, and an honest-but-curious server model.
 
-**Team:** 5 people | **Deadline:** April 8, 2026 07:50
-
-## Security
-
-All 19 identified security vulnerabilities have been fixed. See [`docs/SECURITY_BUGS.md`](docs/SECURITY_BUGS.md) for the full bug report and [`docs/SECURITY_FIXES_SUMMARY.md`](docs/SECURITY_FIXES_SUMMARY.md) for the fix summary.
+**Team:** 5 people | **Deadline:** April 9, 2026 07:50
 
 ## Features
 
@@ -169,10 +165,6 @@ This is not the primary grading/demo path.
 
 See `docs/ARCHITECTURE.md` for the full design: session state machine, 2-DH key exchange, replay protection, secure local storage, TOTP encryption scheme, input validation policy, and trust model.
 
-## Bug Report
-
-See `docs/BUG_REPORT.md` for the latest bug hunting findings and code quality analysis.
-
 ## Deployment
 
 See `docs/DEPLOY.md` for step-by-step instructions for Windows 11 and Ubuntu.
@@ -196,4 +188,4 @@ See `docs/DEPLOY.md` for step-by-step instructions for Windows 11 and Ubuntu.
 
 ## License
 
-Academic project for COMP3334. Not intended for production use.
+Not intended for production use.
