@@ -6,10 +6,12 @@ on:
     paths:
       - ".github/workflows/submission-e2e.yml"
       - ".github/workflows/submission-package.yml"
+      - ".github/workflows/package.yml"
       - "docs/DEPLOY.md"
       - "scripts/bootstrap-env.sh"
       - "scripts/bootstrap-env.bat"
       - "scripts/bootstrap_env.py"
+      - "scripts/build_release_zip.sh"
       - "scripts/run-server.sh"
       - "scripts/run-server.bat"
       - "scripts/run-client.sh"
@@ -146,10 +148,17 @@ jobs:
           bash scripts/build_submission_zip.sh 71 .ci-artifacts/report.pdf .ci-artifacts/video.mp4
           test -f submission/71.zip
 
-      - name: Upload logs and submission zip
+      - name: Build release zip
+        shell: bash
+        run: |
+          bash scripts/build_release_zip.sh
+          test -f release/project-release.zip
+
+      - name: Upload logs and packaged zips
         uses: actions/upload-artifact@v6
         with:
           name: submission-e2e-${{ matrix.os }}
           path: |
             .ci-logs/
+            release/project-release.zip
             submission/71.zip

@@ -25,6 +25,7 @@ jobs:
           test -d shared
           test -f docs/DEPLOY.md
           test -f server/migrations/001_init.sql
+          test -f scripts/build_release_zip.sh
           test -f scripts/build_submission_zip.sh
           test -f scripts/bootstrap-env.bat
           test -f scripts/bootstrap_env.py
@@ -45,8 +46,19 @@ jobs:
           unzip -l submission/71.zip | grep '71/code/scripts/run-server.bat'
           unzip -l submission/71.zip | grep '71/code/scripts/run-client.bat'
 
+      - name: Build release zip
+        run: |
+          bash scripts/build_release_zip.sh
+          test -f release/project-release.zip
+
       - name: Upload submission zip
         uses: actions/upload-artifact@v6
         with:
           name: submission-71
           path: submission/71.zip
+
+      - name: Upload release zip
+        uses: actions/upload-artifact@v6
+        with:
+          name: project-release-zip
+          path: release/project-release.zip

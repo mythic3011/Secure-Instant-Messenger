@@ -20,31 +20,14 @@ jobs:
           test -d server
           test -d shared
           test -d tests
+          test -f scripts/build_release_zip.sh
 
-      - name: Create release archive
+      - name: Create release zip
         run: |
-          git archive --format=tar HEAD \
-            --prefix=comp3334_project/ \
-            client \
-            server \
-            shared \
-            tests \
-            scripts \
-            docs/ARCHITECTURE.md \
-            docs/BUG_REPORT.md \
-            docs/DEPLOY.md \
-            docs/Project.pdf \
-            docs/TASKS.md \
-            docs/Tutorial \
-            README.md \
-            pyproject.toml \
-            uv.lock \
-            docker-compose.yml \
-            Dockerfile.server \
-            | gzip -9 > project.tar.gz
+          bash scripts/build_release_zip.sh
 
       - name: Upload artifact
         uses: actions/upload-artifact@v6
         with:
-          name: project-zip
-          path: project.tar.gz
+          name: project-release-zip
+          path: release/project-release.zip
