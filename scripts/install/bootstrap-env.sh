@@ -55,6 +55,21 @@ if [ ! -f "$PYPROJECT" ]; then
 fi
 
 if [ "$MODE" = "check" ]; then
+    if [ ! -f "$ENV_LOCAL" ]; then
+        printf '[bootstrap] environment not prepared: %s missing\n' "$ENV_LOCAL" >&2
+        printf '[bootstrap] run ./install.sh --fix\n' >&2
+        exit 1
+    fi
+    if [ ! -f "$CERT_FILE" ]; then
+        printf '[bootstrap] environment not prepared: %s missing\n' "$CERT_FILE" >&2
+        printf '[bootstrap] run ./install.sh --fix\n' >&2
+        exit 1
+    fi
+    if [ ! -f "$KEY_FILE" ]; then
+        printf '[bootstrap] environment not prepared: %s missing\n' "$KEY_FILE" >&2
+        printf '[bootstrap] run ./install.sh --fix\n' >&2
+        exit 1
+    fi
     say "[bootstrap] project root: $PROJECT_ROOT"
     say "[bootstrap] check passed"
     exit 0

@@ -61,6 +61,21 @@ if "%VERBOSE%"=="1" (
 )
 
 if /I "%MODE%"=="check" (
+  if not exist "%PROJECT_ROOT%\.env.local" (
+    echo [install] environment not prepared: .env.local missing 1>&2
+    echo [install] run install.bat --fix 1>&2
+    exit /b 1
+  )
+  if not exist "%PROJECT_ROOT%\certs\server.crt" (
+    echo [install] environment not prepared: certs\server.crt missing 1>&2
+    echo [install] run install.bat --fix 1>&2
+    exit /b 1
+  )
+  if not exist "%PROJECT_ROOT%\certs\server.key" (
+    echo [install] environment not prepared: certs\server.key missing 1>&2
+    echo [install] run install.bat --fix 1>&2
+    exit /b 1
+  )
   echo [install] check passed
   exit /b 0
 )
@@ -88,6 +103,45 @@ if not exist "%PROJECT_ROOT%\.env.local" (
   popd >nul
   echo [install] fix failed: bootstrap env update failed 1>&2
   exit /b 1
+)
+
+if not exist "%PROJECT_ROOT%\certs" mkdir "%PROJECT_ROOT%\certs" >nul 2>&1
+
+set "OPENSSL_EXE="
+for /f "delims=" %%I in ('where openssl 2^>nul') do if not defined OPENSSL_EXE set "OPENSSL_EXE=%%I"
+if not defined OPENSSL_EXE (
+  popd >nul
+  echo [install] fix failed: openssl not found 1>&2
+  echo [install] install openssl first, then rerun install.bat --fix 1>&2
+  exit /b 1
+)
+
+if not exist "%PROJECT_ROOT%\certs\server.crt" (
+  if "%VERBOSE%"=="1" echo [install] generating local TLS certificate
+  "%OPENSSL_EXE%" req -x509 -newkey rsa:2048 ^
+    -keyout "%PROJECT_ROOT%\certs\server.key" ^
+    -out "%PROJECT_ROOT%\certs\server.crt" ^
+    -days 365 -nodes ^
+    -subj "/C=HK/ST=HK/L=HongKong/O=LocalDev/OU=Dev/CN=localhost" ^
+    -addext "subjectAltName=DNS:localhost,DNS:*.orb.local,DNS:server.comp3334-project.orb.local,IP:127.0.0.1" >nul 2>nul || (
+      popd >nul
+      echo [install] fix failed: openssl certificate generation failed 1>&2
+      exit /b 1
+    )
+)
+
+if not exist "%PROJECT_ROOT%\certs\server.key" (
+  if "%VERBOSE%"=="1" echo [install] generating local TLS certificate
+  "%OPENSSL_EXE%" req -x509 -newkey rsa:2048 ^
+    -keyout "%PROJECT_ROOT%\certs\server.key" ^
+    -out "%PROJECT_ROOT%\certs\server.crt" ^
+    -days 365 -nodes ^
+    -subj "/C=HK/ST=HK/L=HongKong/O=LocalDev/OU=Dev/CN=localhost" ^
+    -addext "subjectAltName=DNS:localhost,DNS:*.orb.local,DNS:server.comp3334-project.orb.local,IP:127.0.0.1" >nul 2>nul || (
+      popd >nul
+      echo [install] fix failed: openssl certificate generation failed 1>&2
+      exit /b 1
+    )
 )
 
 if "%VERBOSE%"=="1" echo [install] running uv sync in %PROJECT_ROOT%

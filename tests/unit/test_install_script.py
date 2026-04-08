@@ -155,6 +155,11 @@ def test_install_check_passes_in_sh_and_bash(tmp_path: Path) -> None:
     fake_bin.mkdir()
     for name in ("python3", "uv", "openssl"):
         _write_fake_command(fake_bin / name, "#!/bin/sh\nexit 0\n")
+    (project_root / ".env.local").write_text("APP_ENV=development\n", encoding="utf-8")
+    cert_dir = project_root / "certs"
+    cert_dir.mkdir()
+    (cert_dir / "server.crt").write_text("", encoding="utf-8")
+    (cert_dir / "server.key").write_text("", encoding="utf-8")
 
     path_override = f"{fake_bin}:/usr/bin:/bin"
 
@@ -165,6 +170,30 @@ def test_install_check_passes_in_sh_and_bash(tmp_path: Path) -> None:
     assert result_bash.returncode == 0, result_bash.stderr
     assert "[install] check passed" in result_sh.stdout
     assert "[install] check passed" in result_bash.stdout
+
+
+def test_install_check_fails_when_bootstrap_files_missing(tmp_path: Path) -> None:
+    project_root = _copy_install_files(tmp_path)
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    for name in ("python3", "uv", "openssl"):
+        _write_fake_command(fake_bin / name, "#!/bin/sh\nexit 0\n")
+
+    result_missing_env = _run_install(project_root, "sh", f"{fake_bin}:/usr/bin:/bin", "--check")
+    assert result_missing_env.returncode == 1
+    assert ".env.local missing" in result_missing_env.stderr
+
+    (project_root / ".env.local").write_text("APP_ENV=development\n", encoding="utf-8")
+    result_missing_cert = _run_install(project_root, "sh", f"{fake_bin}:/usr/bin:/bin", "--check")
+    assert result_missing_cert.returncode == 1
+    assert "certs/server.crt missing" in result_missing_cert.stderr
+
+    cert_dir = project_root / "certs"
+    cert_dir.mkdir()
+    (cert_dir / "server.crt").write_text("", encoding="utf-8")
+    result_missing_key = _run_install(project_root, "sh", f"{fake_bin}:/usr/bin:/bin", "--check")
+    assert result_missing_key.returncode == 1
+    assert "certs/server.key missing" in result_missing_key.stderr
 
 
 def test_install_fix_runs_uv_sync_without_sudo(tmp_path: Path) -> None:
@@ -382,6 +411,9 @@ def test_install_batch_contract_uses_windows_python_and_uv_sync() -> None:
     assert '"%UV_EXE%" --project "%PROJECT_ROOT%" sync' in content
     assert "pyproject.toml" in content
     assert r"scripts\lib\bootstrap_env.py" in content
+    assert ".env.local missing" in content
+    assert r"certs\server.crt missing" in content
+    assert r"certs\server.key missing" in content
 
 
 def test_install_batch_contract_avoids_launch_and_host_package_manager_logic() -> None:
