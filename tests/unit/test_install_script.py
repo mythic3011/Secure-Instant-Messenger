@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import platform
 import pty
 import shutil
 import subprocess
@@ -10,6 +11,59 @@ from pathlib import Path
 def _write_fake_command(path: Path, body: str) -> None:
     path.write_text(body, encoding="utf-8")
     path.chmod(0o755)
+
+
+def _host_package_manager_scenario() -> tuple[str, str]:
+    system = platform.system()
+    if system == "Darwin":
+        return ("Darwin", "brew")
+    if system == "Linux":
+        return ("Linux", "apt-get")
+    msg = f"unsupported test host platform: {system}"
+    raise RuntimeError(msg)
+
+
+def _write_fake_platform_manager(fake_bin: Path, manager: str) -> None:
+    if manager == "brew":
+        _write_fake_command(
+            fake_bin / "brew",
+            "#!/bin/sh\n"
+            'printf \'brew %s\\n\' "$*" >> "$FAKE_CMD_LOG"\n'
+            'if [ "$1" = "install" ] && [ "$2" = "uv" ]; then\n'
+            "  cat > \"$FAKE_BIN_DIR/uv\" <<'EOF'\n"
+            "#!/bin/sh\n"
+            'printf \'%s\\n\' "$*" >> "$FAKE_CMD_LOG"\n'
+            "exit 0\n"
+            "EOF\n"
+            '  chmod +x "$FAKE_BIN_DIR/uv"\n'
+            "fi\n"
+            "exit 0\n",
+        )
+        return
+
+    if manager == "apt-get":
+        _write_fake_command(
+            fake_bin / "id",
+            '#!/bin/sh\nif [ "$1" = "-u" ]; then\n  echo 0\n  exit 0\nfi\nexit 1\n',
+        )
+        _write_fake_command(
+            fake_bin / "apt-get",
+            "#!/bin/sh\n"
+            'printf \'apt-get %s\\n\' "$*" >> "$FAKE_CMD_LOG"\n'
+            'if [ "$1" = "install" ] && [ "$2" = "-y" ] && [ "$3" = "uv" ]; then\n'
+            "  cat > \"$FAKE_BIN_DIR/uv\" <<'EOF'\n"
+            "#!/bin/sh\n"
+            'printf \'%s\\n\' "$*" >> "$FAKE_CMD_LOG"\n'
+            "exit 0\n"
+            "EOF\n"
+            '  chmod +x "$FAKE_BIN_DIR/uv"\n'
+            "fi\n"
+            "exit 0\n",
+        )
+        return
+
+    msg = f"unsupported fake package manager: {manager}"
+    raise RuntimeError(msg)
 
 
 def _copy_install_files(tmp_path: Path) -> Path:
@@ -175,11 +229,12 @@ def test_install_fix_runs_uv_sync_without_sudo(tmp_path: Path) -> None:
     assert all(not line.startswith("sudo ") for line in log_lines)
 
 
-def test_install_fix_prompts_and_installs_missing_uv_via_brew(tmp_path: Path) -> None:
+def test_install_fix_prompts_and_installs_missing_uv_via_host_manager(tmp_path: Path) -> None:
     project_root = _copy_install_files(tmp_path)
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
     log_file = tmp_path / "commands.log"
+    platform_name, manager = _host_package_manager_scenario()
 
     for name in ("python3",):
         _write_fake_command(fake_bin / name, "#!/bin/sh\nexit 0\n")
@@ -207,21 +262,8 @@ def test_install_fix_prompts_and_installs_missing_uv_via_brew(tmp_path: Path) ->
         ': > "$out"\n'
         "exit 0\n",
     )
-
-    _write_fake_command(
-        fake_bin / "brew",
-        "#!/bin/sh\n"
-        'printf \'brew %s\\n\' "$*" >> "$FAKE_CMD_LOG"\n'
-        'if [ "$1" = "install" ] && [ "$2" = "uv" ]; then\n'
-        "  cat > \"$FAKE_BIN_DIR/uv\" <<'EOF'\n"
-        "#!/bin/sh\n"
-        'printf \'%s\\n\' "$*" >> "$FAKE_CMD_LOG"\n'
-        "exit 0\n"
-        "EOF\n"
-        '  chmod +x "$FAKE_BIN_DIR/uv"\n'
-        "fi\n"
-        "exit 0\n",
-    )
+    _write_fake_command(fake_bin / "uname", f"#!/bin/sh\necho {platform_name}\n")
+    _write_fake_platform_manager(fake_bin, manager)
 
     path_override = f"{fake_bin}:/usr/bin:/bin"
     os.environ["FAKE_CMD_LOG"] = str(log_file)
@@ -234,7 +276,11 @@ def test_install_fix_prompts_and_installs_missing_uv_via_brew(tmp_path: Path) ->
 
     assert result.returncode == 0, result.stderr
     log_lines = log_file.read_text(encoding="utf-8").splitlines()
-    assert "brew install uv" in log_lines
+    expected_install_lines = {
+        f"{manager} install uv",
+        f"{manager} install -y uv",
+    }
+    assert any(line in expected_install_lines for line in log_lines)
     assert "sync" in log_lines[-1]
 
 
@@ -242,10 +288,12 @@ def test_install_fix_fails_when_user_declines_missing_uv_install(tmp_path: Path)
     project_root = _copy_install_files(tmp_path)
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
+    platform_name, manager = _host_package_manager_scenario()
 
     for name in ("python3", "openssl"):
         _write_fake_command(fake_bin / name, "#!/bin/sh\nexit 0\n")
-    _write_fake_command(fake_bin / "brew", "#!/bin/sh\nexit 0\n")
+    _write_fake_command(fake_bin / "uname", f"#!/bin/sh\necho {platform_name}\n")
+    _write_fake_platform_manager(fake_bin, manager)
 
     result = _run_install_with_tty_input(
         project_root,
@@ -289,13 +337,17 @@ def test_install_fix_fails_fast_without_tty_for_missing_uv(tmp_path: Path) -> No
     project_root = _copy_install_files(tmp_path)
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
+    platform_name, manager = _host_package_manager_scenario()
 
     for name in ("python3", "openssl"):
         _write_fake_command(fake_bin / name, "#!/bin/sh\nexit 0\n")
-    _write_fake_command(fake_bin / "brew", "#!/bin/sh\nexit 0\n")
+    _write_fake_command(fake_bin / "uname", f"#!/bin/sh\necho {platform_name}\n")
+    _write_fake_platform_manager(fake_bin, manager)
 
     env = os.environ.copy()
     env["PATH"] = f"{fake_bin}:/usr/bin:/bin"
+    env["FAKE_CMD_LOG"] = str(tmp_path / "commands.log")
+    env["FAKE_BIN_DIR"] = str(fake_bin)
 
     result = subprocess.run(  # noqa: S603
         ["sh", "./install.sh", "--fix"],  # noqa: S607
