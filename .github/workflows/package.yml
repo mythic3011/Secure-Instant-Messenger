@@ -3,14 +3,16 @@ name: Package
 on:
   workflow_dispatch:
   push:
-    tags:
-      - "v*"
 
 jobs:
   package:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
+
+      - name: Compute archive stamp
+        run: |
+          echo "BUILD_STAMP=$(date -u +%Y%m%d-%H%M%S)-${GITHUB_SHA::7}" >> "$GITHUB_ENV"
 
       - name: Check required files
         run: |
@@ -25,9 +27,10 @@ jobs:
       - name: Create release zip
         run: |
           bash scripts/build_release_zip.sh
+          mv release/project-release.zip "release/project-release-${BUILD_STAMP}.zip"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v6
         with:
-          name: project-release-zip
-          path: release/project-release.zip
+          name: project-release-${{ env.BUILD_STAMP }}
+          path: release/project-release-${{ env.BUILD_STAMP }}.zip
