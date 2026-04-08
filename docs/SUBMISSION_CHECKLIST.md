@@ -7,8 +7,6 @@ It is submission-facing and should stay aligned with `docs/Project.pdf`.
 
 - [ ] Create a folder named `TeamID`
 - [ ] Put all runnable submission code inside `TeamID/code`
-- [ ] Rename the final report artifact to `report.<ext>` and place it in `TeamID/`
-- [ ] Rename the final presentation video artifact to `video.<ext>` and place it in `TeamID/`
 - [ ] Compress the folder as `TeamID.zip`
 
 ## Code Package
@@ -43,9 +41,8 @@ It is submission-facing and should stay aligned with `docs/Project.pdf`.
 - [ ] `README.md` and `docs/DEPLOY.md` agree on the standard local/demo run path
 - [ ] Any local TLS fallback wording is clearly marked as troubleshooting-only, not the standard path
 
-## Report
+## Report Review
 
-- [ ] Final report artifact exists
 - [ ] Report includes team ID, names, and student IDs
 - [ ] Report includes abstract and introduction
 - [ ] Report includes threat model and assumptions
@@ -59,9 +56,8 @@ It is submission-facing and should stay aligned with `docs/Project.pdf`.
 - [ ] Report includes at least 2 security test cases
 - [ ] Report includes references
 
-## Video
+## Video Review
 
-- [ ] Final presentation video artifact exists
 - [ ] Video demonstrates the key system design and security behavior
 - [ ] Video length matches the project brief expectation
 
@@ -71,5 +67,5 @@ It is submission-facing and should stay aligned with `docs/Project.pdf`.
 - [ ] Fresh test / verification command outputs are captured as evidence instead of relying on stale hard-coded counts
 - [ ] Architecture, README, deploy guide, and evidence notes all match the same trust-boundary contract
 - [ ] Remaining post-freeze issues are tracked with clean issue / PR scope
-- [ ] Submission artifacts are present and named correctly
+- [ ] Submission zip contains code only and matches the intended final contents
 - [ ] `TeamID.zip` is built from the intended final contents
