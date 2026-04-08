@@ -13,10 +13,12 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+
       - name: Bootstrap env
         run: |
-          chmod +x scripts/bootstrap-env.sh
-          ./scripts/bootstrap-env.sh
+          sh ./install.sh --fix
 
       - name: Build and start server
         run: docker compose up --build -d

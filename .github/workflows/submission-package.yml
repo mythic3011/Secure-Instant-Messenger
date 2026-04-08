@@ -18,10 +18,10 @@ jobs:
           test -f server/migrations/001_init.sql
           test -f scripts/build_release_zip.sh
           test -f scripts/build_submission_zip.sh
-          test -f scripts/bootstrap-env.bat
-          test -f scripts/bootstrap_env.py
-          test -f scripts/run-server.bat
-          test -f scripts/run-client.bat
+          test -f scripts/install/bootstrap-env.bat
+          test -f scripts/lib/bootstrap_env.py
+          test -f scripts/launch/run-server.bat
+          test -f scripts/launch/run-client.bat
 
       - name: Build Team 71 submission zip
         run: |
@@ -29,10 +29,10 @@ jobs:
 
       - name: Validate packaged bootstrap/runtime helpers
         run: |
-          unzip -l submission/71.zip | grep '71/code/scripts/bootstrap-env.bat'
-          unzip -l submission/71.zip | grep '71/code/scripts/bootstrap_env.py'
-          unzip -l submission/71.zip | grep '71/code/scripts/run-server.bat'
-          unzip -l submission/71.zip | grep '71/code/scripts/run-client.bat'
+          unzip -l submission/71.zip | grep '71/code/scripts/install/bootstrap-env.bat'
+          unzip -l submission/71.zip | grep '71/code/scripts/lib/bootstrap_env.py'
+          unzip -l submission/71.zip | grep '71/code/scripts/launch/run-server.bat'
+          unzip -l submission/71.zip | grep '71/code/scripts/launch/run-client.bat'
           ! unzip -l submission/71.zip | grep '71/report.'
           ! unzip -l submission/71.zip | grep '71/video.'
 

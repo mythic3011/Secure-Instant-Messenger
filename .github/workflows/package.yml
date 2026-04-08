@@ -26,18 +26,18 @@ jobs:
           test -d server
           test -d shared
           test -d tests
-          test -f scripts/build_submission_zip.sh
+          test -f scripts/build_release_zip.sh
 
-      - name: Create submission zip
+      - name: Create release zip
         run: |
-          bash scripts/build_submission_zip.sh 71
-          mv submission/71.zip "submission/submission-71-${BUILD_STAMP}.zip"
+          bash scripts/build_release_zip.sh
+          mv release/project-release.zip "release/project-release-${BUILD_STAMP}.zip"
 
-      - name: Upload submission artifact
+      - name: Upload release artifact
         uses: actions/upload-artifact@v6
         with:
-          name: submission-71-${{ env.BUILD_STAMP }}
-          path: submission/submission-71-${{ env.BUILD_STAMP }}.zip
+          name: project-release-${{ env.BUILD_STAMP }}
+          path: release/project-release-${{ env.BUILD_STAMP }}.zip
 
       - name: Publish GitHub release assets
         uses: softprops/action-gh-release@v2
@@ -47,4 +47,4 @@ jobs:
           prerelease: true
           generate_release_notes: true
           files: |
-            submission/submission-71-${{ env.BUILD_STAMP }}.zip
+            release/project-release-${{ env.BUILD_STAMP }}.zip

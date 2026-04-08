@@ -8,14 +8,23 @@ on:
       - ".github/workflows/submission-package.yml"
       - ".github/workflows/package.yml"
       - "docs/DEPLOY.md"
-      - "scripts/bootstrap-env.sh"
-      - "scripts/bootstrap-env.bat"
-      - "scripts/bootstrap_env.py"
+      - "install.sh"
+      - "install.bat"
+      - "scripts/install/bootstrap-env.sh"
+      - "scripts/install/bootstrap-env.bat"
+      - "scripts/install/check-prereqs.sh"
+      - "scripts/install/install-prereqs.sh"
+      - "scripts/lib/bootstrap_env.py"
+      - "scripts/lib/check_server_health.py"
       - "scripts/build_release_zip.sh"
       - "scripts/run-server.sh"
       - "scripts/run-server.bat"
       - "scripts/run-client.sh"
       - "scripts/run-client.bat"
+      - "scripts/launch/run-server.sh"
+      - "scripts/launch/run-server.bat"
+      - "scripts/launch/run-client.sh"
+      - "scripts/launch/run-client.bat"
       - "scripts/build_submission_zip.sh"
       - "client/**"
       - "server/**"
@@ -49,12 +58,12 @@ jobs:
 
       - name: Bootstrap environment (Ubuntu)
         if: runner.os == 'Linux'
-        run: ./scripts/bootstrap-env.sh
+        run: sh ./install.sh --fix
 
       - name: Bootstrap environment (Windows)
         if: runner.os == 'Windows'
         shell: cmd
-        run: scripts\bootstrap-env.bat
+        run: install.bat --fix
 
       - name: Validate generated files (Ubuntu)
         if: runner.os == 'Linux'
@@ -74,21 +83,21 @@ jobs:
       - name: Helper self-check (Ubuntu)
         if: runner.os == 'Linux'
         run: |
-          ./scripts/run-server.sh --check
-          ./scripts/run-client.sh --check
+          sh ./scripts/launch/run-server.sh --check
+          sh ./scripts/launch/run-client.sh --check
 
       - name: Helper self-check (Windows)
         if: runner.os == 'Windows'
         shell: cmd
         run: |
-          scripts\run-server.bat --check
-          scripts\run-client.bat --check
+          scripts\launch\run-server.bat --check
+          scripts\launch\run-client.bat --check
 
       - name: Start server and probe health (Ubuntu)
         if: runner.os == 'Linux'
         run: |
           mkdir -p .ci-logs
-          ./scripts/run-server.sh > .ci-logs/server.log 2>&1 &
+          sh ./scripts/launch/run-server.sh > .ci-logs/server.log 2>&1 &
           echo $! > .ci-logs/server.pid
           for _ in 1 2 3 4 5 6 7 8 9 10; do
             if curl -kfsS https://127.0.0.1:8443/health > .ci-logs/health.json; then
@@ -111,7 +120,7 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path .ci-logs | Out-Null
-          $proc = Start-Process -FilePath "cmd.exe" -ArgumentList "/c scripts\run-server.bat" -PassThru -RedirectStandardOutput ".ci-logs/server.log" -RedirectStandardError ".ci-logs/server.err"
+          $proc = Start-Process -FilePath "cmd.exe" -ArgumentList "/c scripts\launch\run-server.bat" -PassThru -RedirectStandardOutput ".ci-logs/server.log" -RedirectStandardError ".ci-logs/server.err"
           $proc.Id | Out-File -FilePath .ci-logs/server.pid -Encoding ascii
           for ($i = 0; $i -lt 10; $i++) {
             try {
