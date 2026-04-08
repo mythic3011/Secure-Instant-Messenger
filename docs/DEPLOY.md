@@ -11,28 +11,29 @@ Only read the later sections if something fails.
 
 Run from the project root.
 
-### 1. Install dependencies
+Supported platforms for this guide:
+
+- Ubuntu / Linux via `install.sh` and `scripts/launch/*.sh`
+- Windows 11 via `install.bat` and `scripts/launch/*.bat`
+- `install.sh` and `install.bat` implement the same installer contract on
+  different platforms
+
+### 1. Prepare host and project environment
 
 ```bash
-uv sync
+sh ./install.sh --fix
 ```
 
-### 2. Generate local config and TLS files
-
-Linux / macOS / Git Bash:
-
-```bash
-chmod +x scripts/bootstrap-env.sh
-./scripts/bootstrap-env.sh
-```
-
-Windows CMD / PowerShell:
+Windows `cmd.exe` / PowerShell:
 
 ```bat
-scripts\bootstrap-env.bat
+install.bat --fix
 ```
 
-### 3. Start the server
+This checks external prerequisites, bootstraps the local project environment,
+and prepares demo TLS files when missing.
+
+### 2. Start the server
 
 ```bash
 docker compose up --build
@@ -44,10 +45,10 @@ Server URL:
 https://localhost:8443
 ```
 
-### 4. Start the client in a new terminal
+### 3. Start the client in a new terminal
 
 ```bash
-uv run python -m client.main --server https://localhost:8443 --ca-cert ./certs/server.crt
+sh scripts/launch/run-client.sh https://localhost:8443 --ca-cert ./certs/server.crt
 ```
 
 That is the standard local/demo run path for this project.
@@ -62,7 +63,7 @@ live under `client/ui/` and `client/ui/screens/`.
 ### Standard path summary
 
 ```text
-bootstrap -> docker compose -> client connects to https://localhost:8443 with --ca-cert ./certs/server.crt
+install.sh --fix -> docker compose -> run-client.sh preflight -> client connects to https://localhost:8443 with --ca-cert ./certs/server.crt
 ```
 
 Do not mix Docker mode and ad-hoc direct server runs unless you are debugging.
@@ -111,7 +112,6 @@ source $HOME/.local/bin/env   # or restart terminal
 ```powershell
 powershell -c "irm https://astral.sh/uv/install.ps1 | iex"
 ```
-```
 
 ---
 
@@ -133,23 +133,15 @@ cd TeamID/code
 
 ## 3. Install Python Dependencies
 
-```bash
-uv sync
-```
-
-This installs the runtime libraries needed by both the server and client.
+`install.sh` on Linux/macOS and `install.bat` on Windows are the canonical
+dependency/bootstrap entrypoints for this project. They run project-local setup
+including `uv sync`.
 
 > **For running tests**, install dev dependencies too:
 >
 > ```bash
 > uv sync --extra dev
 > ```
-
-Fallback only if `uv` cannot be installed:
-
-```bash
-pip install -e .
-```
 
 If `uv sync` fails on a clean machine:
 
@@ -163,33 +155,34 @@ If `uv sync` fails on a clean machine:
 
 ## 4. Configure Environment
 
-Run the bootstrap script. It copies `.env.example` to `.env.local`,
-automatically generates cryptographically random secrets for
-`TOKEN_SECRET_KEY` and `TOTP_ENCRYPTION_KEY`, and generates local TLS files for
-demo use:
-
-**Ubuntu / macOS / Git Bash (Windows):**
+Use the canonical installer entrypoint:
 
 ```bash
-chmod +x scripts/bootstrap-env.sh
-./scripts/bootstrap-env.sh
+sh ./install.sh --check
+sh ./install.sh --fix
 ```
 
-**Windows (Command Prompt / PowerShell, no Git Bash required):**
+Windows `cmd.exe` / PowerShell:
 
 ```bat
-scripts\bootstrap-env.bat
+install.bat --check
+install.bat --fix
 ```
 
-> If `.env.local` already exists, the script will exit without overwriting it.
-> To regenerate secrets on Linux / Git Bash: `rm .env.local && ./scripts/bootstrap-env.sh`
-> To regenerate secrets on Windows CMD / PowerShell: `del .env.local && scripts\bootstrap-env.bat`
+`./install.sh --check` is read-only and validates host prerequisites plus
+project readiness. `./install.sh --fix` performs project-local bootstrap via
+`uv sync`, ensures `.env.local` exists, and prepares demo TLS files if missing.
+
+`install.bat` provides the Windows peer entrypoint for the same installer
+contract. Use it from `cmd.exe` or PowerShell instead of trying to invoke
+`install.sh` directly from plain Windows shells.
 
 ---
 
 ## 5. Generate a Self-Signed TLS Certificate (Manual Fallback)
 
-Bootstrap is the primary path.
+`install.sh --fix` on Linux/macOS and `install.bat --fix` on Windows are the
+primary paths.
 Use this only if certificate auto-generation failed.
 
 ```bash
@@ -220,14 +213,14 @@ To stop: `docker compose down`
 Linux / macOS / Git Bash:
 
 ```bash
-chmod +x scripts/run-server.sh
-./scripts/run-server.sh
+chmod +x scripts/launch/run-server.sh
+./scripts/launch/run-server.sh
 ```
 
 Windows CMD / PowerShell:
 
 ```bat
-scripts\run-server.bat
+scripts\launch\run-server.bat
 ```
 
 Manual equivalent:
@@ -258,6 +251,19 @@ Open a **new terminal** in the project directory.
 For local testing and demo, the standard path is:
 
 ```bash
+sh scripts/launch/run-client.sh https://localhost:8443 --ca-cert ./certs/server.crt
+```
+
+The launcher performs a server `/health` preflight by default. To bypass that
+guard explicitly:
+
+```bash
+sh scripts/launch/run-client.sh --no-health-check https://localhost:8443 --ca-cert ./certs/server.crt
+```
+
+Manual equivalent:
+
+```bash
 uv run python -m client.main --server https://localhost:8443 --ca-cert ./certs/server.crt
 ```
 
@@ -268,14 +274,26 @@ the deployment baseline for this project. This project uses Python 3.12 +
 Linux / macOS / Git Bash:
 
 ```bash
-chmod +x scripts/run-client.sh
-./scripts/run-client.sh
+sh scripts/launch/run-client.sh https://localhost:8443 --ca-cert ./certs/server.crt
 ```
 
 Windows CMD / PowerShell:
 
 ```bat
-scripts\run-client.bat
+scripts\launch\run-client.bat https://localhost:8443 --ca-cert .\certs\server.crt
+```
+
+If the launcher reports missing prerequisites or an unprepared environment on
+Windows, run:
+
+```bat
+install.bat --fix
+```
+
+To bypass the default server health preflight explicitly:
+
+```bat
+scripts\launch\run-client.bat --no-health-check https://localhost:8443 --ca-cert .\certs\server.crt
 ```
 
 Manual equivalent:
@@ -399,14 +417,14 @@ Confirm these files exist:
 | TLS certificate errors in client      | Preferred local path is `--ca-cert ./certs/server.crt`. If that still fails on a specific machine, fall back to `--no-verify-tls` for local/demo only and capture the exact failure for follow-up. |
 | TOTP code rejected                    | Ensure your system clock is accurate. Ubuntu: `timedatectl set-ntp true`. Windows: Settings -> Time & Language -> Sync now |
 | Docker permission denied (Linux)      | Run `sudo usermod -aG docker $USER` then log out and back in                                                               |
-| `uv: command not found`               | Restart terminal after installing `uv`, or use `pip install -e .` instead                                                  |
-| `ModuleNotFoundError` or missing library import | Run `uv sync` from the project root, then retry. Use `uv sync --extra dev` only for tests.                             |
-| `scripts\\run-server.bat` or `scripts\\run-client.bat` exits immediately | Read the printed prerequisite message, then fix the missing step: install `uv`, run `uv sync`, or create `.env.local` first. |
-| `./scripts/run-server.sh` or `./scripts/run-client.sh` says dependencies are missing | Run `uv sync` again from the repo root before debugging application code.                                        |
+| `uv: command not found`               | Install `uv` using the supported steps above, restart the terminal, then rerun the canonical installer or `uv sync`.      |
+| `ModuleNotFoundError` or missing library import | Linux/macOS: run `sh ./install.sh --fix`. Windows: run `install.bat --fix`. Use `uv sync --extra dev` only for tests.                             |
+| `scripts\\launch\\run-server.bat` or `scripts\\launch\\run-client.bat` exits immediately | Read the printed prerequisite message, then run `install.bat --check` or `install.bat --fix` as appropriate. |
+| `./scripts/launch/run-server.sh` or `./scripts/launch/run-client.sh` says dependencies are missing | Run `sh ./install.sh --fix` from the repo root before debugging application code.                                        |
 | Database locked error                 | Stop any other running server instance before starting a new one                                                           |
 | Keystore not found on login           | You must register on this device first — keys are stored locally in `~/.comp3334im/<username>/`                            |
-| `.env.local` already exists           | Linux / Git Bash: `rm .env.local && ./scripts/bootstrap-env.sh` . Windows CMD / PowerShell: `del .env.local && scripts\bootstrap-env.bat` |
-| `bootstrap-env.sh: Permission denied` | Linux / Git Bash only: run `chmod +x scripts/bootstrap-env.sh` first                                                       |
+| `.env.local` already exists           | Delete `.env.local` only if you intentionally want to regenerate local config, then rerun `install.sh` / `install.bat --fix` for your platform. |
+| `bootstrap-env.sh: Permission denied` | Run via the public entrypoint `sh ./install.sh --fix` instead of invoking helper scripts directly.                                                       |
 
 ---
 
@@ -417,9 +435,12 @@ Confirm these files exist:
 | `client/main.py`                         | Canonical client entrypoint                              |
 | `client/ui/app.py`                       | Main Textual app controller                              |
 | `client/ui/screens/`                     | Authoritative Textual screen implementations             |
-| `scripts/bootstrap-env.sh` / `scripts/bootstrap-env.bat` | Auto-generates `.env.local`, secrets, and local TLS material when possible |
-| `scripts/run-server.sh` / `scripts/run-server.bat` | Starts the direct development server with prerequisite checks |
-| `scripts/run-client.sh` / `scripts/run-client.bat` | Starts the client with prerequisite checks |
+| `install.sh` / `install.bat`            | Canonical setup entrypoint for prerequisite checks and project-local bootstrap |
+| `scripts/install/check-prereqs.sh`      | Read-only external prerequisite validation               |
+| `scripts/install/bootstrap-env.sh`      | Project-local bootstrap (`.env.local`, demo TLS files, `uv sync`) |
+| `scripts/launch/run-server.sh` / `scripts/launch/run-server.bat` | Starts the direct development server with prerequisite checks |
+| `scripts/lib/check_server_health.py` / `scripts/launch/check-server-health.sh` | Shared server `/health` probe used by launchers |
+| `scripts/launch/run-client.sh` / `scripts/launch/run-client.bat` | Starts the client with prerequisite checks |
 | `.env.local`                             | Server configuration (secrets, ports) — **never commit** |
 | `certs/server.crt`                       | TLS certificate                                          |
 | `certs/server.key`                       | TLS private key                                          |

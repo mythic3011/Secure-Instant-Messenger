@@ -1,119 +1,62 @@
-#!/usr/bin/env bash
-# install.sh — One-shot setup for COMP3334 Secure IM
-# Usage: ./install.sh [--dev]
-#
-# Steps:
-#   1. Check required tools (uv, openssl, python3)
-#   2. Install Python dependencies
-#   3. Bootstrap .env.local via scripts/bootstrap-env.sh
-#   4. Generate self-signed TLS cert (if not already present)
-#   5. Initialise server database schema
-#
-# Flags:
-#   --dev   Also install dev dependencies (pytest, ruff, mypy)
-#
-# Re-running this script is safe: each step is idempotent.
+#!/bin/sh
 
-set -euo pipefail
+set -eu
 
-# ── Colours ──────────────────────────────────────────────────────────────────
-RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; NC='\033[0m'
-info()    { echo -e "${GREEN}[install]${NC} $*"; }
-warning() { echo -e "${YELLOW}[install]${NC} $*"; }
-error()   { echo -e "${RED}[install]${NC} $*" >&2; exit 1; }
+MODE=check
+VERBOSE=0
 
-# ── Args ─────────────────────────────────────────────────────────────────────
-DEV=0
-for arg in "$@"; do
-  case "$arg" in
-    --dev) DEV=1 ;;
-    *) error "Unknown argument: $arg" ;;
-  esac
+usage() {
+    cat >&2 <<'USAGE'
+Usage: ./install.sh [--check|--fix] [--verbose]
+USAGE
+    exit 2
+}
+
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        --check)
+            MODE=check
+            ;;
+        --fix)
+            MODE=fix
+            ;;
+        --verbose)
+            VERBOSE=1
+            ;;
+        *)
+            usage
+            ;;
+    esac
+    shift
 done
 
-# ── Step 0: tool checks ───────────────────────────────────────────────────────
-info "Checking required tools…"
-command -v python3  >/dev/null 2>&1 || error "python3 not found — install Python 3.12+"
-command -v openssl  >/dev/null 2>&1 || error "openssl not found — see DEPLOY.md §1"
-command -v uv       >/dev/null 2>&1 || {
-  warning "uv not found — installing via astral.sh…"
-  curl -LsSf https://astral.sh/uv/install.sh | sh
-  # Make uv available in current shell session
-  export PATH="$HOME/.local/bin:$PATH"
-  command -v uv >/dev/null 2>&1 || error "uv install failed — add ~/.local/bin to PATH and retry"
-}
-info "All tools present ✓"
+SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+PROJECT_ROOT=$SCRIPT_DIR
+PREREQ_SCRIPT="$PROJECT_ROOT/scripts/install/check-prereqs.sh"
+INSTALL_PREREQ_SCRIPT="$PROJECT_ROOT/scripts/install/install-prereqs.sh"
+BOOTSTRAP_SCRIPT="$PROJECT_ROOT/scripts/install/bootstrap-env.sh"
 
-# ── Step 1: Python dependencies ──────────────────────────────────────────────
-info "Installing Python dependencies…"
-if [ "$DEV" -eq 1 ]; then
-  uv sync --extra dev
-  info "Installed with dev extras (pytest, ruff, mypy) ✓"
-else
-  uv sync
-  info "Installed production dependencies ✓"
+if [ ! -f "$PREREQ_SCRIPT" ] || [ ! -f "$INSTALL_PREREQ_SCRIPT" ] || [ ! -f "$BOOTSTRAP_SCRIPT" ]; then
+    printf '[install] installer scripts missing under %s/scripts/install\n' "$PROJECT_ROOT" >&2
+    exit 1
 fi
 
-# ── Step 2: Bootstrap .env.local ─────────────────────────────────────────────
-info "Configuring environment…"
-BOOTSTRAP="scripts/bootstrap-env.sh"
-if [ ! -f "$BOOTSTRAP" ]; then
-  error "$BOOTSTRAP not found — is this the project root?"
-fi
-chmod +x "$BOOTSTRAP"
-"$BOOTSTRAP"   # exits non-zero and prints message if .env.local already exists -> caught by set -e
-# bootstrap-env.sh already prints "Wrote secrets to .env.local" on success
+cd "$PROJECT_ROOT"
+export UV_CACHE_DIR="${UV_CACHE_DIR:-$PROJECT_ROOT/.uv-cache}"
 
-# ── Step 3: TLS certificate ───────────────────────────────────────────────────
-info "Checking TLS certificate…"
-CERT_DIR="certs"
-CERT_FILE="$CERT_DIR/server.crt"
-KEY_FILE="$CERT_DIR/server.key"
-
-if [ -f "$CERT_FILE" ] && [ -f "$KEY_FILE" ]; then
-  warning "TLS cert already exists at $CERT_FILE — skipping generation"
-else
-  mkdir -p "$CERT_DIR"
-  openssl req -x509 -newkey rsa:4096 \
-    -keyout "$KEY_FILE" \
-    -out    "$CERT_FILE" \
-    -days 365 -nodes \
-    -subj "/CN=localhost" \
-    2>/dev/null
-  chmod 600 "$KEY_FILE"   # private key: owner read/write only
-  info "Generated self-signed TLS cert at $CERT_FILE ✓"
+VERBOSE_FLAG=
+if [ "$VERBOSE" -eq 1 ]; then
+    VERBOSE_FLAG=--verbose
 fi
 
-# ── Step 4: Database init ────────────────────────────────────────────────────
-info "Initialising database schema…"
-# Run the migration runner embedded in the server (reads DATABASE_URL from .env.local)
-ENV_FILE=".env.local" uv run python3 -c "
-import asyncio, server.core.database as db
-asyncio.run(db.init_db())
-print('Database initialised')
-asyncio.run(db.close_db())
-"
-info "Database ready ✓"
-
-# ── Step 5: Install git pre-commit hook ───────────────────────────────────────
-info "Installing git pre-commit hook…"
-if [[ -d .git ]]; then
-    cp scripts/pre-commit .git/hooks/pre-commit
-    chmod +x .git/hooks/pre-commit
-    info "Pre-commit hook installed ✓  (skip with: git commit --no-verify)"
-else
-    warning "Not a git repo — skipping pre-commit hook"
+if [ "$MODE" = "check" ]; then
+    sh "$PREREQ_SCRIPT" $VERBOSE_FLAG
+    sh "$BOOTSTRAP_SCRIPT" --check $VERBOSE_FLAG
+    printf '[install] check passed\n'
+    exit 0
 fi
 
-# ── Done ─────────────────────────────────────────────────────────────────────
-echo ""
-echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-echo -e "${GREEN}  Setup complete!${NC}"
-echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-echo ""
-echo "  Start server:  uv run uvicorn server.main:app --host 0.0.0.0 --port 8443"
-echo "  Start client:  uv run python -m client.main --server https://localhost:8443"
-echo "  Run tests:     uv run pytest -v          (requires --dev)"
-echo ""
-echo "  See DEPLOY.md for full usage instructions."
-echo ""
+sh "$INSTALL_PREREQ_SCRIPT" $VERBOSE_FLAG
+sh "$PREREQ_SCRIPT" $VERBOSE_FLAG
+sh "$BOOTSTRAP_SCRIPT" --fix $VERBOSE_FLAG
+printf '[install] fix completed\n'

@@ -52,30 +52,31 @@ Client source-of-truth paths:
 Choose one setup path only. For teammates and graders, use the standard path
 below first and only read later sections if something fails.
 
+### Platform support
+
+- Linux / macOS: supported via `./install.sh` plus `scripts/launch/*.sh`
+- Windows 11: supported via `install.bat` plus `scripts/launch/*.bat`
+- Installer contract note: `install.sh` and `install.bat` implement the same
+  installer contract on different platforms
+
 ### Standard run path
 
-1. **Install dependencies**:
+1. **Prepare host and project environment**:
 
    ```bash
-   uv sync
+   sh ./install.sh --fix
    ```
 
-2. **Generate local config and demo TLS files**:
-
-   Linux / macOS / Git Bash:
-
-   ```bash
-   chmod +x scripts/bootstrap-env.sh
-   ./scripts/bootstrap-env.sh
-   ```
-
-   Windows CMD / PowerShell:
+   On Windows `cmd.exe`, use:
 
    ```bat
-   scripts\bootstrap-env.bat
+   install.bat --fix
    ```
 
-3. **Start the server**:
+   This checks external prerequisites, bootstraps the local project environment,
+   and prepares demo TLS files when missing.
+
+2. **Start the server**:
 
    ```bash
    docker compose up --build
@@ -87,15 +88,15 @@ below first and only read later sections if something fails.
    https://localhost:8443
    ```
 
-4. **Start the client in a new terminal**:
+3. **Start the client in a new terminal**:
 
    ```bash
-   uv run python -m client.main --server https://localhost:8443 --ca-cert ./certs/server.crt
+   sh scripts/launch/run-client.sh https://localhost:8443 --ca-cert ./certs/server.crt
    ```
 
-   This is the standard local/demo path. Use `--no-verify-tls` only as a
-   temporary local fallback if a specific machine still rejects the generated
-   demo certificate.
+   This is the standard local/demo path. The launcher does a server health
+   preflight by default; use `--no-health-check` only when you explicitly want
+   to bypass that guard.
 
 Do not mix Docker mode and ad-hoc direct local server runs in the same session
 unless you are explicitly debugging config or database paths.
@@ -105,7 +106,7 @@ unless you are explicitly debugging config or database paths.
 - Python 3.12
 - `uv`
 - Docker with Compose support
-- Local bootstrap via `scripts/bootstrap-env.*`
+- Local bootstrap via `./install.sh --fix`
 
 The client stores identity keys in `~/.comp3334im/<username>/`.
 
@@ -149,14 +150,14 @@ terminal.
 
 ```bash
 docker compose up --build
-uv run python -m client.main --server https://localhost:8443 --ca-cert ./certs/server.crt
+sh scripts/launch/run-client.sh https://localhost:8443 --ca-cert ./certs/server.crt
 ```
 
 ### Direct server run (debug only)
 
 ```bash
 uv run python -m server.main
-uv run python -m client.main --server https://localhost:8443 --ca-cert ./certs/server.crt
+sh scripts/launch/run-client.sh https://localhost:8443 --ca-cert ./certs/server.crt
 ```
 
 This is not the primary grading/demo path.
@@ -174,7 +175,7 @@ See `docs/DEPLOY.md` for step-by-step instructions for Windows 11 and Ubuntu.
 | Problem                                               | Fix                                                                                                                                           |
 | ----------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
 | `PermissionError: '/app/data'`                        | Stale `.env.local` with container path. Delete it or remove the `DATABASE_URL` line and restart.                                            |
-| TLS cert files missing                                | Run `bash scripts/bootstrap-env.sh` or `scripts\bootstrap-env.bat`, then restart the server.                                                 |
+| TLS cert files missing                                | Linux/macOS: run `sh ./install.sh --fix`. Windows: run `install.bat --fix`, then follow any remaining manual TLS steps in `docs/DEPLOY.md` if needed. |
 | `ConnectionError` / "Cannot reach server" with Docker | Confirm Docker is running, then use `https://localhost:8443` with `--ca-cert ./certs/server.crt` as the standard local client path. |
 | `--ca-cert` or `--pin-cert` still fails locally       | Local trust should work with the SAN-enabled demo certs. If a specific machine still rejects them, use `--no-verify-tls` only as a temporary local fallback and capture the failure details. |
 
@@ -183,7 +184,7 @@ See `docs/DEPLOY.md` for step-by-step instructions for Windows 11 and Ubuntu.
 | Environment                | DB path           | How it's set                                             |
 | -------------------------- | ----------------- | -------------------------------------------------------- |
 | Local dev (zero config)    | `./data/im.db`    | Auto-detected via `shared/env.py` (no `/.dockerenv`)     |
-| Local dev (with bootstrap) | `./data/im.db`    | `bootstrap-env.sh` -> `.env.local`                       |
+| Local dev (with bootstrap) | `./data/im.db`    | `install.sh` / `install.bat` -> `.env.local` / local project bootstrap |
 | Docker / Compose           | `/app/data/im.db` | Auto-detected via `shared/env.py` (`/.dockerenv` exists) |
 
 ## License

@@ -75,9 +75,13 @@ done
 
 # Submission-required helper scripts only.
 for path in \
-  scripts/bootstrap-env.sh \
-  scripts/bootstrap-env.bat \
-  scripts/bootstrap_env.py \
+  scripts/install/bootstrap-env.sh \
+  scripts/install/bootstrap-env.bat \
+  scripts/lib/bootstrap_env.py \
+  scripts/launch/run-server.sh \
+  scripts/launch/run-server.bat \
+  scripts/launch/run-client.sh \
+  scripts/launch/run-client.bat \
   scripts/run-server.sh \
   scripts/run-server.bat \
   scripts/run-client.sh \

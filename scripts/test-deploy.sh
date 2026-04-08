@@ -62,11 +62,11 @@ fi
 # ── 4. Docker build & health check ───────────────────────────────────────────
 if [[ $NO_DOCKER -eq 0 ]]; then
   step "Bootstrap env"
-  chmod +x scripts/bootstrap-env.sh
-  if ./scripts/bootstrap-env.sh; then
-    ok "bootstrap-env.sh"
+  chmod +x scripts/install/bootstrap-env.sh
+  if ./scripts/install/bootstrap-env.sh; then
+    ok "scripts/install/bootstrap-env.sh"
   else
-    fail "bootstrap-env.sh failed"
+    fail "scripts/install/bootstrap-env.sh failed"
   fi
 
   step "Docker build"
