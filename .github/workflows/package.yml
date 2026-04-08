@@ -4,6 +4,9 @@ on:
   workflow_dispatch:
   push:
 
+permissions:
+  contents: write
+
 jobs:
   package:
     runs-on: ubuntu-latest
@@ -12,7 +15,8 @@ jobs:
 
       - name: Compute archive stamp
         run: |
-          echo "BUILD_STAMP=$(date -u +%Y%m%d-%H%M%S)-${GITHUB_SHA::7}" >> "$GITHUB_ENV"
+          echo "BUILD_STAMP=$(date -u +%Y%m%d-%H%M%S)-run${GITHUB_RUN_NUMBER}-${GITHUB_SHA::7}" >> "$GITHUB_ENV"
+          echo "RELEASE_TAG=build-$(date -u +%Y%m%d-%H%M%S)-run${GITHUB_RUN_NUMBER}-${GITHUB_SHA::7}" >> "$GITHUB_ENV"
 
       - name: Check required files
         run: |
@@ -23,14 +27,37 @@ jobs:
           test -d shared
           test -d tests
           test -f scripts/build_release_zip.sh
+          test -f scripts/build_submission_zip.sh
 
       - name: Create release zip
         run: |
           bash scripts/build_release_zip.sh
           mv release/project-release.zip "release/project-release-${BUILD_STAMP}.zip"
 
-      - name: Upload artifact
+      - name: Create submission zip
+        run: |
+          bash scripts/build_submission_zip.sh 71
+          mv submission/71.zip "submission/submission-71-${BUILD_STAMP}.zip"
+
+      - name: Upload release artifact
         uses: actions/upload-artifact@v6
         with:
           name: project-release-${{ env.BUILD_STAMP }}
           path: release/project-release-${{ env.BUILD_STAMP }}.zip
+
+      - name: Upload submission artifact
+        uses: actions/upload-artifact@v6
+        with:
+          name: submission-71-${{ env.BUILD_STAMP }}
+          path: submission/submission-71-${{ env.BUILD_STAMP }}.zip
+
+      - name: Publish GitHub release assets
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.RELEASE_TAG }}
+          name: Build ${{ env.BUILD_STAMP }}
+          prerelease: true
+          generate_release_notes: true
+          files: |
+            release/project-release-${{ env.BUILD_STAMP }}.zip
+            submission/submission-71-${{ env.BUILD_STAMP }}.zip
