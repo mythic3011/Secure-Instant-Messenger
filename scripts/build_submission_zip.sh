@@ -7,21 +7,6 @@ REPORT_PATH="${2:-}"
 VIDEO_PATH="${3:-}"
 TMP_ROOT=""
 
-if [[ -z "$REPORT_PATH" || -z "$VIDEO_PATH" ]]; then
-  echo "usage: bash scripts/build_submission_zip.sh <team_id> <report_path> <video_path>" >&2
-  exit 2
-fi
-
-if [[ ! -f "$ROOT_DIR/$REPORT_PATH" && ! -f "$REPORT_PATH" ]]; then
-  echo "[submission] missing report file: $REPORT_PATH" >&2
-  exit 1
-fi
-
-if [[ ! -f "$ROOT_DIR/$VIDEO_PATH" && ! -f "$VIDEO_PATH" ]]; then
-  echo "[submission] missing video file: $VIDEO_PATH" >&2
-  exit 1
-fi
-
 resolve_path() {
   local candidate="$1"
   if [[ -f "$ROOT_DIR/$candidate" ]]; then
@@ -31,11 +16,28 @@ resolve_path() {
   fi
 }
 
-REPORT_ABS="$(resolve_path "$REPORT_PATH")"
-VIDEO_ABS="$(resolve_path "$VIDEO_PATH")"
+REPORT_ABS=""
+VIDEO_ABS=""
+REPORT_EXT=""
+VIDEO_EXT=""
 
-REPORT_EXT="${REPORT_ABS##*.}"
-VIDEO_EXT="${VIDEO_ABS##*.}"
+if [[ -n "$REPORT_PATH" ]]; then
+  if [[ ! -f "$ROOT_DIR/$REPORT_PATH" && ! -f "$REPORT_PATH" ]]; then
+    echo "[submission] missing report file: $REPORT_PATH" >&2
+    exit 1
+  fi
+  REPORT_ABS="$(resolve_path "$REPORT_PATH")"
+  REPORT_EXT="${REPORT_ABS##*.}"
+fi
+
+if [[ -n "$VIDEO_PATH" ]]; then
+  if [[ ! -f "$ROOT_DIR/$VIDEO_PATH" && ! -f "$VIDEO_PATH" ]]; then
+    echo "[submission] missing video file: $VIDEO_PATH" >&2
+    exit 1
+  fi
+  VIDEO_ABS="$(resolve_path "$VIDEO_PATH")"
+  VIDEO_EXT="${VIDEO_ABS##*.}"
+fi
 
 STAGING_DIR="$ROOT_DIR/submission/$TEAM_ID"
 ZIP_PATH="$ROOT_DIR/submission/${TEAM_ID}.zip"
@@ -95,8 +97,13 @@ find "$CODE_DIR" -type f \
   \( -name '*.pyc' -o -name '*.pyo' -o -name '.DS_Store' \) \
   -delete
 
-cp "$REPORT_ABS" "$STAGING_DIR/report.$REPORT_EXT"
-cp "$VIDEO_ABS" "$STAGING_DIR/video.$VIDEO_EXT"
+if [[ -n "$REPORT_ABS" ]]; then
+  cp "$REPORT_ABS" "$STAGING_DIR/report.$REPORT_EXT"
+fi
+
+if [[ -n "$VIDEO_ABS" ]]; then
+  cp "$VIDEO_ABS" "$STAGING_DIR/video.$VIDEO_EXT"
+fi
 
 (
   mkdir -p "$ROOT_DIR/submission"
@@ -122,4 +129,8 @@ PY
   fi
 )
 
-echo "[submission] built $ZIP_PATH"
+if [[ -n "$REPORT_ABS" || -n "$VIDEO_ABS" ]]; then
+  echo "[submission] built $ZIP_PATH with optional report/video artifacts"
+else
+  echo "[submission] built $ZIP_PATH with code only"
+fi

@@ -2,15 +2,6 @@ name: Submission Package
 
 on:
   workflow_dispatch:
-    inputs:
-      report_path:
-        description: "Path to the final report file, relative to repo root"
-        required: true
-        type: string
-      video_path:
-        description: "Path to the final video file, relative to repo root"
-        required: true
-        type: string
 
 jobs:
   build-submission:
@@ -34,10 +25,7 @@ jobs:
 
       - name: Build Team 71 submission zip
         run: |
-          bash scripts/build_submission_zip.sh \
-            71 \
-            "${{ inputs.report_path }}" \
-            "${{ inputs.video_path }}"
+          bash scripts/build_submission_zip.sh 71
 
       - name: Validate packaged bootstrap/runtime helpers
         run: |
@@ -45,6 +33,8 @@ jobs:
           unzip -l submission/71.zip | grep '71/code/scripts/bootstrap_env.py'
           unzip -l submission/71.zip | grep '71/code/scripts/run-server.bat'
           unzip -l submission/71.zip | grep '71/code/scripts/run-client.bat'
+          ! unzip -l submission/71.zip | grep '71/report.'
+          ! unzip -l submission/71.zip | grep '71/video.'
 
       - name: Build release zip
         run: |

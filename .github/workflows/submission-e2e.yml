@@ -135,17 +135,10 @@ jobs:
             Stop-Process -Id $serverPid -Force -ErrorAction SilentlyContinue
           }
 
-      - name: Create placeholder report and video
-        shell: bash
-        run: |
-          mkdir -p .ci-artifacts
-          printf 'submission smoke report\n' > .ci-artifacts/report.pdf
-          printf 'submission smoke video\n' > .ci-artifacts/video.mp4
-
       - name: Build submission zip
         shell: bash
         run: |
-          bash scripts/build_submission_zip.sh 71 .ci-artifacts/report.pdf .ci-artifacts/video.mp4
+          bash scripts/build_submission_zip.sh 71
           test -f submission/71.zip
 
       - name: Build release zip
