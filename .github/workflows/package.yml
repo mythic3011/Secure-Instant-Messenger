@@ -26,24 +26,12 @@ jobs:
           test -d server
           test -d shared
           test -d tests
-          test -f scripts/build_release_zip.sh
           test -f scripts/build_submission_zip.sh
-
-      - name: Create release zip
-        run: |
-          bash scripts/build_release_zip.sh
-          mv release/project-release.zip "release/project-release-${BUILD_STAMP}.zip"
 
       - name: Create submission zip
         run: |
           bash scripts/build_submission_zip.sh 71
           mv submission/71.zip "submission/submission-71-${BUILD_STAMP}.zip"
-
-      - name: Upload release artifact
-        uses: actions/upload-artifact@v6
-        with:
-          name: project-release-${{ env.BUILD_STAMP }}
-          path: release/project-release-${{ env.BUILD_STAMP }}.zip
 
       - name: Upload submission artifact
         uses: actions/upload-artifact@v6
@@ -59,5 +47,4 @@ jobs:
           prerelease: true
           generate_release_notes: true
           files: |
-            release/project-release-${{ env.BUILD_STAMP }}.zip
             submission/submission-71-${{ env.BUILD_STAMP }}.zip
