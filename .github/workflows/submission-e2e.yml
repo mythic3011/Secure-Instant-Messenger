@@ -16,7 +16,6 @@ on:
       - "scripts/install/install-prereqs.sh"
       - "scripts/lib/bootstrap_env.py"
       - "scripts/lib/check_server_health.py"
-      - "scripts/build_release_zip.sh"
       - "scripts/run-server.sh"
       - "scripts/run-server.bat"
       - "scripts/run-client.sh"
@@ -150,17 +149,10 @@ jobs:
           bash scripts/build_submission_zip.sh 71
           test -f submission/71.zip
 
-      - name: Build release zip
-        shell: bash
-        run: |
-          bash scripts/build_release_zip.sh
-          test -f release/project-release.zip
-
-      - name: Upload logs and packaged zips
+      - name: Upload logs and submission zip
         uses: actions/upload-artifact@v6
         with:
           name: submission-e2e-${{ matrix.os }}
           path: |
             .ci-logs/
-            release/project-release.zip
             submission/71.zip

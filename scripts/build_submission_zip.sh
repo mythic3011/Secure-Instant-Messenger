@@ -61,6 +61,8 @@ for path in \
   shared \
   tests \
   docs/DEPLOY.md \
+  install.sh \
+  install.bat \
   pyproject.toml \
   uv.lock \
   docker-compose.yml \

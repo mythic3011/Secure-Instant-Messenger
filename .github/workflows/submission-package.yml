@@ -15,8 +15,9 @@ jobs:
           test -d server
           test -d shared
           test -f docs/DEPLOY.md
+          test -f install.sh
+          test -f install.bat
           test -f server/migrations/001_init.sql
-          test -f scripts/build_release_zip.sh
           test -f scripts/build_submission_zip.sh
           test -f scripts/install/bootstrap-env.bat
           test -f scripts/lib/bootstrap_env.py
@@ -29,6 +30,8 @@ jobs:
 
       - name: Validate packaged bootstrap/runtime helpers
         run: |
+          unzip -l submission/71.zip | grep '71/code/install.sh'
+          unzip -l submission/71.zip | grep '71/code/install.bat'
           unzip -l submission/71.zip | grep '71/code/scripts/install/bootstrap-env.bat'
           unzip -l submission/71.zip | grep '71/code/scripts/lib/bootstrap_env.py'
           unzip -l submission/71.zip | grep '71/code/scripts/launch/run-server.bat'
@@ -36,19 +39,8 @@ jobs:
           ! unzip -l submission/71.zip | grep '71/report.'
           ! unzip -l submission/71.zip | grep '71/video.'
 
-      - name: Build release zip
-        run: |
-          bash scripts/build_release_zip.sh
-          test -f release/project-release.zip
-
       - name: Upload submission zip
         uses: actions/upload-artifact@v6
         with:
           name: submission-71
           path: submission/71.zip
-
-      - name: Upload release zip
-        uses: actions/upload-artifact@v6
-        with:
-          name: project-release-zip
-          path: release/project-release.zip

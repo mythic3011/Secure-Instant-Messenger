@@ -16,35 +16,37 @@ jobs:
       - name: Compute archive stamp
         run: |
           echo "BUILD_STAMP=$(date -u +%Y%m%d-%H%M%S)-run${GITHUB_RUN_NUMBER}-${GITHUB_SHA::7}" >> "$GITHUB_ENV"
-          echo "RELEASE_TAG=build-$(date -u +%Y%m%d-%H%M%S)-run${GITHUB_RUN_NUMBER}-${GITHUB_SHA::7}" >> "$GITHUB_ENV"
+          echo "RELEASE_TAG=submission-$(date -u +%Y%m%d-%H%M%S)-run${GITHUB_RUN_NUMBER}-${GITHUB_SHA::7}" >> "$GITHUB_ENV"
 
       - name: Check required files
         run: |
           test -f README.md
           test -f docs/DEPLOY.md
+          test -f install.sh
+          test -f install.bat
           test -d client
           test -d server
           test -d shared
           test -d tests
-          test -f scripts/build_release_zip.sh
+          test -f scripts/build_submission_zip.sh
 
-      - name: Create release zip
+      - name: Create submission zip
         run: |
-          bash scripts/build_release_zip.sh
-          mv release/project-release.zip "release/project-release-${BUILD_STAMP}.zip"
+          bash scripts/build_submission_zip.sh 71
+          mv submission/71.zip "submission/71-${BUILD_STAMP}.zip"
 
-      - name: Upload release artifact
+      - name: Upload submission artifact
         uses: actions/upload-artifact@v6
         with:
-          name: project-release-${{ env.BUILD_STAMP }}
-          path: release/project-release-${{ env.BUILD_STAMP }}.zip
+          name: submission-71-${{ env.BUILD_STAMP }}
+          path: submission/71-${{ env.BUILD_STAMP }}.zip
 
       - name: Publish GitHub release assets
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ env.RELEASE_TAG }}
-          name: Build ${{ env.BUILD_STAMP }}
+          name: Submission ${{ env.BUILD_STAMP }}
           prerelease: true
           generate_release_notes: true
           files: |
-            release/project-release-${{ env.BUILD_STAMP }}.zip
+            submission/71-${{ env.BUILD_STAMP }}.zip
