@@ -14,7 +14,7 @@ import pyotp
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.hashes import SHA256
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
-from sqlalchemy import and_, case, select
+from sqlalchemy import and_, case, delete, select, update
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
 from server.core.config import get_settings
@@ -167,7 +167,6 @@ def verify_totp(secret: str, code: str) -> bool:
 # Rate limiting — simple DB-backed token bucket
 # ---------------------------------------------------------------------------
 
-
 async def check_rate_limit(key: str, max_attempts: int, window_seconds: int) -> bool:
     """
     Atomic rate limit check using INSERT ... ON CONFLICT (upsert).
@@ -179,6 +178,8 @@ async def check_rate_limit(key: str, max_attempts: int, window_seconds: int) -> 
       could both read attempts=4 (below max=5) and both pass, exceeding
       the limit. The upsert makes the read-check-write a single SQL
       statement, which SQLite executes under its internal write lock.
+    If `is_failed_attempt` is False, this is a read-only lockout check that does
+    not increment attempts.
     """
     from server.core.database import get_session
     from server.models.rate_limit import RateLimit
@@ -192,6 +193,9 @@ async def check_rate_limit(key: str, max_attempts: int, window_seconds: int) -> 
         locked_until = result.scalar_one_or_none()
         if locked_until and now < locked_until:
             return False
+
+        if not is_failed_attempt:
+            return True
 
         # Atomic upsert — increment or reset window in one statement.
         # SQLite's ON CONFLICT executes atomically under the write lock.

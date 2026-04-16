@@ -175,10 +175,12 @@ async def login(
     client_ip = request.client.host if request.client else "unknown"
 
     # Rate limit by IP (do NOT include username to avoid user enumeration)
+    rate_limit_key = f"login:{client_ip}"
     allowed = await check_rate_limit(
-        f"login:{client_ip}",
+        rate_limit_key,
         settings.rate_limit_login_max,
         settings.rate_limit_login_window,
+        is_failed_attempt=True,
     )
     if not allowed:
         log.warning("rate_limit_exceeded", endpoint="login", client_ip=client_ip)
@@ -201,12 +203,32 @@ async def login(
     pw_hash = user.pw_hash if user else _DUMMY_HASH
 
     if not verify_password(body.password, pw_hash) or user is None:
+        allowed = await check_rate_limit(
+            rate_limit_key,
+            settings.rate_limit_login_max,
+            settings.rate_limit_login_window,
+            is_failed_attempt=True,
+        )
+        if not allowed:
+            log.warning("rate_limit_exceeded", endpoint="login", client_ip=client_ip)
+            raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail="Rate limit exceeded")
+
         log.info("login_failed", username=body.username, reason="bad_password")
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
 
     # Verify TOTP
     totp_secret = decrypt_totp_secret(user.id, user.totp_secret)
     if not verify_totp(totp_secret, body.totp_code):
+        allowed = await check_rate_limit(
+            rate_limit_key,
+            settings.rate_limit_login_max,
+            settings.rate_limit_login_window,
+            is_failed_attempt=True,
+        )
+        if not allowed:
+            log.warning("rate_limit_exceeded", endpoint="login", client_ip=client_ip)
+            raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail="Rate limit exceeded")
+
         log.info("login_failed", user_id=user.id, reason="bad_totp")
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
 
@@ -221,6 +243,7 @@ async def login(
         expires_at=expires_at,
     )
     db.add(session)
+
     await db.commit()
 
     log.info("login_success", user_id=user.id, client_ip=client_ip)
