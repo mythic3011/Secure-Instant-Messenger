@@ -21,7 +21,7 @@ dependencies = [
     "pyotp>=2.9.0",             # TOTP RFC 6238
     # Validation & config
     "pydantic>=2.9.0",
-    "pydantic-settings>=2.6.0",
+    "pydantic-settings>=2.14.2",
     # HTTP client (used by client app)
     "httpx[http2]>=0.28.0",
     # TUI client
